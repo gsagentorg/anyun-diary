@@ -1,5 +1,4 @@
-node_modules
-.svelte-kit
-build
+node_modules/
+.svelte-kit/
+build/
 *.log
-infra/frpc.toml

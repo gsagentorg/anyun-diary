@@ -1,6 +1,7 @@
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+
 const root = '/home/user/anyun-diary/build';
 const mime = {
   '.html': 'text/html; charset=utf-8',
@@ -13,6 +14,7 @@ const mime = {
   '.png': 'image/png',
   '.ico': 'image/x-icon'
 };
+
 const server = http.createServer((req, res) => {
   let p;
   try {
@@ -28,4 +30,5 @@ const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': mime[path.extname(f)] || 'application/octet-stream' });
   fs.createReadStream(f).pipe(res);
 });
+
 server.listen(4173, '0.0.0.0', () => console.log('static server on 0.0.0.0:4173'));

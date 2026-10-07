@@ -1,7 +1,3 @@
----
-title: 安允日记 · 歌单时间线
----
-
 <script lang="ts">
   import data from '$lib/data.json';
   import Timeline from '$lib/Timeline.svelte';

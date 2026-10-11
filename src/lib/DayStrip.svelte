@@ -32,7 +32,7 @@
 
       {#if open === rec.file}
         <ol class="mt-3 space-y-1.5 border-t pt-3">
-          {#each songs as b, i (b.start)}
+          {#each songs as b, i (i)}
             {@const hue = hueOf(b.clip?.title ?? '')}
             <li class="flex items-center gap-2 text-xs">
               <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>

@@ -46,7 +46,7 @@
               style:left={(t / dur) * 100 + '%'}>{fmtOffset(t)}</span>
           {/each}
           <!-- 歌 + 手工切片块 -->
-          {#each blocks as b (b.kind + b.start)}
+          {#each blocks as b, bi (bi)}
             {#if b.kind !== 'zzz'}
               <div
                 class="absolute top-1.5 h-5 rounded-sm transition-transform hover:scale-y-110"
@@ -64,7 +64,7 @@
           {/each}
         </div>
         <div class="w-24 shrink-0 text-[10px] opacity-70">
-          {rec.clips.length} 歌 / {rec.segments.length} 段
+          {rec.clips?.length ?? 0} 歌 / {rec.segments?.length ?? 0} 段
         </div>
       </div>
     {/each}

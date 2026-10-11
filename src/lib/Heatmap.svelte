@@ -34,7 +34,7 @@
             <div class="absolute top-0 h-full w-px bg-base-content/10"
               style:left={(h / 24) * 100 + '%'}></div>
           {/each}
-          {#each blocks as b (b.kind + b.start)}
+          {#each blocks as b, bi (bi)}
             {#if b.kind !== 'zzz'}
               {@const x1 = ((rec.start + b.start - dayStart) / DAY) * 100}
               {@const x2 = ((rec.start + b.end - dayStart) / DAY) * 100}

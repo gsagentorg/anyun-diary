@@ -28,7 +28,7 @@
     {#each recordings as rec (rec.file)}
       {@const blocks = blocksOf(rec)}
       {@const dur = rec.duration ?? 0}
-      {@const nticks = Math.ceil(dur / TICK) + 1}
+      {@const nticks = dur > 0 ? Math.floor(dur / TICK) + 1 : 0}
       {@const dc = dateCard(rec.start)}
       <div class="mb-2 flex items-center gap-3">
         <div class="w-44 shrink-0">

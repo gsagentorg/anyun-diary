@@ -111,3 +111,15 @@ export const SOURCE_LABEL: Record<string, string> = {
   shazam: 'AI识曲(Shazam)',
   'owner-confirmed': '已确认',
 };
+
+/** 从 "asr+网易+lyric-verified" 这类复合来源取短标签 */
+export function sourceLabel(source: string | undefined | null): string {
+  if (!source) return '未知';
+  const head = source.split('+')[0].trim();
+  return SOURCE_LABEL[head] ?? `AI识曲(${head})`;
+}
+
+/** 切片音频 URL（文件名含空格/中文，需编码） */
+export function audioUrl(opus: string): string {
+  return '/audio/' + encodeURIComponent(opus);
+}

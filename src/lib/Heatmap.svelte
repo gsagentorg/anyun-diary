@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { blocksOf, fmtDay, fmtClock, fmtOffset, fmtDur, hueOf } from './types';
+  import { player, playClip } from './player.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -36,15 +37,22 @@
           {/each}
           {#each blocks as b, bi (bi)}
             {#if b.kind !== 'zzz'}
+              {@const isSong = b.kind === 'song' && !!b.clip}
+              {@const clipIdx = isSong ? (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file) : -1}
+              {@const active = isSong && player.track?.clip.file === b.clip!.file}
               {@const x1 = ((rec.start + b.start - dayStart) / DAY) * 100}
               {@const x2 = ((rec.start + b.end - dayStart) / DAY) * 100}
               <div
                 class="absolute top-1 h-5 rounded-sm hover:scale-y-110 transition-transform"
                 class:bg-accent={b.kind === 'song'}
                 class:bg-warning={b.kind === 'manual'}
+                class:ring-2={active}
+                class:ring-accent={active}
                 style:left={x1 + '%'};
                 style:width={Math.max(x2 - x1, 0.3) + '%'}
                 role="button" tabindex="0"
+                onclick={() => { if (isSong && clipIdx >= 0) playClip(rec, clipIdx); }}
+                onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && isSong && clipIdx >= 0) { e.preventDefault(); playClip(rec, clipIdx); } }}
                 onmousemove={(e) => {
                   const abs = (s: number) => new Date((rec.start + s) * 1000)
                     .toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
@@ -62,7 +70,7 @@
     {/each}
 
     <div class="mt-4 flex gap-4 pl-40 text-xs">
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌</span>
+      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
       <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-warning"></span> 手工切片</span>
     </div>
   </div>

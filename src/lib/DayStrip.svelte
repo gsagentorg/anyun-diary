@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
-  import { blocksOf, fmtDay, fmtClock, fmtDur, fmtOffset, hueOf, SOURCE_LABEL } from './types';
+  import { blocksOf, fmtDay, fmtClock, fmtDur, fmtOffset, hueOf, sourceLabel } from './types';
+  import { player, playClip } from './player.svelte';
   import { Music, Scissors, MoonStar } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
@@ -34,11 +35,20 @@
         <ol class="mt-3 space-y-1.5 border-t pt-3">
           {#each songs as b, i (i)}
             {@const hue = hueOf(b.clip?.title ?? '')}
-            <li class="flex items-center gap-2 text-xs">
-              <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>
-              <span class="w-12 shrink-0 text-[10px] opacity-60">{fmtOffset(b.start)}</span>
-              <span class="font-medium">{i + 1}. {b.clip?.title}</span>
-              <span class="text-[10px] opacity-50">{fmtDur(b.end - b.start)} · {SOURCE_LABEL[b.clip?.source ?? ''] ?? b.clip?.source}</span>
+            {@const clipIdx = (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file)}
+            {@const active = player.track?.clip.file === b.clip!.file}
+            <li>
+              <button
+                class="flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs transition hover:bg-base-200"
+                class:bg-accent={active}
+                class:text-accent-content={active}
+                onclick={() => { if (clipIdx >= 0) playClip(rec, clipIdx); }}
+              >
+                <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>
+                <span class="w-12 shrink-0 text-[10px] opacity-60">{fmtOffset(b.start)}</span>
+                <span class="font-medium">{i + 1}. {b.clip?.title || '（未识别）'}</span>
+                <span class="text-[10px] opacity-50">{fmtDur(b.end - b.start)} · {sourceLabel(b.clip?.source)}</span>
+              </button>
             </li>
           {/each}
           {#if songs.length === 0}

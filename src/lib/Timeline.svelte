@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording, Block } from './types';
-  import { blocksOf, fmtOffset, fmtClock, fmtDay, fmtDur, SOURCE_LABEL } from './types';
+  import { blocksOf, fmtOffset, fmtClock, fmtDay, fmtDur, sourceLabel } from './types';
+  import { player, playClip } from './player.svelte';
   import { Sparkles, Scissors, MoonStar } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
@@ -16,7 +17,7 @@
     const c = b.clip;
     const body =
       b.kind === 'song' && c
-        ? `<b>${c.title}</b><br>${fmtClock(rec.start)} 开播 · ${abs(b.start)}<br>${fmtDur(b.end - b.start)} · ${SOURCE_LABEL[c.source] ?? c.source}`
+        ? `<b>${c.title}</b><br>${fmtClock(rec.start)} 开播 · ${abs(b.start)}<br>${fmtDur(b.end - b.start)} · ${sourceLabel(c.source)}`
         : b.kind === 'manual'
           ? `手工切片（未识别出歌，可能不准确）<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`
           : `zzz · 没开播 / 在睡觉 awa<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`;
@@ -48,13 +49,20 @@
             <!-- 歌 + 手工切片块 -->
             {#each blocks as b, bi (bi)}
               {#if b.kind !== 'zzz'}
+                {@const isSong = b.kind === 'song' && !!b.clip}
+                {@const clipIdx = isSong ? (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file) : -1}
+                {@const active = isSong && player.track?.clip.file === b.clip!.file}
                 <div
                   class="absolute top-1.5 h-5 rounded-sm transition-transform hover:scale-y-110"
                   class:bg-accent={b.kind === 'song'}
                   class:bg-warning={b.kind === 'manual'}
+                  class:ring-2={active}
+                  class:ring-accent={active}
                   style:left={(b.start / dur) * 100 + '%'};
                   style:width={((b.end - b.start) / dur) * 100 + '%'}
                   role="button" tabindex="0"
+                  onclick={() => { if (isSong && clipIdx >= 0) playClip(rec, clipIdx); }}
+                  onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && isSong && clipIdx >= 0) { e.preventDefault(); playClip(rec, clipIdx); } }}
                   onmousemove={(e) => showTip(e, b, rec)}
                   onmouseleave={() => (tip = null)}
                   onfocus={(e) => showTip(e as unknown as MouseEvent, b, rec)}
@@ -74,7 +82,7 @@
 
     <!-- 图例 -->
     <div class="mt-6 flex flex-wrap gap-4 pl-40 text-xs">
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span><Sparkles class="h-3 w-3" /> 歌 · AI识曲（可能不准确）</span>
+      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span><Sparkles class="h-3 w-3" /> 歌 · AI识曲（点击播放）</span>
       <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-warning"></span><Scissors class="h-3 w-3" /> 手工切片（可能不准确）</span>
       <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-base-300/60"></span><MoonStar class="h-3 w-3" /> zzz · 没开播 / 233 在睡觉 awa</span>
     </div>

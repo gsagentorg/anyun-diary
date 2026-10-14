@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+  --color-base-100: #ffffff;
+  --color-base-200: #f4f4f5;
+  --color-base-300: #e4e4e7;
+  --color-base-content: #27272a;
+  --color-accent: #7c5cfc;
+  --color-accent-content: #ffffff;
+  --color-warning: #f59e0b;
+  --color-warning-content: #ffffff;
+}
+
+html {
+  color-scheme: light;
+  background: var(--color-base-100);
+  color: var(--color-base-content);
+}

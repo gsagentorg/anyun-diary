@@ -8,12 +8,12 @@
   llc:     "<录像名>-proj.llc" → cutSegments[start,end](录像内相对秒)
   切片:    "<录像名>-<HH.MM.SS.mmm>-<HH.MM.SSS.mmm>-segN.m4a|.ogg"
            → 时间戳即录像内偏移（与 llc 一致，交叉验证）
-歌名/识别来源: /var/tmp/songid/tag_state.json (title/source)
+歌名: 切片文件自带的元数据（不依赖任何外部打标产物）
+  m4a → format_tags.title ; ogg → stream_tags.TITLE
 """
-import json, os, re, sys, datetime as dt
+import json, os, re, sys, subprocess, datetime as dt
 
 BASE = "/mnt/Share/安允日记"
-TAG_STATE = "/var/tmp/songid/tag_state.json"
 TZ = dt.timezone(dt.timedelta(hours=8))
 
 SEG_RE = re.compile(
@@ -26,8 +26,37 @@ SEG_RE = re.compile(
 def hms_ms(a, b, c, d):
     return int(a) * 3600 + int(b) * 60 + int(c) + int(d) / 1000.0
 
+def read_title(path):
+    """读切片文件自带的歌名标签。
+    m4a → format_tags.title；ogg(Opus) → stream_tags 里的 title/TITLE（ffprobe 版本不同大小写不一）。
+    """
+    try:
+        out = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-show_entries", "format_tags:stream_tags",
+             "-of", "json", path],
+            capture_output=True, text=True, timeout=15
+        ).stdout
+        j = json.loads(out or "{}")
+        def pick(tags):
+            if not isinstance(tags, dict):
+                return None
+            for k in ("title", "TITLE"):
+                v = tags.get(k)
+                if v and str(v).strip():
+                    return str(v).strip()
+            return None
+        t = pick((j.get("format", {}) or {}).get("tags"))
+        if t:
+            return t
+        for st in j.get("streams", []) or []:
+            t = pick((st or {}).get("tags"))
+            if t:
+                return t
+    except Exception as e:
+        print(f"WARN: 读标签失败 {os.path.basename(path)}: {e}", file=sys.stderr)
+    return ""
+
 def main():
-    tags = json.load(open(TAG_STATE))
 
     # 主录像: 名称 → 开播时间 + 时长
     recs = {}
@@ -68,19 +97,18 @@ def main():
         off_end = hms_ms(m.group(6), m.group(7), m.group(8), m.group(9))
         seg_no = m.group(10)
         ext = m.group(11)
-        info = tags.get(f, {})
         matches = [k for k in recs if k.rsplit('.', 1)[0] == rec_name]
         if not matches:
             print(f"WARN: 切片无对应录像: {f}", file=sys.stderr)
             continue
+        title = read_title(os.path.join(tagged_dir, f))
         recs[matches[0]].setdefault("clips", []).append({
             "file": f,
             "opus": f"{os.path.splitext(f)[0]}.opus",
             "offsetStart": round(off_start, 3),
             "offsetEnd": round(off_end, 3),
             "seg": seg_no,
-            "title": info.get("title") or "",
-            "source": info.get("source") or "",
+            "title": title,
         })
 
     # 录像时长（若 ffprobe 结果缓存存在则读入；否则留空由前端标"未知"）

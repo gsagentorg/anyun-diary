@@ -1,8 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
-  import { blocksOf, fmtDay, fmtClock, fmtDur, fmtOffset, hueOf, sourceLabel } from './types';
+  import { blocksOf, fmtDay, fmtClock, fmtDur, fmtOffset, hueOf } from './types';
   import { player, playClip } from './player.svelte';
-  import { Music, Scissors, MoonStar } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -13,7 +12,6 @@
   {#each recordings as rec (rec.file)}
     {@const blocks = blocksOf(rec)}
     {@const songs = blocks.filter((b) => b.kind === 'song')}
-    {@const manual = blocks.filter((b) => b.kind === 'manual')}
     {@const zzz = blocks.filter((b) => b.kind === 'zzz')}
     <button
       class="card rounded-xl border bg-base-100 p-4 text-left transition hover:border-accent"
@@ -26,9 +24,8 @@
       </div>
       <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
         <span class="rounded-full bg-accent/15 px-2 py-0.5">🎵 {songs.length} 歌</span>
-        <span class="rounded-full bg-warning px-2 py-0.5">✂️ {manual.length} 手工</span>
         <span class="rounded-full bg-base-300/50 px-2 py-0.5">🌙 zzz {fmtDur(zzz.reduce((a, b) => a + b.end - b.start, 0))}</span>
-        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {fmtDur(rec.duration ?? 0)}</span>
+        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {rec.duration ? fmtDur(rec.duration) : '时长未知'}</span>
       </div>
 
       {#if open === rec.file}
@@ -47,7 +44,7 @@
                 <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>
                 <span class="w-12 shrink-0 text-[10px] opacity-60">{fmtOffset(b.start)}</span>
                 <span class="font-medium">{i + 1}. {b.clip?.title || '（未识别）'}</span>
-                <span class="text-[10px] opacity-50">{fmtDur(b.end - b.start)} · {sourceLabel(b.clip?.source)}</span>
+                <span class="text-[10px] opacity-50">{fmtDur(b.end - b.start)}</span>
               </button>
             </li>
           {/each}

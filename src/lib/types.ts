@@ -5,7 +5,6 @@ export interface Clip {
   offsetEnd: number;
   seg: string;
   title: string;
-  source: string;
 }
 
 export interface Segment {
@@ -27,9 +26,9 @@ export interface DiaryData {
   recordings: Recording[];
 }
 
-/** 录像内三态分解: 歌 / 手工切片 / zzz */
+/** 录像内两态：歌 / zzz（无切片覆盖=没开播或在睡觉） */
 export interface Block {
-  kind: 'song' | 'manual' | 'zzz';
+  kind: 'song' | 'zzz';
   start: number;
   end: number;
   clip?: Clip;
@@ -62,14 +61,7 @@ export function blocksOf(rec: Recording): Block[] {
   for (const c of clips) {
     blocks.push({ kind: 'song', start: c.offsetStart, end: c.offsetEnd, clip: c });
   }
-  // 手工切片: llc 段减去歌
-  const songCuts = clips.map((c): [number, number] => [c.offsetStart, c.offsetEnd]);
-  for (const s of segs) {
-    for (const [a, b] of subtract(s.start, s.end, songCuts)) {
-      blocks.push({ kind: 'manual', start: a, end: b });
-    }
-  }
-  // zzz: 录像内减去所有 llc 段
+  // zzz: 录像内减去所有切片段（含"有音频无歌"的段——owner 定：那是我录制导致，不单独显示）
   const segCuts = segs.map((s): [number, number] => [s.start, s.end]);
   for (const [a, b] of subtract(0, dur, segCuts)) {
     blocks.push({ kind: 'zzz', start: a, end: b });
@@ -94,9 +86,17 @@ export const fmtDay = (epoch: number) =>
   });
 
 export const fmtDur = (s: number) => {
+  if (!Number.isFinite(s) || s <= 0) return '--:--';
   if (s < 60) return `${s.toFixed(0)}s`;
   const m = s / 60;
   return m < 60 ? `${m.toFixed(1)}min` : `${(m / 60).toFixed(1)}h`;
+};
+
+/** mm:ss（播放进度/时长用） */
+export const fmtClockShort = (s: number) => {
+  if (!Number.isFinite(s) || s < 0) return '--:--';
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
 };
 
 /** 按 title 哈希出稳定 hue */
@@ -104,19 +104,6 @@ export function hueOf(title: string): number {
   let h = 0;
   for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) >>> 0;
   return h % 360;
-}
-
-export const SOURCE_LABEL: Record<string, string> = {
-  asr: 'AI识曲(ASR)',
-  shazam: 'AI识曲(Shazam)',
-  'owner-confirmed': '已确认',
-};
-
-/** 从 "asr+网易+lyric-verified" 这类复合来源取短标签 */
-export function sourceLabel(source: string | undefined | null): string {
-  if (!source) return '未知';
-  const head = source.split('+')[0].trim();
-  return SOURCE_LABEL[head] ?? `AI识曲(${head})`;
 }
 
 /** 切片音频 URL（文件名含空格/中文，需编码） */

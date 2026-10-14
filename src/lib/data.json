@@ -1,5 +1,5 @@
 {
- "generatedAt": 1791943996,
+ "generatedAt": 1791960569,
  "timezone": "Asia/Shanghai",
  "recordings": [
   {
@@ -51,8 +51,7 @@
      "offsetStart": 2013.607,
      "offsetEnd": 2129.328,
      "seg": "seg1",
-     "title": "爱的就是你",
-     "source": "asr+网易+lyric-verified"
+     "title": "爱的就是你"
     },
     {
      "file": "2026-09-27 16-01-58-00.48.55.861-00.50.27.878-seg2.m4a",
@@ -60,8 +59,7 @@
      "offsetStart": 2935.861,
      "offsetEnd": 3027.878,
      "seg": "seg2",
-     "title": "凑热闹",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-09-27 16-01-58-01.11.08.975-01.14.24.660-seg3.m4a",
@@ -69,8 +67,7 @@
      "offsetStart": 4268.975,
      "offsetEnd": 4464.66,
      "seg": "seg3",
-     "title": "夏风所至",
-     "source": "asr+网易+lyric-verified(web-lyric,网易无词)"
+     "title": "夏风所至"
     },
     {
      "file": "2026-09-27 16-01-58-01.43.20.417-01.47.10.913-seg4.m4a",
@@ -78,8 +75,7 @@
      "offsetStart": 6200.417,
      "offsetEnd": 6430.913,
      "seg": "seg4",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-09-27 16-01-58-01.50.54.984-01.55.04.157-seg5.m4a",
@@ -87,8 +83,7 @@
      "offsetStart": 6654.984,
      "offsetEnd": 6904.157,
      "seg": "seg5",
-     "title": "小手拉大手",
-     "source": "asr+网易+lyric-verified"
+     "title": "小手拉大手"
     },
     {
      "file": "2026-09-27 16-01-58-01.56.12.343-02.00.31.215-seg6.m4a",
@@ -96,8 +91,7 @@
      "offsetStart": 6972.343,
      "offsetEnd": 7231.215,
      "seg": "seg6",
-     "title": "就是爱你",
-     "source": "asr+网易+lyric-verified"
+     "title": "就是爱你"
     },
     {
      "file": "2026-09-27 16-01-58-02.25.53.967-02.29.44.253-seg7.m4a",
@@ -105,8 +99,7 @@
      "offsetStart": 8753.967,
      "offsetEnd": 8984.253,
      "seg": "seg7",
-     "title": "珊瑚海",
-     "source": "asr+网易+lyric-verified"
+     "title": "珊瑚海"
     },
     {
      "file": "2026-09-27 16-01-58-02.50.00.592-02.51.39.008-seg9.m4a",
@@ -114,8 +107,7 @@
      "offsetStart": 10200.592,
      "offsetEnd": 10299.008,
      "seg": "seg9",
-     "title": "唯一",
-     "source": "shazam+网易校准+sweep-fix"
+     "title": "唯一"
     },
     {
      "file": "2026-09-27 16-01-58-02.55.02.263-02.56.47.174-seg8.m4a",
@@ -123,8 +115,7 @@
      "offsetStart": 10502.263,
      "offsetEnd": 10607.174,
      "seg": "seg8",
-     "title": "萌二代",
-     "source": "asr+网易+sweep-fix"
+     "title": "萌二代"
     }
    ]
   },
@@ -233,8 +224,7 @@
      "offsetStart": 99.806,
      "offsetEnd": 316.983,
      "seg": "seg01",
-     "title": "东京不太热",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "东京不太热"
     },
     {
      "file": "2026-09-30 05-50-52-00.06.43.018-00.09.57.235-seg02.m4a",
@@ -242,8 +232,7 @@
      "offsetStart": 403.018,
      "offsetEnd": 597.235,
      "seg": "seg02",
-     "title": "达尔文",
-     "source": "asr+网易+lyric-verified"
+     "title": "达尔文"
     },
     {
      "file": "2026-09-30 05-50-52-00.11.51.184-00.14.59.580-seg03.m4a",
@@ -251,8 +240,7 @@
      "offsetStart": 711.184,
      "offsetEnd": 899.58,
      "seg": "seg03",
-     "title": "爱的魔法 (Live版)",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "爱的魔法"
     },
     {
      "file": "2026-09-30 05-50-52-00.41.59.999-00.46.17.972-seg04.m4a",
@@ -260,8 +248,7 @@
      "offsetStart": 2519.999,
      "offsetEnd": 2777.972,
      "seg": "seg04",
-     "title": "爱你",
-     "source": "owner-confirmed"
+     "title": "爱你"
     },
     {
      "file": "2026-09-30 05-50-52-00.48.27.634-00.52.12.928-seg05.m4a",
@@ -269,8 +256,7 @@
      "offsetStart": 2907.634,
      "offsetEnd": 3132.928,
      "seg": "seg05",
-     "title": "我的一个道姑朋友",
-     "source": "shazam+网易校准+sweep-fix"
+     "title": "我的一个道姑朋友"
     },
     {
      "file": "2026-09-30 05-50-52-00.54.35.177-00.59.16.595-seg06.m4a",
@@ -278,8 +264,7 @@
      "offsetStart": 3275.177,
      "offsetEnd": 3556.595,
      "seg": "seg06",
-     "title": "今夜有雨",
-     "source": "asr+网易+lyric-verified"
+     "title": "今夜有雨"
     },
     {
      "file": "2026-09-30 05-50-52-00.59.56.354-01.03.45.890-seg07.m4a",
@@ -287,8 +272,7 @@
      "offsetStart": 3596.354,
      "offsetEnd": 3825.89,
      "seg": "seg07",
-     "title": "下雨天",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "下雨天"
     },
     {
      "file": "2026-09-30 05-50-52-01.06.04.536-01.10.06.298-seg08.m4a",
@@ -296,8 +280,7 @@
      "offsetStart": 3964.536,
      "offsetEnd": 4206.298,
      "seg": "seg08",
-     "title": "雨爱",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "雨爱"
     },
     {
      "file": "2026-09-30 05-50-52-01.13.45.810-01.18.00.935-seg09.m4a",
@@ -305,8 +288,7 @@
      "offsetStart": 4425.81,
      "offsetEnd": 4680.935,
      "seg": "seg09",
-     "title": "负重一万斤长大",
-     "source": "asr+网易+lyric-verified"
+     "title": "负重一万斤长大"
     },
     {
      "file": "2026-09-30 05-50-52-01.24.01.744-01.25.49.610-seg10.m4a",
@@ -314,8 +296,7 @@
      "offsetStart": 5041.744,
      "offsetEnd": 5149.61,
      "seg": "seg10",
-     "title": "输入法打可爱按第五",
-     "source": "asr+网易"
+     "title": "输入法打可爱按第五"
     },
     {
      "file": "2026-09-30 05-50-52-01.26.44.708-01.30.15.788-seg11.m4a",
@@ -323,8 +304,7 @@
      "offsetStart": 5204.708,
      "offsetEnd": 5415.788,
      "seg": "seg11",
-     "title": "山花寻海树",
-     "source": "asr+网易+audit-fix"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-09-30 05-50-52-01.32.45.620-01.36.26.092-seg12.m4a",
@@ -332,8 +312,7 @@
      "offsetStart": 5565.62,
      "offsetEnd": 5786.092,
      "seg": "seg12",
-     "title": "遇见你的时候所有星星都落到我头上",
-     "source": "shazam+网易校准+sweep-fix"
+     "title": "遇见你的时候所有星星都落到我头上"
     },
     {
      "file": "2026-09-30 05-50-52-01.37.27.002-01.41.21.233-seg13.m4a",
@@ -341,8 +320,7 @@
      "offsetStart": 5847.002,
      "offsetEnd": 6081.233,
      "seg": "seg13",
-     "title": "凑热闹",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-09-30 05-50-52-01.47.23.131-01.49.08.019-seg14.m4a",
@@ -350,8 +328,7 @@
      "offsetStart": 6443.131,
      "offsetEnd": 6548.019,
      "seg": "seg14",
-     "title": "萌二代",
-     "source": "asr+网易+sweep-fix"
+     "title": "萌二代"
     },
     {
      "file": "2026-09-30 05-50-52-02.17.33.119-02.21.03.254-seg15.m4a",
@@ -359,8 +336,7 @@
      "offsetStart": 8253.119,
      "offsetEnd": 8463.254,
      "seg": "seg15",
-     "title": "伯虎说 (feat.唐伯虎Annie)",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "伯虎说"
     },
     {
      "file": "2026-09-30 05-50-52-02.25.34.425-02.26.03.437-seg16.m4a",
@@ -368,8 +344,7 @@
      "offsetStart": 8734.425,
      "offsetEnd": 8763.437,
      "seg": "seg16",
-     "title": "我想我不够好",
-     "source": "asr+网易+lyric-verified"
+     "title": "我想我不够好"
     },
     {
      "file": "2026-09-30 05-50-52-02.28.23.286-02.32.33.813-seg17.m4a",
@@ -377,8 +352,7 @@
      "offsetStart": 8903.286,
      "offsetEnd": 9153.813,
      "seg": "seg17",
-     "title": "演员",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "演员"
     },
     {
      "file": "2026-09-30 05-50-52-02.44.27.963-02.45.53.762-seg18.m4a",
@@ -386,8 +360,7 @@
      "offsetStart": 9867.963,
      "offsetEnd": 9953.762,
      "seg": "seg18",
-     "title": "阿拉斯加海湾",
-     "source": "asr+网易+lyric-verified"
+     "title": "阿拉斯加海湾"
     },
     {
      "file": "2026-09-30 05-50-52-02.47.29.898-02.51.25.013-seg19.m4a",
@@ -395,8 +368,7 @@
      "offsetStart": 10049.898,
      "offsetEnd": 10285.013,
      "seg": "seg19",
-     "title": "阿拉斯加海湾",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "阿拉斯加海湾"
     },
     {
      "file": "2026-09-30 05-50-52-02.54.57.428-02.56.24.380-seg20.m4a",
@@ -404,8 +376,7 @@
      "offsetStart": 10497.428,
      "offsetEnd": 10584.38,
      "seg": "seg20",
-     "title": "为你写诗2024",
-     "source": "asr+网易+lyric-verified"
+     "title": "为你写诗2024"
     },
     {
      "file": "2026-09-30 05-50-52-03.10.53.293-03.15.13.569-seg21.m4a",
@@ -413,8 +384,7 @@
      "offsetStart": 11453.293,
      "offsetEnd": 11713.569,
      "seg": "seg21",
-     "title": "总有一天你会出现在我身边",
-     "source": "owner-confirmed"
+     "title": "总有一天你会出现在我身边"
     },
     {
      "file": "2026-09-30 05-50-52-03.16.00.226-03.17.28.796-seg22.m4a",
@@ -422,8 +392,7 @@
      "offsetStart": 11760.226,
      "offsetEnd": 11848.796,
      "seg": "seg22",
-     "title": "小美满",
-     "source": "shazam+audit-fix"
+     "title": "小美满"
     },
     {
      "file": "2026-09-30 05-50-52-03.41.13.426-03.44.51.717-seg23.m4a",
@@ -431,8 +400,7 @@
      "offsetStart": 13273.426,
      "offsetEnd": 13491.717,
      "seg": "seg23",
-     "title": "你是我爱的人",
-     "source": "asr+网易+lyric-verified"
+     "title": "你是我爱的人"
     }
    ]
   },
@@ -481,8 +449,7 @@
      "offsetStart": 790.256,
      "offsetEnd": 994.867,
      "seg": "seg1",
-     "title": "牛奶面包",
-     "source": "shazam+sweep-unresolved+sweep-fix"
+     "title": "牛奶面包"
     },
     {
      "file": "2026-09-30 15-59-57-00.48.13.729-00.51.48.550-seg2.m4a",
@@ -490,8 +457,7 @@
      "offsetStart": 2893.729,
      "offsetEnd": 3108.55,
      "seg": "seg2",
-     "title": "安和桥",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "安和桥"
     },
     {
      "file": "2026-09-30 15-59-57-00.57.38.194-01.02.03.307-seg3.m4a",
@@ -499,8 +465,7 @@
      "offsetStart": 3458.194,
      "offsetEnd": 3723.307,
      "seg": "seg3",
-     "title": "爱就一个字",
-     "source": "asr+网易+sweep-unresolved+sweep-fix"
+     "title": "爱就一个字"
     },
     {
      "file": "2026-09-30 15-59-57-01.03.44.112-01.07.50.621-seg4.m4a",
@@ -508,8 +473,7 @@
      "offsetStart": 3824.112,
      "offsetEnd": 4070.621,
      "seg": "seg4",
-     "title": "雨爱",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "雨爱"
     },
     {
      "file": "2026-09-30 15-59-57-02.00.48.424-02.04.44.888-seg5.m4a",
@@ -517,8 +481,7 @@
      "offsetStart": 7248.424,
      "offsetEnd": 7484.888,
      "seg": "seg5",
-     "title": "素颜",
-     "source": "asr+网易+lyric-verified"
+     "title": "素颜"
     },
     {
      "file": "2026-09-30 15-59-57-02.41.19.295-02.46.57.310-seg6.m4a",
@@ -526,8 +489,7 @@
      "offsetStart": 9679.295,
      "offsetEnd": 10017.31,
      "seg": "seg6",
-     "title": "负重一万斤长大",
-     "source": "asr+网易+lyric-verified"
+     "title": "负重一万斤长大"
     },
     {
      "file": "2026-09-30 15-59-57-03.01.36.039-03.05.47.042-seg7.m4a",
@@ -535,8 +497,7 @@
      "offsetStart": 10896.039,
      "offsetEnd": 11147.042,
      "seg": "seg7",
-     "title": "几分之几 (You Complete Me)",
-     "source": "asr+网易+lyric-verified"
+     "title": "几分之几"
     },
     {
      "file": "2026-09-30 15-59-57-03.10.23.710-03.13.48.129-seg8.m4a",
@@ -544,8 +505,7 @@
      "offsetStart": 11423.71,
      "offsetEnd": 11628.129,
      "seg": "seg8",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -606,8 +566,7 @@
      "offsetStart": 207.788,
      "offsetEnd": 332.442,
      "seg": "seg01",
-     "title": "烟雨行舟",
-     "source": "asr+网易+sweep-fix"
+     "title": "烟雨行舟"
     },
     {
      "file": "2026-10-01 08-36-26-00.15.57.276-00.19.52.455-seg02.m4a",
@@ -615,8 +574,7 @@
      "offsetStart": 957.276,
      "offsetEnd": 1192.455,
      "seg": "seg02",
-     "title": "凑热闹",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-10-01 08-36-26-01.04.06.495-01.07.45.021-seg03.m4a",
@@ -624,8 +582,7 @@
      "offsetStart": 3846.495,
      "offsetEnd": 4065.021,
      "seg": "seg03",
-     "title": "遇见你的时候所有星星都落到我头上",
-     "source": "shazam+网易校准+sweep-fix"
+     "title": "遇见你的时候所有星星都落到我头上"
     },
     {
      "file": "2026-10-01 08-36-26-01.54.02.816-01.56.07.673-seg04.m4a",
@@ -633,8 +590,7 @@
      "offsetStart": 6842.816,
      "offsetEnd": 6967.673,
      "seg": "seg04",
-     "title": "我好想你 (苏打绿版)",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "我好想你"
     },
     {
      "file": "2026-10-01 08-36-26-01.56.11.175-02.00.21.770-seg05.m4a",
@@ -642,8 +598,7 @@
      "offsetStart": 6971.175,
      "offsetEnd": 7221.77,
      "seg": "seg05",
-     "title": "我好想你",
-     "source": "asr+网易+sweep-fix"
+     "title": "我好想你"
     },
     {
      "file": "2026-10-01 08-36-26-02.06.38.917-02.11.15.190-seg06.m4a",
@@ -651,8 +606,7 @@
      "offsetStart": 7598.917,
      "offsetEnd": 7875.19,
      "seg": "seg06",
-     "title": "蒲公英的约定",
-     "source": "asr+网易+lyric-verified"
+     "title": "蒲公英的约定"
     },
     {
      "file": "2026-10-01 08-36-26-02.16.42.558-02.19.54.665-seg07.m4a",
@@ -660,8 +614,7 @@
      "offsetStart": 8202.558,
      "offsetEnd": 8394.665,
      "seg": "seg07",
-     "title": "达尔文",
-     "source": "asr+网易+lyric-verified"
+     "title": "达尔文"
     },
     {
      "file": "2026-10-01 08-36-26-02.21.07.371-02.23.11.949-seg08.m4a",
@@ -669,8 +622,7 @@
      "offsetStart": 8467.371,
      "offsetEnd": 8591.949,
      "seg": "seg08",
-     "title": "明明就",
-     "source": "asr+网易+lyric-verified"
+     "title": "明明就"
     },
     {
      "file": "2026-10-01 08-36-26-02.24.55.159-02.28.50.569-seg09.m4a",
@@ -678,8 +630,7 @@
      "offsetStart": 8695.159,
      "offsetEnd": 8930.569,
      "seg": "seg09",
-     "title": "星河叹",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "星河叹"
     },
     {
      "file": "2026-10-01 08-36-26-02.44.00.125-02.48.58.090-seg10.m4a",
@@ -687,8 +638,7 @@
      "offsetStart": 9840.125,
      "offsetEnd": 10138.09,
      "seg": "seg10",
-     "title": "爱就一个字",
-     "source": "asr+网易+audit-fix"
+     "title": "爱就一个字"
     },
     {
      "file": "2026-10-01 08-36-26-02.53.14.799-02.56.39.861-seg11.m4a",
@@ -696,8 +646,7 @@
      "offsetStart": 10394.799,
      "offsetEnd": 10599.861,
      "seg": "seg11",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -734,8 +683,7 @@
      "offsetStart": 1461.636,
      "offsetEnd": 1709.483,
      "seg": "seg1",
-     "title": "只对你有感觉",
-     "source": "asr+网易+lyric-verified"
+     "title": "只对你有感觉"
     },
     {
      "file": "2026-10-01 15-58-21-00.29.21.281-00.33.22.745-seg2.m4a",
@@ -743,8 +691,7 @@
      "offsetStart": 1761.281,
      "offsetEnd": 2002.745,
      "seg": "seg2",
-     "title": "几分之几",
-     "source": "asr+网易+audit-fix"
+     "title": "几分之几"
     },
     {
      "file": "2026-10-01 15-58-21-00.40.36.661-00.46.28.746-seg3.m4a",
@@ -752,8 +699,7 @@
      "offsetStart": 2436.661,
      "offsetEnd": 2788.746,
      "seg": "seg3",
-     "title": "连名带姓",
-     "source": "asr+网易+sweep-fix"
+     "title": "连名带姓"
     },
     {
      "file": "2026-10-01 15-58-21-02.51.04.449-02.54.43.138-seg4.m4a",
@@ -761,8 +707,7 @@
      "offsetStart": 10264.449,
      "offsetEnd": 10483.138,
      "seg": "seg4",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-10-01 15-58-21-02.55.27.813-03.00.01.320-seg5.m4a",
@@ -770,8 +715,7 @@
      "offsetStart": 10527.813,
      "offsetEnd": 10801.32,
      "seg": "seg5",
-     "title": "我的世界",
-     "source": "asr+网易+lyric-verified"
+     "title": "我的世界"
     }
    ]
   },
@@ -808,8 +752,7 @@
      "offsetStart": 559.396,
      "offsetEnd": 818.224,
      "seg": "seg5",
-     "title": "花海",
-     "source": "asr+网易+window-retry"
+     "title": "花海"
     },
     {
      "file": "2026-10-02 07-39-31-01.04.57.549-01.08.44.220-seg4.ogg",
@@ -817,8 +760,7 @@
      "offsetStart": 3897.549,
      "offsetEnd": 4124.22,
      "seg": "seg4",
-     "title": "浪漫爱",
-     "source": "asr+网易+lyric-verified"
+     "title": "浪漫爱"
     },
     {
      "file": "2026-10-02 07-39-31-01.18.26.993-01.22.58.579-seg1.ogg",
@@ -826,8 +768,7 @@
      "offsetStart": 4706.993,
      "offsetEnd": 4978.579,
      "seg": "seg1",
-     "title": "刚烈女子",
-     "source": "asr+网易+lyric-verified"
+     "title": "刚烈女子"
     },
     {
      "file": "2026-10-02 07-39-31-01.23.41.983-01.27.03.121-seg2.ogg",
@@ -835,8 +776,7 @@
      "offsetStart": 5021.983,
      "offsetEnd": 5223.121,
      "seg": "seg2",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-10-02 07-39-31-01.53.36.674-01.57.49.072-seg3.ogg",
@@ -844,8 +784,7 @@
      "offsetStart": 6816.674,
      "offsetEnd": 7069.072,
      "seg": "seg3",
-     "title": "夏天的风",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "夏天的风"
     }
    ]
   },
@@ -882,8 +821,7 @@
      "offsetStart": 4324.254,
      "offsetEnd": 4554.987,
      "seg": "seg1",
-     "title": "凑热闹",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-10-02 15-57-54-02.26.04.599-02.29.49.916-seg2.m4a",
@@ -891,8 +829,7 @@
      "offsetStart": 8764.599,
      "offsetEnd": 8989.916,
      "seg": "seg2",
-     "title": "爱错",
-     "source": "asr+网易+sweep-fix"
+     "title": "爱错"
     },
     {
      "file": "2026-10-02 15-57-54-02.40.10.846-02.44.39.571-seg3.m4a",
@@ -900,8 +837,7 @@
      "offsetStart": 9610.846,
      "offsetEnd": 9879.571,
      "seg": "seg3",
-     "title": "爱就一个字",
-     "source": "asr+网易+lyric-verified"
+     "title": "爱就一个字"
     },
     {
      "file": "2026-10-02 15-57-54-02.46.43.604-02.50.05.017-seg4.m4a",
@@ -909,8 +845,7 @@
      "offsetStart": 10003.604,
      "offsetEnd": 10205.017,
      "seg": "seg4",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-10-02 15-57-54-03.02.43.651-03.07.01.622-seg5.m4a",
@@ -918,8 +853,7 @@
      "offsetStart": 10963.651,
      "offsetEnd": 11221.622,
      "seg": "seg5",
-     "title": "你就不要想起我",
-     "source": "shazam+网易校准+audit-fix"
+     "title": "你就不要想起我"
     }
    ]
   },
@@ -988,8 +922,7 @@
      "offsetStart": 73.936,
      "offsetEnd": 297.212,
      "seg": "seg01",
-     "title": "我们的明天",
-     "source": "asr+网易+lyric-verified"
+     "title": "我们的明天"
     },
     {
      "file": "2026-10-03 06-13-08-00.06.37.174-00.10.58.895-seg02.m4a",
@@ -997,8 +930,7 @@
      "offsetStart": 397.174,
      "offsetEnd": 658.895,
      "seg": "seg02",
-     "title": "离骚",
-     "source": "asr+网易+sweep-fix"
+     "title": "离骚"
     },
     {
      "file": "2026-10-03 06-13-08-00.16.56.810-00.18.26.300-seg03.m4a",
@@ -1006,8 +938,7 @@
      "offsetStart": 1016.81,
      "offsetEnd": 1106.3,
      "seg": "seg03",
-     "title": "为你写诗2024",
-     "source": "asr+网易+lyric-verified"
+     "title": "为你写诗2024"
     },
     {
      "file": "2026-10-03 06-13-08-00.38.45.818-00.40.37.604-seg04.m4a",
@@ -1015,8 +946,7 @@
      "offsetStart": 2325.818,
      "offsetEnd": 2437.604,
      "seg": "seg04",
-     "title": "几分之几",
-     "source": "asr+网易+audit-fix"
+     "title": "几分之几"
     },
     {
      "file": "2026-10-03 06-13-08-00.49.52.258-00.54.07.863-seg05.m4a",
@@ -1024,8 +954,7 @@
      "offsetStart": 2992.258,
      "offsetEnd": 3247.863,
      "seg": "seg05",
-     "title": "想自由",
-     "source": "owner-confirmed"
+     "title": "想自由"
     },
     {
      "file": "2026-10-03 06-13-08-00.56.13.507-00.58.41.848-seg06.m4a",
@@ -1033,8 +962,7 @@
      "offsetStart": 3373.507,
      "offsetEnd": 3521.848,
      "seg": "seg06",
-     "title": "刻在我心底的名字",
-     "source": "shazam+网易校准+audit-fix"
+     "title": "刻在我心底的名字"
     },
     {
      "file": "2026-10-03 06-13-08-01.29.11.713-01.32.06.738-seg07.m4a",
@@ -1042,8 +970,7 @@
      "offsetStart": 5351.713,
      "offsetEnd": 5526.738,
      "seg": "seg07",
-     "title": "怎么了",
-     "source": "asr+网易+lyric-verified"
+     "title": "怎么了"
     },
     {
      "file": "2026-10-03 06-13-08-01.33.22.612-01.35.57.511-seg08.m4a",
@@ -1051,8 +978,7 @@
      "offsetStart": 5602.612,
      "offsetEnd": 5757.511,
      "seg": "seg08",
-     "title": "咖喱咖喱",
-     "source": "shazam+网易校准+audit-fix"
+     "title": "咖喱咖喱"
     },
     {
      "file": "2026-10-03 06-13-08-01.36.17.215-01.45.39.567-seg09.m4a",
@@ -1060,8 +986,7 @@
      "offsetStart": 5777.215,
      "offsetEnd": 6339.567,
      "seg": "seg09",
-     "title": "大鱼 (唱片版)",
-     "source": "shazam+网易校准+window-retry"
+     "title": "大鱼"
     },
     {
      "file": "2026-10-03 06-13-08-01.45.52.290-01.50.55.584-seg10.m4a",
@@ -1069,8 +994,7 @@
      "offsetStart": 6352.29,
      "offsetEnd": 6655.584,
      "seg": "seg10",
-     "title": "刻在我心底的名字",
-     "source": "shazam+网易校准+audit-fix"
+     "title": "刻在我心底的名字"
     },
     {
      "file": "2026-10-03 06-13-08-02.02.53.251-02.06.24.755-seg11.m4a",
@@ -1078,8 +1002,7 @@
      "offsetStart": 7373.251,
      "offsetEnd": 7584.755,
      "seg": "seg11",
-     "title": "九张机",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "九张机"
     },
     {
      "file": "2026-10-03 06-13-08-02.30.24.513-02.34.22.045-seg12.m4a",
@@ -1087,8 +1010,7 @@
      "offsetStart": 9024.513,
      "offsetEnd": 9262.045,
      "seg": "seg12",
-     "title": "花海",
-     "source": "asr+网易+lyric-verified"
+     "title": "花海"
     },
     {
      "file": "2026-10-03 06-13-08-02.47.30.154-02.49.03.364-seg13.m4a",
@@ -1096,8 +1018,7 @@
      "offsetStart": 10050.154,
      "offsetEnd": 10143.364,
      "seg": "seg13",
-     "title": "你是我爱的人",
-     "source": "asr+网易+lyric-verified"
+     "title": "你是我爱的人"
     }
    ]
   },
@@ -1138,8 +1059,7 @@
      "offsetStart": 1819.428,
      "offsetEnd": 2090.053,
      "seg": "seg1",
-     "title": "慢冷 (Live)",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "慢冷"
     },
     {
      "file": "2026-10-04 16-01-35-01.05.11.916-01.08.59.368-seg2.m4a",
@@ -1147,8 +1067,7 @@
      "offsetStart": 3911.916,
      "offsetEnd": 4139.368,
      "seg": "seg2",
-     "title": "那些你很冒险的梦",
-     "source": "asr+网易+lyric-verified"
+     "title": "那些你很冒险的梦"
     },
     {
      "file": "2026-10-04 16-01-35-01.09.45.901-01.13.13.799-seg3.m4a",
@@ -1156,8 +1075,7 @@
      "offsetStart": 4185.901,
      "offsetEnd": 4393.799,
      "seg": "seg3",
-     "title": "幹物女(WeiWei)",
-     "source": "asr+网易+lyric-verified"
+     "title": "幹物女"
     },
     {
      "file": "2026-10-04 16-01-35-02.47.38.151-02.51.22.261-seg4.m4a",
@@ -1165,8 +1083,7 @@
      "offsetStart": 10058.151,
      "offsetEnd": 10282.261,
      "seg": "seg4",
-     "title": "目及皆是你",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "目及皆是你"
     },
     {
      "file": "2026-10-04 16-01-35-02.51.58.920-02.55.56.431-seg5.m4a",
@@ -1174,8 +1091,7 @@
      "offsetStart": 10318.92,
      "offsetEnd": 10556.431,
      "seg": "seg5",
-     "title": "棠梨煎雪",
-     "source": "asr+网易+window-retry"
+     "title": "棠梨煎雪"
     },
     {
      "file": "2026-10-04 16-01-35-03.01.08.804-03.04.57.313-seg6.m4a",
@@ -1183,8 +1099,7 @@
      "offsetStart": 10868.804,
      "offsetEnd": 11097.313,
      "seg": "seg6",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -1237,8 +1152,7 @@
      "offsetStart": 1122.792,
      "offsetEnd": 1217.875,
      "seg": "seg1",
-     "title": "不是因为寂寞才想你",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "不是因为寂寞才想你"
     },
     {
      "file": "2026-10-05 08-05-20-00.27.53.223-00.29.34.620-seg2.m4a",
@@ -1246,8 +1160,7 @@
      "offsetStart": 1673.223,
      "offsetEnd": 1774.62,
      "seg": "seg2",
-     "title": "当爱在靠近",
-     "source": "asr+网易+lyric-verified"
+     "title": "当爱在靠近"
     },
     {
      "file": "2026-10-05 08-05-20-00.58.11.316-01.03.41.945-seg3.m4a",
@@ -1255,8 +1168,7 @@
      "offsetStart": 3491.316,
      "offsetEnd": 3821.945,
      "seg": "seg3",
-     "title": "不在",
-     "source": "asr+网易+lyric-verified"
+     "title": "不在"
     },
     {
      "file": "2026-10-05 08-05-20-01.04.12.845-01.08.11.089-seg4.m4a",
@@ -1264,8 +1176,7 @@
      "offsetStart": 3852.845,
      "offsetEnd": 4091.089,
      "seg": "seg4",
-     "title": "我落泪情绪零碎（R&B）",
-     "source": "asr+网易+lyric-verified"
+     "title": "我落泪情绪零碎"
     },
     {
      "file": "2026-10-05 08-05-20-01.10.21.818-01.13.58.314-seg5.m4a",
@@ -1273,8 +1184,7 @@
      "offsetStart": 4221.818,
      "offsetEnd": 4438.314,
      "seg": "seg5",
-     "title": "星光派对",
-     "source": "asr+网易+sweep-fix"
+     "title": "星光派对"
     },
     {
      "file": "2026-10-05 08-05-20-01.19.24.205-01.20.43.171-seg6.m4a",
@@ -1282,8 +1192,7 @@
      "offsetStart": 4764.205,
      "offsetEnd": 4843.171,
      "seg": "seg6",
-     "title": "小情歌",
-     "source": "asr+网易+lyric-verified"
+     "title": "小情歌"
     },
     {
      "file": "2026-10-05 08-05-20-01.22.03.792-01.23.47.893-seg7.m4a",
@@ -1291,8 +1200,7 @@
      "offsetStart": 4923.792,
      "offsetEnd": 5027.893,
      "seg": "seg7",
-     "title": "知否知否 伴奏版",
-     "source": "shazam+网易包含+lyric-verified"
+     "title": "知否知否 伴奏版"
     },
     {
      "file": "2026-10-05 08-05-20-01.24.49.397-01.28.33.086-seg8.m4a",
@@ -1300,8 +1208,7 @@
      "offsetStart": 5089.397,
      "offsetEnd": 5313.086,
      "seg": "seg8",
-     "title": "裂缝中的阳光",
-     "source": "shazam+网易校准+sweep-fix"
+     "title": "裂缝中的阳光"
     },
     {
      "file": "2026-10-05 08-05-20-01.30.25.624-01.33.57.165-seg9.m4a",
@@ -1309,8 +1216,7 @@
      "offsetStart": 5425.624,
      "offsetEnd": 5637.165,
      "seg": "seg9",
-     "title": "山花寻海树",
-     "source": "asr+网易+sweep-fix"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -1355,8 +1261,7 @@
      "offsetStart": 1.376,
      "offsetEnd": 88.038,
      "seg": "seg1",
-     "title": "情花",
-     "source": "asr+网易+lyric-verified"
+     "title": "情花"
     },
     {
      "file": "2026-10-06 07-08-57-00.03.03.044-00.07.04.778-seg2.m4a",
@@ -1364,8 +1269,7 @@
      "offsetStart": 183.044,
      "offsetEnd": 424.778,
      "seg": "seg2",
-     "title": "123木头人",
-     "source": "asr+网易+lyric-verified"
+     "title": "123木头人"
     },
     {
      "file": "2026-10-06 07-08-57-00.20.40.505-00.23.33.368-seg3.m4a",
@@ -1373,8 +1277,7 @@
      "offsetStart": 1240.505,
      "offsetEnd": 1413.368,
      "seg": "seg3",
-     "title": "心愿便利贴",
-     "source": "asr+网易+lyric-verified"
+     "title": "心愿便利贴"
     },
     {
      "file": "2026-10-06 07-08-57-00.46.39.143-00.51.01.880-seg4.m4a",
@@ -1382,8 +1285,7 @@
      "offsetStart": 2799.143,
      "offsetEnd": 3061.88,
      "seg": "seg4",
-     "title": "慢冷 (Live)",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "慢冷"
     },
     {
      "file": "2026-10-06 07-08-57-00.52.52.868-00.54.48.168-seg5.m4a",
@@ -1391,8 +1293,7 @@
      "offsetStart": 3172.868,
      "offsetEnd": 3288.168,
      "seg": "seg5",
-     "title": "棠梨煎雪",
-     "source": "asr+网易+lyric-verified"
+     "title": "棠梨煎雪"
     },
     {
      "file": "2026-10-06 07-08-57-00.57.28.941-00.59.08.473-seg6.m4a",
@@ -1400,8 +1301,7 @@
      "offsetStart": 3448.941,
      "offsetEnd": 3548.473,
      "seg": "seg6",
-     "title": "浪漫爱",
-     "source": "asr+网易+lyric-verified"
+     "title": "浪漫爱"
     },
     {
      "file": "2026-10-06 07-08-57-02.20.30.640-02.23.53.668-seg7.m4a",
@@ -1409,8 +1309,7 @@
      "offsetStart": 8430.64,
      "offsetEnd": 8633.668,
      "seg": "seg7",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -1451,8 +1350,7 @@
      "offsetStart": 5592.201,
      "offsetEnd": 5838.171,
      "seg": "seg1",
-     "title": "烟雨行舟 (新版)",
-     "source": "asr+网易+sweep-unresolved+sweep-fix"
+     "title": "烟雨行舟"
     },
     {
      "file": "2026-10-06 16-16-59-01.40.48.082-01.44.42.810-seg2.m4a",
@@ -1460,8 +1358,7 @@
      "offsetStart": 6048.082,
      "offsetEnd": 6282.81,
      "seg": "seg2",
-     "title": "红豆",
-     "source": "asr+网易+lyric-verified"
+     "title": "红豆"
     },
     {
      "file": "2026-10-06 16-16-59-01.53.47.618-01.56.58.712-seg3.m4a",
@@ -1469,8 +1366,7 @@
      "offsetStart": 6827.618,
      "offsetEnd": 7018.712,
      "seg": "seg3",
-     "title": "追光者",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "追光者"
     },
     {
      "file": "2026-10-06 16-16-59-01.57.50.699-02.01.44.087-seg4.m4a",
@@ -1478,8 +1374,7 @@
      "offsetStart": 7070.699,
      "offsetEnd": 7304.087,
      "seg": "seg4",
-     "title": "借过",
-     "source": "asr+网易+lyric-verified"
+     "title": "借过"
     },
     {
      "file": "2026-10-06 16-16-59-02.24.56.389-02.28.25.704-seg5.m4a",
@@ -1487,8 +1382,7 @@
      "offsetStart": 8696.389,
      "offsetEnd": 8905.704,
      "seg": "seg5",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-10-06 16-16-59-02.39.52.172-02.44.05.105-seg6.m4a",
@@ -1496,8 +1390,7 @@
      "offsetStart": 9592.172,
      "offsetEnd": 9845.105,
      "seg": "seg6",
-     "title": "全是爱",
-     "source": "asr+网易+lyric-verified"
+     "title": "全是爱"
     }
    ]
   },
@@ -1558,8 +1451,7 @@
      "offsetStart": 1440.844,
      "offsetEnd": 1593.22,
      "seg": "seg01",
-     "title": "不灵不灵",
-     "source": "asr+网易+lyric-verified"
+     "title": "不灵不灵"
     },
     {
      "file": "2026-10-07 15-57-20-00.26.52.992-00.30.45.834-seg02.m4a",
@@ -1567,8 +1459,7 @@
      "offsetStart": 1612.992,
      "offsetEnd": 1845.834,
      "seg": "seg02",
-     "title": "凑热闹",
-     "source": "asr+网易+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-10-07 15-57-20-01.17.36.266-01.21.49.022-seg03.m4a",
@@ -1576,8 +1467,7 @@
      "offsetStart": 4656.266,
      "offsetEnd": 4909.022,
      "seg": "seg03",
-     "title": "目及皆是你",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "目及皆是你"
     },
     {
      "file": "2026-10-07 15-57-20-01.25.20.388-01.30.17.543-seg04.m4a",
@@ -1585,8 +1475,7 @@
      "offsetStart": 5120.388,
      "offsetEnd": 5417.543,
      "seg": "seg04",
-     "title": "夏夜最后的烟火",
-     "source": "asr+网易+lyric-verified"
+     "title": "夏夜最后的烟火"
     },
     {
      "file": "2026-10-07 15-57-20-04.04.12.005-04.07.54.725-seg06.m4a",
@@ -1594,8 +1483,7 @@
      "offsetStart": 14652.005,
      "offsetEnd": 14874.725,
      "seg": "seg06",
-     "title": "To April",
-     "source": "shazam+网易校准"
+     "title": "To April"
     },
     {
      "file": "2026-10-07 15-57-20-04.08.20.570-04.12.34.756-seg07.m4a",
@@ -1603,8 +1491,7 @@
      "offsetStart": 14900.57,
      "offsetEnd": 15154.756,
      "seg": "seg07",
-     "title": "烟雨行舟",
-     "source": "asr+网易+lyric-verified"
+     "title": "烟雨行舟"
     },
     {
      "file": "2026-10-07 15-57-20-04.14.18.163-04.18.57.556-seg08.m4a",
@@ -1612,8 +1499,7 @@
      "offsetStart": 15258.163,
      "offsetEnd": 15537.556,
      "seg": "seg08",
-     "title": "樱花草",
-     "source": "asr+网易+lyric-verified"
+     "title": "樱花草"
     },
     {
      "file": "2026-10-07 15-57-20-04.27.06.713-04.31.17.830-seg10.m4a",
@@ -1621,8 +1507,7 @@
      "offsetStart": 16026.713,
      "offsetEnd": 16277.83,
      "seg": "seg10",
-     "title": "唯一",
-     "source": "asr+网易+lyric-verified"
+     "title": "唯一"
     },
     {
      "file": "2026-10-07 15-57-20-04.35.29.518-04.39.57.662-seg11.m4a",
@@ -1630,8 +1515,7 @@
      "offsetStart": 16529.518,
      "offsetEnd": 16797.662,
      "seg": "seg11",
-     "title": "爱似水仙",
-     "source": "asr+网易+lyric-verified"
+     "title": "爱似水仙"
     }
    ]
   },
@@ -1696,8 +1580,7 @@
      "offsetStart": 8418.759,
      "offsetEnd": 8646.633,
      "seg": "seg01",
-     "title": "凑热闹",
-     "source": "asr+网易+lyric-verified"
+     "title": "凑热闹"
     },
     {
      "file": "2026-10-08 06-07-13-02.44.12.471-02.48.07.794-seg02.m4a",
@@ -1705,8 +1588,7 @@
      "offsetStart": 9852.471,
      "offsetEnd": 10087.794,
      "seg": "seg02",
-     "title": "借过",
-     "source": "asr+网易+lyric-verified"
+     "title": "借过"
     },
     {
      "file": "2026-10-08 06-07-13-02.51.34.175-02.53.19.427-seg03.m4a",
@@ -1714,8 +1596,7 @@
      "offsetStart": 10294.175,
      "offsetEnd": 10399.427,
      "seg": "seg03",
-     "title": "萌二代",
-     "source": "asr+网易+lyric-verified"
+     "title": "萌二代"
     },
     {
      "file": "2026-10-08 06-07-13-02.58.33.017-03.01.25.980-seg04.m4a",
@@ -1723,8 +1604,7 @@
      "offsetStart": 10713.017,
      "offsetEnd": 10885.98,
      "seg": "seg04",
-     "title": "Sakurairo Mau Koro",
-     "source": "shazam+网易校准"
+     "title": "Sakurairo Mau Koro"
     },
     {
      "file": "2026-10-08 06-07-13-03.08.59.107-03.14.04.322-seg05.m4a",
@@ -1732,8 +1612,7 @@
      "offsetStart": 11339.107,
      "offsetEnd": 11644.322,
      "seg": "seg05",
-     "title": "那年",
-     "source": "asr+网易+lyric-verified"
+     "title": "那年"
     },
     {
      "file": "2026-10-08 06-07-13-03.14.39.622-03.19.36.480-seg06.m4a",
@@ -1741,8 +1620,7 @@
      "offsetStart": 11679.622,
      "offsetEnd": 11976.48,
      "seg": "seg06",
-     "title": "怎么了",
-     "source": "asr+网易+lyric-verified"
+     "title": "怎么了"
     },
     {
      "file": "2026-10-08 06-07-13-03.27.27.301-03.31.09.866-seg07.m4a",
@@ -1750,8 +1628,7 @@
      "offsetStart": 12447.301,
      "offsetEnd": 12669.866,
      "seg": "seg07",
-     "title": "一滴泪的时间",
-     "source": "asr+网易+lyric-verified"
+     "title": "一滴泪的时间"
     },
     {
      "file": "2026-10-08 06-07-13-03.35.49.889-03.37.21.425-seg09.m4a",
@@ -1759,8 +1636,7 @@
      "offsetStart": 12949.889,
      "offsetEnd": 13041.425,
      "seg": "seg09",
-     "title": "拜托拜托",
-     "source": "asr+网易+lyric-verified"
+     "title": "拜托拜托"
     },
     {
      "file": "2026-10-08 06-07-13-03.42.29.457-03.46.00.468-seg10.m4a",
@@ -1768,8 +1644,7 @@
      "offsetStart": 13349.457,
      "offsetEnd": 13560.468,
      "seg": "seg10",
-     "title": "去有风的地方",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "去有风的地方"
     },
     {
      "file": "2026-10-08 06-07-13-03.51.01.265-03.56.14.763-seg12.m4a",
@@ -1777,8 +1652,7 @@
      "offsetStart": 13861.265,
      "offsetEnd": 14174.763,
      "seg": "seg12",
-     "title": "我不难过",
-     "source": "asr+网易+lyric-verified"
+     "title": "我不难过"
     }
    ]
   },
@@ -1807,8 +1681,7 @@
      "offsetStart": 5113.687,
      "offsetEnd": 5377.411,
      "seg": "seg3",
-     "title": "冬眠",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "冬眠"
     }
    ]
   },
@@ -1842,8 +1715,7 @@
      "offsetStart": 1056.733,
      "offsetEnd": 1318.668,
      "seg": "seg1",
-     "title": "等你下课",
-     "source": "asr+网易+lyric-verified"
+     "title": "等你下课"
     },
     {
      "file": "2026-10-10 06-01-13-00.41.18.099-00.46.31.518-seg2.m4a",
@@ -1851,8 +1723,7 @@
      "offsetStart": 2478.099,
      "offsetEnd": 2791.518,
      "seg": "seg2",
-     "title": "刻在我心底的名字",
-     "source": "asr+网易+lyric-verified"
+     "title": "刻在我心底的名字"
     },
     {
      "file": "2026-10-10 06-01-13-01.22.12.735-01.24.15.493-seg3.m4a",
@@ -1860,8 +1731,7 @@
      "offsetStart": 4932.735,
      "offsetEnd": 5055.493,
      "seg": "seg3",
-     "title": "今夜有雨",
-     "source": "asr+网易+lyric-verified"
+     "title": "今夜有雨"
     }
    ]
   },
@@ -1938,8 +1808,7 @@
      "offsetStart": 1184.881,
      "offsetEnd": 1280.778,
      "seg": "seg01",
-     "title": "为你写诗",
-     "source": "asr+网易+lyric-verified"
+     "title": "为你写诗"
     },
     {
      "file": "2026-10-12 08-10-43-00.34.19.838-00.35.18.390-seg02.m4a",
@@ -1947,8 +1816,7 @@
      "offsetStart": 2059.838,
      "offsetEnd": 2118.39,
      "seg": "seg02",
-     "title": "我想我不够好",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "我想我不够好"
     },
     {
      "file": "2026-10-12 08-10-43-01.26.46.046-01.30.34.624-seg04.m4a",
@@ -1956,8 +1824,7 @@
      "offsetStart": 5206.046,
      "offsetEnd": 5434.624,
      "seg": "seg04",
-     "title": "一笑倾城",
-     "source": "asr+网易+lyric-verified"
+     "title": "一笑倾城"
     },
     {
      "file": "2026-10-12 08-10-43-01.35.56.379-01.37.32.748-seg05.m4a",
@@ -1965,8 +1832,7 @@
      "offsetStart": 5756.379,
      "offsetEnd": 5852.748,
      "seg": "seg05",
-     "title": "少年英雄小哪吒",
-     "source": "asr+网易+lyric-verified"
+     "title": "少年英雄小哪吒"
     },
     {
      "file": "2026-10-12 08-10-43-01.41.47.658-01.43.22.571-seg07.m4a",
@@ -1974,8 +1840,7 @@
      "offsetStart": 6107.658,
      "offsetEnd": 6202.571,
      "seg": "seg07",
-     "title": "目及皆是你",
-     "source": "shazam+网易校准"
+     "title": "目及皆是你"
     },
     {
      "file": "2026-10-12 08-10-43-02.24.35.728-02.29.44.823-seg08.m4a",
@@ -1983,8 +1848,7 @@
      "offsetStart": 8675.728,
      "offsetEnd": 8984.823,
      "seg": "seg08",
-     "title": "我不难过",
-     "source": "asr+网易+lyric-verified"
+     "title": "我不难过"
     },
     {
      "file": "2026-10-12 08-10-43-02.31.00.164-02.35.06.471-seg09.m4a",
@@ -1992,8 +1856,7 @@
      "offsetStart": 9060.164,
      "offsetEnd": 9306.471,
      "seg": "seg09",
-     "title": "最后一页",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "最后一页"
     },
     {
      "file": "2026-10-12 08-10-43-02.44.17.035-02.47.59.696-seg10.m4a",
@@ -2001,8 +1864,7 @@
      "offsetStart": 9857.035,
      "offsetEnd": 10079.696,
      "seg": "seg10",
-     "title": "几分之几",
-     "source": "asr+网易+lyric-verified"
+     "title": "几分之几"
     },
     {
      "file": "2026-10-12 08-10-43-02.55.50.500-03.00.25.811-seg11.m4a",
@@ -2010,8 +1872,7 @@
      "offsetStart": 10550.5,
      "offsetEnd": 10825.811,
      "seg": "seg11",
-     "title": "特别的人",
-     "source": "asr+网易+lyric-verified"
+     "title": "特别的人"
     },
     {
      "file": "2026-10-12 08-10-43-03.01.48.389-03.08.00.334-seg12.m4a",
@@ -2019,8 +1880,7 @@
      "offsetStart": 10908.389,
      "offsetEnd": 11280.334,
      "seg": "seg12",
-     "title": "空心",
-     "source": "shazam+网易校准"
+     "title": "空心"
     },
     {
      "file": "2026-10-12 08-10-43-03.09.30.467-03.14.43.024-seg13.m4a",
@@ -2028,8 +1888,7 @@
      "offsetStart": 11370.467,
      "offsetEnd": 11683.024,
      "seg": "seg13",
-     "title": "海屿你",
-     "source": "asr+网易+lyric-verified"
+     "title": "海屿你"
     },
     {
      "file": "2026-10-12 08-10-43-03.22.14.160-03.26.30.262-seg14.m4a",
@@ -2037,8 +1896,7 @@
      "offsetStart": 12134.16,
      "offsetEnd": 12390.262,
      "seg": "seg14",
-     "title": "搁浅",
-     "source": "asr+网易+lyric-verified"
+     "title": "搁浅"
     }
    ]
   },
@@ -2075,8 +1933,7 @@
      "offsetStart": 2884.409,
      "offsetEnd": 3128.79,
      "seg": "seg1",
-     "title": "Come Feel the Love",
-     "source": "shazam+网易校准"
+     "title": "Come Feel the Love"
     },
     {
      "file": "2026-10-12 16-15-12-02.19.46.554-02.21.52.236-seg4.m4a",
@@ -2084,8 +1941,7 @@
      "offsetStart": 8386.554,
      "offsetEnd": 8512.236,
      "seg": "seg4",
-     "title": "等你下课",
-     "source": "asr+网易+lyric-verified"
+     "title": "等你下课"
     },
     {
      "file": "2026-10-12 16-15-12-02.31.34.770-02.35.07.447-seg5.m4a",
@@ -2093,8 +1949,7 @@
      "offsetStart": 9094.77,
      "offsetEnd": 9307.447,
      "seg": "seg5",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     }
    ]
   },
@@ -2119,8 +1974,7 @@
      "offsetStart": 173.068,
      "offsetEnd": 508.643,
      "seg": "seg1",
-     "title": "分身情人",
-     "source": "asr+网易+lyric-verified"
+     "title": "分身情人"
     },
     {
      "file": "2026-10-13 09-56-14-00.08.51.413-00.12.35.443-seg2.m4a",
@@ -2128,8 +1982,7 @@
      "offsetStart": 531.413,
      "offsetEnd": 755.443,
      "seg": "seg2",
-     "title": "拾忆",
-     "source": "asr+网易+lyric-verified"
+     "title": "拾忆"
     }
    ]
   },
@@ -2182,8 +2035,7 @@
      "offsetStart": 2123.048,
      "offsetEnd": 2382.658,
      "seg": "seg1",
-     "title": "小幸运",
-     "source": "asr+网易+lyric-verified"
+     "title": "小幸运"
     },
     {
      "file": "2026-10-13 17-20-08-00.40.19.950-00.45.11.132-seg2.m4a",
@@ -2191,8 +2043,7 @@
      "offsetStart": 2419.95,
      "offsetEnd": 2711.132,
      "seg": "seg2",
-     "title": "Sakurairo Mau Koro",
-     "source": "shazam+网易校准"
+     "title": "Sakurairo Mau Koro"
     },
     {
      "file": "2026-10-13 17-20-08-00.46.17.832-00.47.43.988-seg3.m4a",
@@ -2200,8 +2051,7 @@
      "offsetStart": 2777.832,
      "offsetEnd": 2863.988,
      "seg": "seg3",
-     "title": "山花寻海树",
-     "source": "asr+网易+lyric-verified"
+     "title": "山花寻海树"
     },
     {
      "file": "2026-10-13 17-20-08-00.52.08.862-00.57.03.631-seg4.m4a",
@@ -2209,8 +2059,7 @@
      "offsetStart": 3128.862,
      "offsetEnd": 3423.631,
      "seg": "seg4",
-     "title": "不将就",
-     "source": "asr+网易+lyric-verified"
+     "title": "不将就"
     },
     {
      "file": "2026-10-13 17-20-08-01.01.52.868-01.03.27.167-seg5.m4a",
@@ -2218,8 +2067,7 @@
      "offsetStart": 3712.868,
      "offsetEnd": 3807.167,
      "seg": "seg5",
-     "title": "该死的温柔",
-     "source": "asr+网易+lyric-verified"
+     "title": "该死的温柔"
     },
     {
      "file": "2026-10-13 17-20-08-01.11.00.695-01.12.53.443-seg6.m4a",
@@ -2227,8 +2075,7 @@
      "offsetStart": 4260.695,
      "offsetEnd": 4373.443,
      "seg": "seg6",
-     "title": "一笑倾城",
-     "source": "asr+网易+lyric-verified"
+     "title": "一笑倾城"
     },
     {
      "file": "2026-10-13 17-20-08-01.20.44.359-01.22.15.030-seg7.m4a",
@@ -2236,8 +2083,7 @@
      "offsetStart": 4844.359,
      "offsetEnd": 4935.03,
      "seg": "seg7",
-     "title": "无敌小可爱",
-     "source": "shazam+网易校准+lyric-verified"
+     "title": "无敌小可爱"
     },
     {
      "file": "2026-10-13 17-20-08-01.44.48.411-01.49.04.319-seg9.m4a",
@@ -2245,8 +2091,7 @@
      "offsetStart": 6288.411,
      "offsetEnd": 6544.319,
      "seg": "seg9",
-     "title": "耿",
-     "source": "asr+网易+lyric-verified"
+     "title": "耿"
     }
    ]
   }

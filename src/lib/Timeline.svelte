@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Recording, Block } from './types';
-  import { blocksOf, fmtOffset, fmtClock, fmtDay, fmtDur, sourceLabel } from './types';
+  import { blocksOf, fmtOffset, fmtClock, fmtDay, fmtDur } from './types';
   import { player, playClip } from './player.svelte';
-  import { Sparkles, Scissors, MoonStar } from 'lucide-svelte';
+  import { Sparkles, MoonStar } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -17,10 +17,8 @@
     const c = b.clip;
     const body =
       b.kind === 'song' && c
-        ? `<b>${c.title}</b><br>${fmtClock(rec.start)} 开播 · ${abs(b.start)}<br>${fmtDur(b.end - b.start)} · ${sourceLabel(c.source)}`
-        : b.kind === 'manual'
-          ? `手工切片（未识别出歌，可能不准确）<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`
-          : `zzz · 没开播 / 在睡觉 awa<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`;
+        ? `<b>${c.title || '（未识别）'}</b><br>${fmtClock(rec.start)} 开播 · ${abs(b.start)}<br>${fmtDur(b.end - b.start)}`
+        : `zzz · 没开播 / 在睡觉 awa<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`;
     tip = { x: e.clientX, y: e.clientY, html: body };
   }
 </script>
@@ -34,7 +32,7 @@
       <div class="mb-2 flex items-center gap-3">
         <div class="w-40 shrink-0 text-right">
           <div class="text-xs font-medium">{fmtDay(rec.start)}</div>
-          <div class="text-[10px] opacity-60">{fmtClock(rec.start)} · {fmtDur(dur)}</div>
+          <div class="text-[10px] opacity-60">{fmtClock(rec.start)} · {dur > 0 ? fmtDur(dur) : '时长未知'}</div>
         </div>
         <div class="relative h-8 flex-1 rounded bg-base-300/40">
           {#if dur > 0}
@@ -46,23 +44,20 @@
               <span class="absolute -top-0.5 -translate-x-1/2 text-[9px] opacity-40"
                 style:left={(t / dur) * 100 + '%'}>{fmtOffset(t)}</span>
             {/each}
-            <!-- 歌 + 手工切片块 -->
+            <!-- 歌块（点击播放） -->
             {#each blocks as b, bi (bi)}
-              {#if b.kind !== 'zzz'}
-                {@const isSong = b.kind === 'song' && !!b.clip}
-                {@const clipIdx = isSong ? (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file) : -1}
-                {@const active = isSong && player.track?.clip.file === b.clip!.file}
+              {#if b.kind === 'song' && b.clip}
+                {@const clipIdx = (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file)}
+                {@const active = player.track?.clip.file === b.clip!.file}
                 <div
-                  class="absolute top-1.5 h-5 rounded-sm transition-transform hover:scale-y-110"
-                  class:bg-accent={b.kind === 'song'}
-                  class:bg-warning={b.kind === 'manual'}
+                  class="absolute top-1.5 h-5 rounded-sm bg-accent transition-transform hover:scale-y-110"
                   class:ring-2={active}
                   class:ring-accent={active}
                   style:left={(b.start / dur) * 100 + '%'};
                   style:width={((b.end - b.start) / dur) * 100 + '%'}
                   role="button" tabindex="0"
-                  onclick={() => { if (isSong && clipIdx >= 0) playClip(rec, clipIdx); }}
-                  onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && isSong && clipIdx >= 0) { e.preventDefault(); playClip(rec, clipIdx); } }}
+                  onclick={() => { if (clipIdx >= 0) playClip(rec, clipIdx); }}
+                  onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && clipIdx >= 0) { e.preventDefault(); playClip(rec, clipIdx); } }}
                   onmousemove={(e) => showTip(e, b, rec)}
                   onmouseleave={() => (tip = null)}
                   onfocus={(e) => showTip(e as unknown as MouseEvent, b, rec)}
@@ -74,17 +69,16 @@
             <span class="absolute inset-0 flex items-center justify-center text-[10px] opacity-50">时长未知</span>
           {/if}
         </div>
-        <div class="w-24 shrink-0 text-[10px] opacity-70">
-          {rec.clips?.length ?? 0} 歌 / {rec.segments?.length ?? 0} 段
+        <div class="w-20 shrink-0 text-[10px] opacity-70">
+          {rec.clips?.length ?? 0} 歌
         </div>
       </div>
     {/each}
 
     <!-- 图例 -->
     <div class="mt-6 flex flex-wrap gap-4 pl-40 text-xs">
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span><Sparkles class="h-3 w-3" /> 歌 · AI识曲（点击播放）</span>
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-warning"></span><Scissors class="h-3 w-3" /> 手工切片（可能不准确）</span>
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-base-300/60"></span><MoonStar class="h-3 w-3" /> zzz · 没开播 / 233 在睡觉 awa</span>
+      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span><Sparkles class="h-3 w-3" /> 歌（点击播放）</span>
+      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-base-300/60"></span><MoonStar class="h-3 w-3" /> zzz · 没开播 / 在睡觉 awa</span>
     </div>
   </div>
 </div>

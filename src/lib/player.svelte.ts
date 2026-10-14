@@ -9,15 +9,18 @@ export interface Track {
   index: number;
 }
 
-/** 全局单例：当前播放项 */
-export const player = $state<{ track: Track | null }>({ track: null });
+/** 全局单例：当前播放项 + 加载态 */
+export const player = $state<{ track: Track | null; loading: boolean }>({
+  track: null,
+  loading: false,
+});
 
 let audio: HTMLAudioElement | null = null;
 
 function ensureAudio(): HTMLAudioElement {
   if (!audio) {
     audio = new Audio();
-    audio.preload = 'none';
+    audio.preload = 'metadata';
   }
   return audio;
 }
@@ -27,8 +30,10 @@ export function playClip(rec: Recording, i: number) {
   const clips = rec.clips ?? [];
   if (!clips[i]) return;
   player.track = { clip: clips[i], rec, index: i };
+  player.loading = true;
   const a = ensureAudio();
   a.src = audioUrl(clips[i].opus);
+  a.load();
   a.play().catch(() => {});
 }
 

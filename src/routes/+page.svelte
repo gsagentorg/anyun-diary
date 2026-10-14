@@ -14,7 +14,7 @@
   <header class="mb-8">
     <h1 class="text-3xl font-bold tracking-tight">安允日记</h1>
     <p class="mt-1 text-sm opacity-70">
-      直播歌单时间线 · 数据由文件名 + 元数据自动生成 · 识别结果可能不准确
+      直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
     </p>
     <nav class="mt-4 flex gap-2">
       {#each variants as v, i}

@@ -39,8 +39,8 @@
             {#if b.kind === 'song' && b.clip}
               {@const clipIdx = (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file)}
               {@const active = player.track?.clip.file === b.clip!.file}
-              {@const x1 = ((rec.start + b.start - dayStart) / DAY) * 100}
-              {@const x2 = ((rec.start + b.end - dayStart) / DAY) * 100}
+              {@const x1 = Math.min(100, Math.max(0, ((rec.start + b.start - dayStart) / DAY) * 100))}
+              {@const x2 = Math.min(100, Math.max(0, ((rec.start + b.end - dayStart) / DAY) * 100))}
               <div
                 class="absolute top-1 h-5 rounded-sm bg-accent hover:scale-y-110 transition-transform"
                 class:ring-2={active}

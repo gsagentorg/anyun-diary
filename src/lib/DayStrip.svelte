@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Recording } from './types';
-  import { blocksOf, fmtDay, fmtClock, fmtDur, fmtOffset, hueOf } from './types';
+  import { blocksOf, fmtDay, fmtDur, fmtOffset, hueOf } from './types';
   import { player, playClip } from './player.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
@@ -20,7 +20,7 @@
     >
       <div class="flex items-baseline justify-between">
         <div class="font-semibold">{fmtDay(rec.start)}</div>
-        <div class="text-[10px] opacity-60">{fmtClock(rec.start)} 开播</div>
+        <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '时长未知'}</div>
       </div>
       <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
         <span class="rounded-full bg-accent/15 px-2 py-0.5">🎵 {songs.length} 歌</span>

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { player, step, getAudio } from './player.svelte';
-  import { fmtClock, fmtClockShort, fmtDur } from './types';
+  import { fmtOffset, fmtClockShort, fmtDur } from './types';
   import { Pause, Play, SkipBack, SkipForward, X } from 'lucide-svelte';
 
   let playing = $state(false);
@@ -74,7 +74,6 @@
 
 {#if player.track}
   {@const t = player.track}
-  {@const absStart = t.rec.start + t.clip.offsetStart}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
     <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-2.5">
       <button
@@ -99,7 +98,7 @@
           {/if}
         </div>
         <div class="mt-0.5 flex items-center gap-2 text-[10px] opacity-60">
-          <span class="shrink-0">{fmtClock(absStart)}</span>
+          <span class="shrink-0">录像 +{fmtOffset(t.clip.offsetStart)}</span>
           <span class="truncate">{t.rec.file}</span>
         </div>
         <div

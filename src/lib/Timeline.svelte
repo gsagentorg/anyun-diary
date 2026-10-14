@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Recording, Block } from './types';
-  import { blocksOf, fmtOffset, fmtClock, fmtDur, dateCard } from './types';
+  import { blocksOf, fmtOffset, fmtDur, dateCard } from './types';
   import { player, playClip } from './player.svelte';
   import { Sparkles, MoonStar } from 'lucide-svelte';
 
@@ -17,7 +17,7 @@
     const c = b.clip;
     const body =
       b.kind === 'song' && c
-        ? `<b>${c.title || '（未识别）'}</b><br>${fmtClock(rec.start)} 开播 · ${abs(b.start)}<br>${fmtDur(b.end - b.start)}`
+        ? `<b>${c.title || '（未识别）'}</b><br>录像 ${fmtOffset(b.start)}<br>${fmtDur(b.end - b.start)}`
         : `zzz · 没开播 / 在睡觉 awa<br>${abs(b.start)}–${abs(b.end)} · ${fmtDur(b.end - b.start)}`;
     tip = { x: e.clientX, y: e.clientY, html: body };
   }
@@ -37,7 +37,7 @@
             <span class="text-xs opacity-70">{dc.wd}</span>
           </div>
           <div class="text-[10px] tabular-nums opacity-60">
-            {dc.hm} 开播 · {dur > 0 ? fmtDur(dur) : '时长未知'}
+            {dur > 0 ? fmtDur(dur) : '时长未知'}
           </div>
         </div>
         <div class="relative h-8 flex-1 rounded bg-base-300/40">

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Recording, Block } from './types';
-  import { blocksOf, fmtOffset, fmtClock, fmtDay, fmtDur } from './types';
+  import { blocksOf, fmtOffset, fmtClock, fmtDur, dateCard } from './types';
   import { player, playClip } from './player.svelte';
   import { Sparkles, MoonStar } from 'lucide-svelte';
 
@@ -29,10 +29,16 @@
       {@const blocks = blocksOf(rec)}
       {@const dur = rec.duration ?? 0}
       {@const nticks = Math.ceil(dur / TICK) + 1}
+      {@const dc = dateCard(rec.start)}
       <div class="mb-2 flex items-center gap-3">
-        <div class="w-40 shrink-0 text-right">
-          <div class="text-xs font-medium">{fmtDay(rec.start)}</div>
-          <div class="text-[10px] opacity-60">{fmtClock(rec.start)} · {dur > 0 ? fmtDur(dur) : '时长未知'}</div>
+        <div class="w-44 shrink-0">
+          <div class="flex items-baseline gap-1.5">
+            <span class="text-sm font-semibold tabular-nums">{dc.md}</span>
+            <span class="text-xs opacity-70">{dc.wd}</span>
+          </div>
+          <div class="text-[10px] tabular-nums opacity-60">
+            {dc.hm} 开播 · {dur > 0 ? fmtDur(dur) : '时长未知'}
+          </div>
         </div>
         <div class="relative h-8 flex-1 rounded bg-base-300/40">
           {#if dur > 0}

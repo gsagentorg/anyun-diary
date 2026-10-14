@@ -3,14 +3,22 @@
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
+  import { player } from '$lib/player.svelte';
+  import type { Recording } from '$lib/types';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
 
-  const recordings = data.recordings;
+  // 缺字段的录像（未导出切片/无时长）补空数组，避免组件里 undefined.length
+  const recordings: Recording[] = (data.recordings as Recording[]).map((r) => ({
+    ...r,
+    duration: r.duration ?? null,
+    segments: r.segments ?? [],
+    clips: r.clips ?? [],
+  }));
 </script>
 
-<div class="mx-auto max-w-6xl px-4 py-8">
+<div class="mx-auto max-w-6xl px-4 py-8 {player.track ? 'pb-32' : ''}">
   <header class="mb-8">
     <h1 class="text-3xl font-bold tracking-tight">安允日记</h1>
     <p class="mt-1 text-sm opacity-70">

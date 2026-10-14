@@ -85,6 +85,21 @@ export const fmtDay = (epoch: number) =>
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit', weekday: 'short'
   });
 
+/** 日期卡片：「10/02 周五」+「15:57 开播」 */
+export function dateCard(epoch: number) {
+  const d = new Date(epoch * 1000);
+  const parts = new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit', weekday: 'short',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(d);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
+  return {
+    md: `${get('month')}/${get('day')}`,
+    wd: get('weekday'),
+    hm: `${get('hour')}:${get('minute')}`,
+  };
+}
+
 export const fmtDur = (s: number) => {
   if (!Number.isFinite(s) || s <= 0) return '--:--';
   if (s < 60) return `${s.toFixed(0)}s`;

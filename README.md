@@ -65,6 +65,27 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 
 播放条上的月亮按钮：预设 10/15/30/45/60/90 分钟、**自定义分钟数**、「播完当前曲目后就停」，激活时显示倒计时，可随时取消。
 
+## 音频托管（不进 git）
+
+155 个 opus（264MB）是**可从 NAS 切片重新生成的产物**（`npm run audio`），因此：
+
+- **不进 git 跟踪**（`.gitignore` 已排除 `static/audio/`），也不进 Vercel 部署包（`.vercelignore`）。
+- 站点按 `${PUBLIC_AUDIO_BASE}/audio/<文件名>` 取音频；留空则用同源 `/audio`。
+
+三种托管方式：
+
+1. **Vercel Blob**（推荐，Vercel 原生对象存储，支持 Range）：
+   ```bash
+   # 在 Vercel 项目里创建 Blob Store，拿到 BLOB_READ_WRITE_TOKEN
+   BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx node scripts/upload-blob.mjs
+   # 输出 PUBLIC_AUDIO_BASE=https://xxxx.public.blob.vercel-storage.com → 配到项目环境变量
+   ```
+   脚本走 Blob REST API（无需额外依赖），对象前缀统一 `audio/`，可重跑（覆盖）。
+2. **外部静态托管**：把音频放到任意可对公网提供 Range 的站点，设 `PUBLIC_AUDIO_BASE` 指向它（例如自建入口 `https://anyun-diary.public.bcw2.top:3004`）。
+3. **随部署包**（不推荐，体积大）：删掉 `.vercelignore` 里的 `static/audio/` 且把它们加回 git。
+
+> ⚠️ 注：音频已从 git **跟踪**中移除，但**历史提交里仍有**（本体 ~266MB）。彻底瘦身需重写历史 + 强推，属破坏性操作，**待确认后执行**。
+
 ## 部署到 Vercel
 
 1. 导入仓库 `gsmainagent/anyun-diary`（框架自动识别 SvelteKit）。

@@ -74,3 +74,66 @@ export function step(delta: number) {
 export function getAudio(): HTMLAudioElement {
   return ensureAudio();
 }
+
+/** 睡眠定时器：定时停止 / 播完当前曲目停 */
+export const sleep = $state<{
+  until: number | null; // 到期时间戳（ms）
+  afterTrack: boolean; // 播完当前曲目就停
+  remaining: number; // 剩余秒
+  fired: boolean; // 刚触发（供 UI 提示）
+}>({ until: null, afterTrack: false, remaining: 0, fired: false });
+
+let sleepTimer: ReturnType<typeof setInterval> | null = null;
+
+function clearSleepTimer() {
+  if (sleepTimer) {
+    clearInterval(sleepTimer);
+    sleepTimer = null;
+  }
+}
+
+/** 启动睡眠定时：minutes 为分钟后停止；afterTrack=true 表示播完当前曲目即停 */
+export function startSleep(minutes: number | null, afterTrack = false) {
+  cancelSleep();
+  sleep.fired = false;
+  if (afterTrack) {
+    sleep.afterTrack = true;
+    return;
+  }
+  if (minutes == null || minutes <= 0) return;
+  sleep.until = Date.now() + minutes * 60000;
+  sleep.remaining = Math.round(minutes * 60);
+  sleepTimer = setInterval(() => {
+    if (sleep.until == null) return;
+    const r = Math.max(0, Math.round((sleep.until - Date.now()) / 1000));
+    sleep.remaining = r;
+    if (r <= 0) stopForSleep();
+  }, 1000);
+}
+
+/** 取消睡眠定时 */
+export function cancelSleep() {
+  clearSleepTimer();
+  sleep.until = null;
+  sleep.afterTrack = false;
+  sleep.remaining = 0;
+}
+
+function stopForSleep() {
+  const a = ensureAudio();
+  a.pause();
+  clearSleepTimer();
+  sleep.until = null;
+  sleep.afterTrack = false;
+  sleep.remaining = 0;
+  sleep.fired = true;
+}
+
+/** 曲目自然结束时调用：睡眠定时（播完即停）优先于自动下一首 */
+export function onTrackEnded() {
+  if (sleep.afterTrack) {
+    stopForSleep();
+    return;
+  }
+  step(1);
+}

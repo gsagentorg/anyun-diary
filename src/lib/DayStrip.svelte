@@ -20,12 +20,12 @@
     >
       <div class="flex items-baseline justify-between">
         <div class="font-semibold">{fmtDay(rec.start)}</div>
-        <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '时长未知'}</div>
+        <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '无数据'}</div>
       </div>
       <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
         <span class="rounded-full bg-accent/15 px-2 py-0.5">🎵 {songs.length} 歌</span>
         <span class="rounded-full bg-base-300/50 px-2 py-0.5">🌙 zzz {fmtDur(zzz.reduce((a, b) => a + b.end - b.start, 0))}</span>
-        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {rec.duration ? fmtDur(rec.duration) : '时长未知'}</span>
+        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {rec.duration ? fmtDur(rec.duration) : '无数据'}</span>
       </div>
 
       {#if open === rec.file}

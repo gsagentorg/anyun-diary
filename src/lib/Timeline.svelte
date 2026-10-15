@@ -30,6 +30,7 @@
       {@const dur = rec.duration ?? 0}
       {@const nticks = dur > 0 ? Math.floor(dur / TICK) + 1 : 0}
       {@const dc = dateCard(rec.start)}
+      {@const songDur = (rec.clips ?? []).reduce((a, c) => a + c.offsetEnd - c.offsetStart, 0)}
       <div class="mb-2 flex items-center gap-3">
         <div class="w-44 shrink-0">
           <div class="flex items-baseline gap-1.5">
@@ -37,7 +38,7 @@
             <span class="text-xs opacity-70">{dc.wd}</span>
           </div>
           <div class="text-[10px] tabular-nums opacity-60">
-            {dur > 0 ? fmtDur(dur) : '时长未知'}
+            {(rec.clips?.length ?? 0)} 歌 · 总 {fmtDur(songDur)}
           </div>
         </div>
         <div class="relative h-8 flex-1 rounded bg-base-300/40">
@@ -72,7 +73,7 @@
               {/if}
             {/each}
           {:else}
-            <span class="absolute inset-0 flex items-center justify-center text-[10px] opacity-50">时长未知</span>
+            <span class="absolute inset-0 flex items-center justify-center text-[10px] opacity-50">无数据</span>
           {/if}
         </div>
         <div class="w-20 shrink-0 text-[10px] opacity-70">

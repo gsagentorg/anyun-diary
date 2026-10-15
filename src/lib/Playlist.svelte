@@ -28,8 +28,11 @@
     history.replaceState(null, '', '?' + sp.toString());
   }
 
-  // 服务端 m3u 端点：inline 交给系统播放器（VLC）打开，而非强制下载
-  const apiPath = $derived(`/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
+  // 服务端歌单端点：默认 xspf（逐曲列表），m3u/pls 可选；inline 交给系统播放器
+  let fmt = $state<'xspf' | 'pls' | 'm3u'>('xspf');
+  const apiPath = $derived(
+    `/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${fmt}`,
+  );
 
   const list = $derived(player.playlist);
   const total = $derived.by(() =>
@@ -131,6 +134,16 @@
     >
       <ExternalLink class="h-3 w-3" /> 外部播放器打开
     </a>
+    <select
+      bind:value={fmt}
+      class="rounded border border-base-300 bg-base-200 px-1.5 py-1 text-[11px]"
+      aria-label="歌单格式"
+      title="xspf/pls 是逐曲歌单（不会被当成 HLS 分片）；m3u 兼容性最广"
+    >
+      <option value="xspf">.xspf 逐曲歌单</option>
+      <option value="pls">.pls 逐曲歌单</option>
+      <option value="m3u">.m3u</option>
+    </select>
     <button
       class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
       onclick={openVlc}
@@ -147,9 +160,9 @@
     </button>
     <a
       class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      href={apiPath}
-      download="anyun-diary.m3u"
-      title="保存为 .m3u 文件"
+      href={`${apiPath}&download=1`}
+      download="anyun-diary-playlist"
+      title="保存为歌单文件"
     >
       <Download class="h-3 w-3" /> 下载
     </a>

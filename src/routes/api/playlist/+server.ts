@@ -1,6 +1,6 @@
 import type { RequestHandler } from './$types';
 import data from '$lib/data.json';
-import { tracksInRange, dayStartOf, validRange, buildM3u, normalize } from '$lib/playlist-core';
+import { tracksInRange, dayStartOf, validRange, buildM3u, buildXspf, buildPls, normalize } from '$lib/playlist-core';
 import { env } from '$env/dynamic/public';
 import type { Recording } from '$lib/types';
 
@@ -12,30 +12,49 @@ function audioBase(origin: string): string {
   return ext || origin;
 }
 
+const FORMATS = {
+  // 默认 xspf：显式曲目列表，播放器不会当成 HLS 分片
+  xspf: { type: 'application/xspf+xml; charset=utf-8', ext: 'xspf' },
+  pls: { type: 'audio/x-scpls; charset=utf-8', ext: 'pls' },
+  m3u: { type: 'audio/x-mpegurl; charset=utf-8', ext: 'm3u' },
+} as const;
+
+type Fmt = keyof typeof FORMATS;
+
 /**
- * GET /api/playlist?from=YYYY-MM-DD&to=YYYY-MM-DD
- * 返回 m3u（Content-Type: audio/x-mpegurl, inline）——
- * 交给系统里注册的播放器（VLC 等）直接打开，而不是强制下载。
+ * GET /api/playlist?from=YYYY-MM-DD&to=YYYY-MM-DD[&format=xspf|pls|m3u][&download=1]
+ * 返回歌单（默认 xspf），inline 交给系统里注册的播放器，而非强制下载。
  */
 export const GET: RequestHandler = ({ url }) => {
   const from = url.searchParams.get('from') ?? '';
   const to = url.searchParams.get('to') ?? '';
+  const fmt = (url.searchParams.get('format') ?? 'xspf') as Fmt;
+  const download = url.searchParams.get('download') === '1';
 
   if (from && to && !validRange(from, to)) {
     return new Response('invalid range', { status: 400 });
+  }
+  if (!(fmt in FORMATS)) {
+    return new Response('unsupported format', { status: 400 });
   }
 
   const lo = from ? dayStartOf(from) : null;
   const hi = to ? (dayStartOf(to) ?? 0) + 86400 : null;
   const tracks = tracksInRange(recordings, lo ?? undefined, hi ?? undefined);
+  const base = audioBase(url.origin);
   const name = `安允日记 ${from || 'all'}~${to || 'all'}`;
-  const body = buildM3u(tracks, audioBase(url.origin), name);
 
+  const body =
+    fmt === 'm3u' ? buildM3u(tracks, base, name)
+    : fmt === 'pls' ? buildPls(tracks, base, name)
+    : buildXspf(tracks, base, name);
+
+  const { type, ext } = FORMATS[fmt];
   return new Response(body, {
     headers: {
-      'content-type': 'audio/x-mpegurl; charset=utf-8',
-      // inline：浏览器有注册的 m3u 处理器（如 VLC）时直接交给它，否则才下载
-      'content-disposition': 'inline; filename="anyun-diary.m3u"',
+      'content-type': type,
+      // inline：浏览器有注册处理器（如 VLC）时直接交给它；download=1 时才强制下载
+      'content-disposition': `${download ? 'attachment' : 'inline'}; filename="anyun-diary.${ext}"`,
       'cache-control': 'no-store',
     },
   });

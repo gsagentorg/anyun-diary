@@ -28,8 +28,57 @@ export function validRange(from: string, to: string): boolean {
   return a != null && b != null && a <= b;
 }
 
+/** XML 转义 */
+const esc = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** 绝对音频 URL */
+export const trackUrl = (t: Track, base: string) =>
+  `${base}/audio/${encodeURIComponent(t.clip.opus)}`;
+
 /**
- * 生成 m3u 文本：绝对 URL 指向 opus 文件（外部播放器用）。
+ * XSPF（.xspf）：显式逐曲列表，带 title/duration。
+ * 语义无歧义——播放器会当作「曲目列表」，不会误会成 HLS 分片。
+ */
+export function buildXspf(tracks: Track[], base: string, plName: string): string {
+  const items = tracks
+    .map((t) => {
+      const ms = Math.max(0, Math.round((t.clip.offsetEnd - t.clip.offsetStart) * 1000));
+      return [
+        '    <track>',
+        `      <location>${esc(trackUrl(t, base))}</location>`,
+        `      <title>${esc(t.clip.title || '（未识别）')}</title>`,
+        `      <duration>${ms}</duration>`,
+        '    </track>',
+      ].join('\n');
+    })
+    .join('\n');
+  return [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<playlist version="1" xmlns="http://xspf.org/ns/0/">',
+    `  <title>${esc(plName)}</title>`,
+    '  <trackList>',
+    items,
+    '  </trackList>',
+    '</playlist>',
+    '',
+  ].join('\n');
+}
+
+/** PLS（.pls）：INI 式逐曲列表，兼容性最广的老牌格式 */
+export function buildPls(tracks: Track[], base: string, plName: string): string {
+  const lines = ['[playlist]'];
+  tracks.forEach((t, i) => {
+    const n = i + 1;
+    lines.push(`File${n}=${trackUrl(t, base)}`);
+    lines.push(`Title${n}=${t.clip.title || '（未识别）'}`);
+    lines.push(`Length${n}=${Math.max(0, Math.round(t.clip.offsetEnd - t.clip.offsetStart))}`);
+  });
+  lines.push(`NumberOfEntries=${tracks.length}`, 'Version=2');
+  return lines.join('\n') + '\n';
+}
+
+/** 生成 m3u 文本：绝对 URL 指向 opus 文件（外部播放器用）。
  * base 传站点 origin（如 https://anyun-diary.public.bcw2.top:3004）。
  */
 export function buildM3u(tracks: Track[], base: string, plName: string): string {

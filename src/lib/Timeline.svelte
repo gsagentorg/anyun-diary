@@ -1,8 +1,8 @@
 <script lang="ts">
   import type { Recording, Block } from './types';
   import { blocksOf, fmtOffset, fmtDur, dateCard } from './types';
-  import { player, playClip } from './player.svelte';
-  import { Sparkles, MoonStar } from 'lucide-svelte';
+  import { player, playClip, adopt, buildRecTracks } from './player.svelte';
+  import { Sparkles, MoonStar, ListMusic } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -40,6 +40,13 @@
           <div class="text-[10px] tabular-nums opacity-60">
             {(rec.clips?.length ?? 0)} 歌 · 总 {fmtDur(songDur)}
           </div>
+          <button
+            class="mt-0.5 flex items-center gap-1 text-[10px] text-accent transition hover:opacity-80"
+            title="把这天的歌加入播放列表"
+            onclick={() => adopt(buildRecTracks(rec), 0)}
+          >
+            <ListMusic class="h-3 w-3" /> 列表
+          </button>
         </div>
         <div class="relative h-8 flex-1 rounded bg-base-300/40">
           {#if dur > 0}

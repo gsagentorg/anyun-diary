@@ -7,6 +7,7 @@
   let progress = $state(0);
   let duration = $state(0);
   let sleepOpen = $state(false);
+  let customMin = $state(15);
 
   const PRESETS = [10, 15, 30, 45, 60, 90];
 
@@ -173,6 +174,23 @@
               >
                 播完当前曲目后就停
               </button>
+              <div class="mt-1 flex items-center gap-1 border-t border-base-300 pt-1.5">
+                <input
+                  type="number"
+                  min="1"
+                  max="600"
+                  bind:value={customMin}
+                  class="w-16 rounded border border-base-300 bg-base-200 px-1.5 py-0.5 text-xs tabular-nums"
+                  aria-label="自定义睡眠分钟数"
+                />
+                <span class="text-[10px] opacity-60">分钟</span>
+                <button
+                  class="ml-auto rounded bg-accent px-2 py-0.5 text-[10px] text-accent-content transition hover:opacity-90"
+                  onclick={() => Number(customMin) > 0 && pick(Number(customMin))}
+                >
+                  开始
+                </button>
+              </div>
               {#if sleep.until != null || sleep.afterTrack}
                 <button
                   class="mt-1 w-full rounded px-2 py-1 text-left text-xs text-warning transition hover:bg-base-200"

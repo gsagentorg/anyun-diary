@@ -1,7 +1,8 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { blocksOf, fmtDay, fmtDur, fmtOffset, hueOf } from './types';
-  import { player, playClip } from './player.svelte';
+  import { player, playClip, adopt, buildRecTracks } from './player.svelte';
+  import { ListMusic } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -20,7 +21,15 @@
     >
       <div class="flex items-baseline justify-between">
         <div class="font-semibold">{fmtDay(rec.start)}</div>
-        <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '无数据'}</div>
+        <div class="flex items-center gap-2">
+          <span
+            class="flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-accent transition hover:bg-accent/20"
+            title="把这天的歌加入播放列表" onclick={(e) => { e.stopPropagation(); adopt(buildRecTracks(rec), 0); }}
+          >
+            <ListMusic class="h-3 w-3" /> 列表 </span
+          >
+          <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '无数据'}</div>
+        </div>
       </div>
       <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
         <span class="rounded-full bg-accent/15 px-2 py-0.5">🎵 {songs.length} 歌</span>

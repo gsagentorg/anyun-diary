@@ -3,8 +3,12 @@
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
-  import { player } from '$lib/player.svelte';
+  import { player, adopt } from '$lib/player.svelte';
+  import Playlist from '$lib/Playlist.svelte';
+  import { tracksInRange, dayStartOf, validRange } from '$lib/playlist.svelte';
   import type { Recording } from '$lib/types';
+  import { page } from '$app/state';
+  import { ListMusic } from 'lucide-svelte';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
@@ -16,6 +20,24 @@
     segments: r.segments ?? [],
     clips: r.clips ?? [],
   }));
+
+  // URL 查询参数 ?from=YYYY-MM-DD&to=YYYY-MM-DD → 自动生成播放列表（不自动开播，只装载）
+  let plOpen = $state(false);
+  const qFrom = $derived(page.url.searchParams.get('from') ?? '');
+  const qTo = $derived(page.url.searchParams.get('to') ?? '');
+  const qValid = $derived(!!(qFrom && qTo && validRange(qFrom, qTo)));
+
+  $effect(() => {
+    if (!qValid || player.playlist.length > 0) return;
+    const lo = dayStartOf(qFrom)!;
+    const hi = dayStartOf(qTo)! + 86400;
+    const tracks = tracksInRange(recordings, lo, hi);
+    if (tracks.length > 0) {
+      plOpen = true;
+      player.playlist = tracks;
+      player.pos = -1;
+    }
+  });
 </script>
 
 <div class="mx-auto max-w-6xl px-4 py-8 {player.track ? 'pb-32' : ''}">
@@ -36,7 +58,21 @@
         </button>
       {/each}
     </nav>
+    <button
+      class="mt-3 flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200"
+      onclick={() => (plOpen = !plOpen)}
+      class:border-accent={plOpen}
+      aria-expanded={plOpen}
+    >
+      <ListMusic class="h-4 w-4" /> 播放列表
+    </button>
   </header>
+
+  {#if plOpen}
+    <div class="mb-6">
+      <Playlist {recordings} bind:open={plOpen} />
+    </div>
+  {/if}
 
   {#if current === 0}
     <Timeline recordings={recordings} />

@@ -68,7 +68,8 @@
     a.currentTime = ((e.clientX - r.left) / r.width) * duration;
   }
 
-  const total = $derived(player.track ? (player.track.rec.clips?.length ?? 0) : 0);
+  const total = $derived(player.playlist.length || (player.track ? (player.track.rec.clips?.length ?? 0) : 0));
+  const pos = $derived(player.pos >= 0 ? player.pos : (player.track?.index ?? 0));
   const pct = $derived(duration > 0 ? Math.min(100, (progress / duration) * 100) : 0);
 </script>
 
@@ -118,12 +119,12 @@
 
       <div class="flex shrink-0 items-center gap-1">
         <button class="rounded p-1.5 transition hover:bg-base-200 disabled:opacity-30"
-          onclick={() => step(-1)} disabled={t.index <= 0} aria-label="上一首">
+          onclick={() => step(-1)} disabled={pos <= 0} aria-label="上一首">
           <SkipBack class="h-4 w-4" />
         </button>
-        <span class="text-[10px] tabular-nums opacity-60">{t.index + 1}/{total}</span>
+        <span class="text-[10px] tabular-nums opacity-60">{pos + 1}/{total}</span>
         <button class="rounded p-1.5 transition hover:bg-base-200 disabled:opacity-30"
-          onclick={() => step(1)} disabled={t.index >= total - 1} aria-label="下一首">
+          onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
           <SkipForward class="h-4 w-4" />
         </button>
         <button class="ml-1 rounded p-1.5 transition hover:bg-base-200"

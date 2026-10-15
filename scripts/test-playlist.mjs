@@ -1,4 +1,4 @@
-import { tracksInRange, dayStartOf, validRange, buildM3u } from '../src/lib/playlist.svelte.ts';
+import { tracksInRange, dayStartOf, validRange, buildM3u } from '../src/lib/playlist-core.ts';
 import data from '../src/lib/data.json';
 
 const recs = data.recordings;

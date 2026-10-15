@@ -1,10 +1,12 @@
-import type { Recording } from './types';
-import { buildRecTracks, type Track } from './player.svelte';
+import type { Recording, Track } from './types';
+import { buildRecTracks } from './types';
 
 /**
  * 把 [lo, hi)（epoch 秒，含 lo 不含 hi）内的录像按开播时间排序、
  * 每场录像内部按切片顺序，串成一个播放列表。
  * lo/hi 传 undefined 表示那一侧不限制。
+ *
+ * 纯函数（不含 runes），可直接被服务端路由复用。
  */
 export function tracksInRange(recs: Recording[], lo?: number, hi?: number): Track[] {
   const picked = recs
@@ -27,8 +29,8 @@ export function validRange(from: string, to: string): boolean {
 }
 
 /**
- * 生成 m3u 文本（外部播放器用）：绝对 URL 指向本地/公网的 opus。
- * base 传 location.origin。
+ * 生成 m3u 文本：绝对 URL 指向 opus 文件（外部播放器用）。
+ * base 传站点 origin（如 https://anyun-diary.public.bcw2.top:3004）。
  */
 export function buildM3u(tracks: Track[], base: string, plName: string): string {
   const lines = ['#EXTM3U', '#PLAYLIST:' + plName];
@@ -38,4 +40,14 @@ export function buildM3u(tracks: Track[], base: string, plName: string): string 
     lines.push(`${base}/audio/${encodeURIComponent(t.clip.opus)}`);
   }
   return lines.join('\n') + '\n';
+}
+
+/** 规范化录像数组（补默认字段），服务端与页面共用 */
+export function normalize(recs: Recording[]): Recording[] {
+  return recs.map((r) => ({
+    ...r,
+    duration: r.duration ?? null,
+    segments: r.segments ?? [],
+    clips: r.clips ?? [],
+  }));
 }

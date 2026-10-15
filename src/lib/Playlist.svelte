@@ -1,15 +1,35 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { player, adopt } from './player.svelte';
-  import { tracksInRange, dayStartOf, validRange, buildM3u } from './playlist.svelte';
+  import { tracksInRange, dayStartOf, validRange } from './playlist-core';
+  import { onMount } from 'svelte';
   import { fmtDur, fmtOffset, fmtDay, hueOf } from './types';
-  import { Play, Download, ListMusic, Search, X } from 'lucide-svelte';
+  import { Play, Download, Link, ExternalLink, ListMusic, Search, X } from 'lucide-svelte';
 
   let { recordings, open = $bindable(false) }: { recordings: Recording[]; open?: boolean } = $props();
 
   let from = $state('');
   let to = $state('');
   let error = $state('');
+  let copied = $state(false);
+
+  // 从 URL 查询参数预填，保证「外部播放器」链接带上同一范围
+  onMount(() => {
+    const sp = new URLSearchParams(location.search);
+    if (!from) from = sp.get('from') ?? '';
+    if (!to) to = sp.get('to') ?? '';
+  });
+
+  // 应用时把范围写回 URL（可分享/刷新保持）
+  function syncUrl() {
+    const sp = new URLSearchParams(location.search);
+    if (from) sp.set('from', from); else sp.delete('from');
+    if (to) sp.set('to', to); else sp.delete('to');
+    history.replaceState(null, '', '?' + sp.toString());
+  }
+
+  // 服务端 m3u 端点：inline 交给系统播放器（VLC）打开，而非强制下载
+  const apiPath = $derived(`/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 
   const list = $derived(player.playlist);
   const total = $derived.by(() =>
@@ -39,23 +59,40 @@
       return;
     }
     error = '';
+    syncUrl();
     adopt(tracks, 0);
   }
 
   function playExternal() {
-    const { tracks, ok } = collect();
-    if (!ok) {
-      error = '范围内没有切片';
+    // 直接打开（新标签）：浏览器若注册了 m3u 处理器（VLC）会交给它，否则才下载
+    if (from && to && !validRange(from, to)) {
+      error = '范围无效';
       return;
     }
     error = '';
-    const text = buildM3u(tracks, location.origin, `安允日记 ${label()}`);
-    const blob = new Blob([text], { type: 'application/vnd.apple.mpegurl' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `anyun-diary-playlist-${from || 'all'}-${to || 'all'}.m3u`;
-    a.click();
-    URL.revokeObjectURL(a.href);
+    window.open(apiPath, '_blank', 'noopener');
+  }
+
+  function openVlc() {
+    if (from && to && !validRange(from, to)) {
+      error = '范围无效';
+      return;
+    }
+    error = '';
+    const abs = new URL(apiPath, location.origin).toString();
+    // vlc:// 由系统上的 VLC 协议处理器接管（Windows/macOS 通常已注册）
+    location.href = 'vlc://' + abs;
+  }
+
+  async function copyLink() {
+    const abs = new URL(apiPath, location.origin).toString();
+    try {
+      await navigator.clipboard.writeText(abs);
+      copied = true;
+      setTimeout(() => (copied = false), 1500);
+    } catch {
+      error = '复制失败，请手动复制：' + abs;
+    }
   }
 </script>
 
@@ -85,13 +122,37 @@
     >
       <Search class="h-3 w-3" /> 应用并播放
     </button>
+    <a
+      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
+      href={apiPath}
+      target="_blank"
+      rel="noopener"
+      title="交给系统里注册的播放器（VLC 等）播放；未注册处理器时浏览器会下载"
+    >
+      <ExternalLink class="h-3 w-3" /> 外部播放器打开
+    </a>
     <button
       class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      onclick={playExternal}
-      title="生成 m3u 文件，用外部播放器（VLC/mpv/飞傲…）打开"
+      onclick={openVlc}
+      title="用 vlc:// 协议直接唤起本机 VLC"
     >
-      <Download class="h-3 w-3" /> 外部播放器（.m3u）
+      <Play class="h-3 w-3" /> 直开 VLC
     </button>
+    <button
+      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
+      onclick={copyLink}
+      title="复制 m3u 端点链接，可粘到 VLC/mpv 里"
+    >
+      {#if copied}<Link class="h-3 w-3 text-accent" /> 已复制{:else}<Link class="h-3 w-3" /> 复制链接{/if}
+    </button>
+    <a
+      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
+      href={apiPath}
+      download="anyun-diary.m3u"
+      title="保存为 .m3u 文件"
+    >
+      <Download class="h-3 w-3" /> 下载
+    </a>
     {#if error}
       <span class="text-warning">{error}</span>
     {/if}

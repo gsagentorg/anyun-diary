@@ -1,13 +1,8 @@
-import type { Clip, Recording } from './types';
-import { audioUrl } from './types';
+import type { Clip, Recording, Track } from './types';
+import { audioUrl, buildRecTracks } from './types';
 
-/** 播放列表成员：切片 + 所属录像上下文 */
-export interface Track {
-  clip: Clip;
-  rec: Recording;
-  /** 与播放列表的关系：同一录像内的切片序号 */
-  index: number;
-}
+export type { Track };
+export { buildRecTracks };
 
 /** 全局单例：当前播放项 + 加载态 + 当前播放列表 */
 export const player = $state<{
@@ -30,11 +25,6 @@ function ensureAudio(): HTMLAudioElement {
     audio.preload = 'metadata';
   }
   return audio;
-}
-
-/** 生成一个录像内的所有轨道（保持切片顺序） */
-export function buildRecTracks(rec: Recording): Track[] {
-  return (rec.clips ?? []).map((clip, index) => ({ clip, rec, index }));
 }
 
 function playCurrent() {

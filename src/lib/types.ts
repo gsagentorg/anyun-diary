@@ -26,6 +26,19 @@ export interface DiaryData {
   recordings: Recording[];
 }
 
+/** 播放列表成员：切片 + 所属录像上下文 */
+export interface Track {
+  clip: Clip;
+  rec: Recording;
+  /** 与播放列表的关系：同一录像内的切片序号 */
+  index: number;
+}
+
+/** 生成一个录像内的所有轨道（保持切片顺序） */
+export function buildRecTracks(rec: Recording): Track[] {
+  return (rec.clips ?? []).map((clip, index) => ({ clip, rec, index }));
+}
+
 /** 录像内两态：歌 / zzz（无切片覆盖=没开播或在睡觉） */
 export interface Block {
   kind: 'song' | 'zzz';

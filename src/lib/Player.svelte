@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom } from './player.svelte';
   import { fmtOffset, fmtClockShort, fmtDur } from './types';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar } from 'lucide-svelte';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle } from 'lucide-svelte';
 
   let playing = $state(false);
   let progress = $state(0);
@@ -146,6 +146,18 @@
           onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
           <SkipForward class="h-4 w-4" />
         </button>
+
+        <div class="relative">
+          <button
+            class="rounded p-1.5 transition hover:bg-base-200 {player.shuffle ? 'text-accent' : ''}"
+            onclick={toggleShuffle}
+            aria-label="随机播放"
+            aria-pressed={player.shuffle}
+            title={player.shuffle ? '随机播放：开' : '随机播放：关'}
+          >
+            <Shuffle class="h-4 w-4" />
+          </button>
+        </div>
 
         <div class="relative">
           <button

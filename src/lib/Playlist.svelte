@@ -1,10 +1,10 @@
 <script lang="ts">
   import type { Recording } from './types';
-  import { player, adopt } from './player.svelte';
+  import { player, adopt, toggleShuffle, playRandom } from './player.svelte';
   import { tracksInRange, dayStartOf, validRange } from './playlist-core';
   import { onMount } from 'svelte';
   import { fmtDur, fmtOffset, fmtDay, hueOf } from './types';
-  import { Play, Download, Link, ExternalLink, ListMusic, Search, X } from 'lucide-svelte';
+  import { Play, Download, Link, ExternalLink, ListMusic, Search, X, Shuffle, Dices } from 'lucide-svelte';
 
   let { recordings, open = $bindable(false) }: { recordings: Recording[]; open?: boolean } = $props();
 
@@ -108,6 +108,21 @@
         <span class="rounded-full bg-accent/15 px-2 text-[10px] tabular-nums opacity-80">
           {list.length} 首 · {fmtDur(total)}
         </span>
+        <button
+          class="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition hover:bg-base-200 {player.shuffle ? 'border-accent text-accent' : 'border-base-300'}"
+          onclick={toggleShuffle}
+          aria-pressed={player.shuffle}
+          title="随机播放（乱序）"
+        >
+          <Shuffle class="h-3 w-3" /> 随机{player.shuffle ? '：开' : ''}
+        </button>
+        <button
+          class="flex items-center gap-1 rounded-full border border-base-300 px-2 py-0.5 text-[10px] transition hover:bg-base-200"
+          onclick={playRandom}
+          title="从列表里随机挑一首播放"
+        >
+          <Dices class="h-3 w-3" /> 随机一首
+        </button>
       {/if}
     </div>
     <button class="rounded p-1 transition hover:bg-base-200" onclick={() => (open = false)} aria-label="收起">

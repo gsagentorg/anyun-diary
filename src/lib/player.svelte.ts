@@ -10,11 +10,15 @@ export const player = $state<{
   loading: boolean;
   playlist: Track[];
   pos: number; // 当前播放项在 playlist 里的下标
+  shuffle: boolean; // 随机播放
+  history: number[]; // 随机模式下已播过的下标（上一首用）
 }>({
   track: null,
   loading: false,
   playlist: [],
   pos: -1,
+  shuffle: false,
+  history: [],
 });
 
 let audio: HTMLAudioElement | null = null;
@@ -46,6 +50,35 @@ export function adopt(list: Track[], i: number) {
   if (!list[i]) return;
   player.playlist = list;
   player.pos = i;
+  player.history = [];
+  playCurrent();
+}
+
+/** 切换随机播放 */
+export function toggleShuffle() {
+  player.shuffle = !player.shuffle;
+  player.history = [];
+}
+
+/** 在当前列表里随机挑一首（尽量不重复已播）并播放 */
+export function playRandom() {
+  const n = player.playlist.length;
+  if (n === 0) return;
+  if (n === 1) {
+    stepTo(0);
+    return;
+  }
+  const recent = new Set([player.pos, ...player.history.slice(-Math.floor(n / 2))]);
+  const pool = player.playlist.map((_, i) => i).filter((i) => !recent.has(i));
+  const candidates = pool.length > 0 ? pool : player.playlist.map((_, i) => i).filter((i) => i !== player.pos);
+  stepTo(candidates[Math.floor(Math.random() * candidates.length)]);
+}
+
+/** 跳到列表内第 i 项（记录历史，供随机模式返回上一首） */
+function stepTo(i: number) {
+  if (i < 0 || i >= player.playlist.length || i === player.pos) return;
+  if (player.pos >= 0) player.history.push(player.pos);
+  player.pos = i;
   playCurrent();
 }
 
@@ -62,8 +95,20 @@ export function playClip(rec: Recording, i: number) {
   }
 }
 
-/** 在当前播放列表中上/下一首 */
+/** 在当前播放列表中上/下一首（随机模式下走乱序） */
 export function step(delta: number) {
+  if (player.shuffle) {
+    if (delta > 0) {
+      playRandom();
+    } else {
+      const prev = player.history.pop();
+      if (prev != null) {
+        player.pos = prev;
+        playCurrent();
+      }
+    }
+    return;
+  }
   const pos = player.pos + delta;
   if (pos >= 0 && pos < player.playlist.length) {
     player.pos = pos;

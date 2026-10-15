@@ -1,0 +1,7 @@
+# Vercel 部署忽略：仓库里的 264MB 音频不进部署包
+# 音频由静态托管（如自建 frp 公网入口）通过 PUBLIC_AUDIO_BASE 指向
+static/audio/
+build/
+.svelte-kit/
+node_modules/
+*.log

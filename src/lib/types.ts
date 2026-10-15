@@ -134,7 +134,11 @@ export function hueOf(title: string): number {
   return h % 360;
 }
 
+/** 切片音频基础地址：默认同源 /audio；Vercel 等静态托管不带宽音频时用 PUBLIC_AUDIO_BASE 指向外部 */
+import { env } from '$env/dynamic/public';
+export const AUDIO_BASE = (env.PUBLIC_AUDIO_BASE ?? '').replace(/\/+$/, '');
+
 /** 切片音频 URL（文件名含空格/中文，需编码） */
 export function audioUrl(opus: string): string {
-  return '/audio/' + encodeURIComponent(opus);
+  return `${AUDIO_BASE}/audio/` + encodeURIComponent(opus);
 }

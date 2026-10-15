@@ -1,9 +1,16 @@
 import type { RequestHandler } from './$types';
 import data from '$lib/data.json';
 import { tracksInRange, dayStartOf, validRange, buildM3u, normalize } from '$lib/playlist-core';
+import { env } from '$env/dynamic/public';
 import type { Recording } from '$lib/types';
 
 const recordings = normalize(data.recordings as Recording[]);
+
+/** 音频基址：优先 PUBLIC_AUDIO_BASE（外部托管），否则用本站 origin */
+function audioBase(origin: string): string {
+  const ext = (env.PUBLIC_AUDIO_BASE ?? '').replace(/\/+$/, '');
+  return ext || origin;
+}
 
 /**
  * GET /api/playlist?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -22,7 +29,7 @@ export const GET: RequestHandler = ({ url }) => {
   const hi = to ? (dayStartOf(to) ?? 0) + 86400 : null;
   const tracks = tracksInRange(recordings, lo ?? undefined, hi ?? undefined);
   const name = `安允日记 ${from || 'all'}~${to || 'all'}`;
-  const body = buildM3u(tracks, url.origin, name);
+  const body = buildM3u(tracks, audioBase(url.origin), name);
 
   return new Response(body, {
     headers: {

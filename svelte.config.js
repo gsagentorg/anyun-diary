@@ -1,20 +1,12 @@
-import adapter from '@sveltejs/adapter-static';
+import adapter from '@sveltejs/adapter-vercel';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    adapter: adapter({
-      pages: 'build',
-      assets: 'build',
-      fallback: undefined,
-      precompress: false,
-      strict: true
-    }),
-    prerender: {
-      entries: ['*']
-    }
+    // Vercel：SSR 页面 + /api/playlist 服务端函数（动态播放列表 m3u）
+    adapter: adapter({ runtime: 'nodejs20.x' })
   }
 };
 

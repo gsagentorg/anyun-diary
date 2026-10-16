@@ -6,10 +6,25 @@ import type { Recording } from '$lib/types';
 
 const recordings = normalize(data.recordings as Recording[]);
 
-/** 音频基址：优先 PUBLIC_AUDIO_BASE（外部托管），否则用本站 origin */
-function audioBase(origin: string): string {
+/**
+ * 音频基址解析（优先级）：
+ * 1) PUBLIC_AUDIO_BASE 环境变量（外部托管）
+ * 2) 调用方显式传入的 base（面板传 location.origin，保证协议正确，如 https://）
+ * 3) X-Forwarded-Proto + X-Forwarded-Host（代理转发场景）
+ * 4) 回退本站 origin
+ */
+function audioBase(u: URL, req: Request): string {
   const ext = (env.PUBLIC_AUDIO_BASE ?? '').replace(/\/+$/, '');
-  return ext || origin;
+  if (ext) return ext;
+
+  const given = u.searchParams.get('base') ?? '';
+  if (/^https?:\/\//i.test(given)) return given.replace(/\/+$/, '');
+
+  const proto = req.headers.get('x-forwarded-proto')?.split(',')[0]?.trim();
+  const host = req.headers.get('x-forwarded-host')?.split(',')[0]?.trim() || u.host;
+  if (proto === 'http' || proto === 'https') return `${proto}://${host}`;
+
+  return u.origin;
 }
 
 const FORMATS = {
@@ -25,7 +40,7 @@ type Fmt = keyof typeof FORMATS;
  * GET /api/playlist?from=YYYY-MM-DD&to=YYYY-MM-DD[&format=xspf|pls|m3u][&download=1]
  * 返回歌单（默认 xspf），inline 交给系统里注册的播放器，而非强制下载。
  */
-export const GET: RequestHandler = ({ url }) => {
+export const GET: RequestHandler = ({ url, request }) => {
   const from = url.searchParams.get('from') ?? '';
   const to = url.searchParams.get('to') ?? '';
   const fmt = (url.searchParams.get('format') ?? 'xspf') as Fmt;
@@ -41,7 +56,7 @@ export const GET: RequestHandler = ({ url }) => {
   const lo = from ? dayStartOf(from) : null;
   const hi = to ? (dayStartOf(to) ?? 0) + 86400 : null;
   const tracks = tracksInRange(recordings, lo ?? undefined, hi ?? undefined);
-  const base = audioBase(url.origin);
+  const base = audioBase(url, request);
   const name = `安允日记 ${from || 'all'}~${to || 'all'}`;
 
   const body =

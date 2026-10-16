@@ -14,10 +14,12 @@
   let copied = $state(false);
 
   // 从 URL 查询参数预填，保证「外部播放器」链接带上同一范围
+  let origin = $state('');
   onMount(() => {
     const sp = new URLSearchParams(location.search);
     if (!from) from = sp.get('from') ?? '';
     if (!to) to = sp.get('to') ?? '';
+    origin = location.origin; // 歌单里的音频地址按当前页面协议生成（https 场景必需）
   });
 
   // 应用时把范围写回 URL（可分享/刷新保持）
@@ -31,7 +33,8 @@
   // 服务端歌单端点：默认 xspf（逐曲列表），m3u/pls 可选；inline 交给系统播放器
   let fmt = $state<'xspf' | 'pls' | 'm3u'>('xspf');
   const apiPath = $derived(
-    `/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${fmt}`,
+    `/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${fmt}` +
+      (origin ? `&base=${encodeURIComponent(origin)}` : ''),
   );
 
   const list = $derived(player.playlist);

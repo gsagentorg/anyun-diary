@@ -13,6 +13,7 @@
     "test": "vite-node scripts/test-playlist.mjs"
   },
   "devDependencies": {
+    "@sveltejs/adapter-node": "^5.5.7",
     "@sveltejs/adapter-static": "^3.0.6",
     "@sveltejs/adapter-vercel": "^5.10.3",
     "@sveltejs/vite-plugin-svelte": "^6.2.0",

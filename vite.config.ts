@@ -8,8 +8,8 @@ export default defineConfig({
   plugins: [sveltekit(), tailwindcss()],
   server: {
     host: '0.0.0.0',
-    port: 4173,
+    port: 5173, // 开发实例；生产(adapter-node)占 4173
     strictPort: true,
-    allowedHosts: ['anyun-diary.public.bcw2.top']
+    allowedHosts: ['anyun-diary-dev.public.bcw2.top']
   }
 });

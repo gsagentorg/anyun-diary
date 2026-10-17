@@ -30,8 +30,8 @@
     history.replaceState(null, '', '?' + sp.toString());
   }
 
-  // 服务端歌单端点：默认 xspf（逐曲列表），m3u/pls 可选；inline 交给系统播放器
-  let fmt = $state<'xspf' | 'pls' | 'm3u'>('xspf');
+  // 服务端歌单端点：默认 m3u（外部播放器兼容面最广），xspf/pls 可选；inline 交给系统播放器
+  let fmt = $state<'xspf' | 'pls' | 'm3u'>('m3u');
   const apiPath = $derived(
     `/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${fmt}` +
       (origin ? `&base=${encodeURIComponent(origin)}` : ''),
@@ -158,9 +158,9 @@
       aria-label="歌单格式"
       title="xspf/pls 是逐曲歌单（不会被当成 HLS 分片）；m3u 兼容性最广"
     >
+      <option value="m3u">.m3u 逐曲歌单</option>
       <option value="xspf">.xspf 逐曲歌单</option>
       <option value="pls">.pls 逐曲歌单</option>
-      <option value="m3u">.m3u</option>
     </select>
     <button
       class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"

@@ -1,13 +1,16 @@
-import adapter from '@sveltejs/adapter-vercel';
+import adapterNode from '@sveltejs/adapter-node';
+import adapterVercel from '@sveltejs/adapter-vercel';
 import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 
 /** @type {import('@sveltejs/kit').Config} */
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    // Vercel：SSR 页面 + /api/playlist 服务端函数（动态播放列表 m3u）
-    adapter: adapter({ runtime: 'nodejs20.x' })
-  }
+    // DEPLOY_TARGET=vercel → Vercel（Serverless 函数）；默认 node（本地自托管部署，node build）
+    adapter: process.env.DEPLOY_TARGET === 'vercel'
+      ? adapterVercel({ runtime: 'nodejs20.x' })
+      : adapterNode(),
+  },
 };
 
 export default config;

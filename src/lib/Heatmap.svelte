@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { shDayStart } from './playlist-core';
-  import { fmtDur } from './types';
+  import { fmtDur, dateCard } from './types';
   import { adopt, buildRecTracks } from './player.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
@@ -77,54 +77,71 @@
 </script>
 
 <div class="overflow-x-auto">
-  <div class="min-w-[860px]">
-    <div class="flex">
-      <!-- 纵轴：0-23 时 -->
-      <div class="w-10 shrink-0 pt-6">
-        {#each Array(24) as _, h}
-          {#if h % 3 === 0}
-            <div class="text-right text-[9px] leading-[14px] opacity-40">{String(h).padStart(2, '0')}</div>
-          {:else}
-            <div class="leading-[14px]"></div>
-          {/if}
-        {/each}
+  {#if days.length === 0}
+    <div class="py-6 text-center text-sm opacity-55">无数据</div>
+  {:else}
+    <div class="min-w-[640px]">
+      <!-- 列头：MM/DD + 周几 -->
+      <div class="flex">
+        <div class="w-10 shrink-0"></div>
+        <div class="flex flex-1 gap-1">
+          {#each days as day (day)}
+            {@const dc = dateCard(day)}
+            <div class="flex min-w-0 flex-1 flex-col items-center">
+              <span class="text-2xs font-semibold tabular-nums">{dc.md}</span>
+              <span class="text-2xs opacity-55">{dc.wd}</span>
+            </div>
+          {/each}
+        </div>
       </div>
 
-      <!-- 主体：每天一列 -->
-      <div class="flex flex-1 gap-[3px]">
-        {#each days as day (day)}
-          <div class="flex flex-1 flex-col gap-[2px]">
-            {#each Array(24) as _, h}
-              {@const c = cellAt(day, h)}
-              <div
-                class="h-[12px] rounded-[3px] transition-transform hover:scale-110"
-                style:background={bg(c)}
-                role={c ? 'button' : undefined}
-                tabindex={c ? 0 : undefined}
-                onclick={c ? () => playDay(c) : undefined}
-                onkeydown={(e) => { if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); playDay(c); } }}
-                onmousemove={(e) => c && show(e, c)}
-                onmouseleave={() => (tip = null)}
-              ></div>
-            {/each}
-            <div class="mt-1 text-center text-[9px] tabular-nums opacity-50">{md(day).slice(3)}</div>
-          </div>
-        {/each}
+      <!-- 主体：每列一天，每行一小时 -->
+      <div class="mt-1 flex">
+        <div class="flex w-10 shrink-0 flex-col gap-1">
+          {#each Array(24) as _, h}
+            <div class="flex h-3.5 items-center justify-end pr-1 text-2xs tabular-nums opacity-55">
+              {String(h).padStart(2, '0')}
+            </div>
+          {/each}
+        </div>
+
+        <div class="flex flex-1 gap-1">
+          {#each days as day (day)}
+            <div class="flex flex-1 flex-col gap-1">
+              {#each Array(24) as _, h}
+                {@const c = cellAt(day, h)}
+                <div
+                  class="h-3.5 w-full rounded-sm transition hover:ring-1 ring-accent"
+                  style:background={bg(c)}
+                  role={c ? 'button' : undefined}
+                  tabindex={c ? 0 : undefined}
+                  onclick={c ? () => playDay(c) : undefined}
+                  onkeydown={(e) => { if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); playDay(c); } }}
+                  onmousemove={(e) => c && show(e, c)}
+                  onmouseleave={() => (tip = null)}
+                ></div>
+              {/each}
+            </div>
+          {/each}
+        </div>
+      </div>
+
+      <!-- 图例 -->
+      <div class="mt-4 flex items-center gap-2 pl-10">
+        <span class="text-2xs opacity-55">少</span>
+        <div
+          class="h-2 w-24 rounded-full"
+          style:background="linear-gradient(90deg, hsl(258 80% 60% / 0.15), hsl(258 80% 60% / 0.95))"
+        ></div>
+        <span class="text-2xs opacity-55">多</span>
+        <span class="ml-2 text-2xs opacity-55">点击格子装载当天播放列表</span>
       </div>
     </div>
-
-    <div class="mt-4 flex items-center gap-2 pl-10 text-xs">
-      <span class="opacity-60">少</span>
-      {#each [0.12, 0.3, 0.5, 0.7, 0.95] as o}
-        <span class="h-3 w-3 rounded-[3px]" style:background={`hsl(258 80% 60% / ${o})`}></span>
-      {/each}
-      <span class="opacity-60">多（颜色 = 该小时唱歌时长；点击格子装载当天播放列表）</span>
-    </div>
-  </div>
+  {/if}
 </div>
 
 {#if tip}
-  <div class="pointer-events-none fixed z-50 max-w-xs rounded-lg border bg-base-100 p-2 text-xs shadow-lg"
+  <div class="pointer-events-none fixed z-50 max-w-xs rounded-lg border border-base-300 bg-base-100 p-2 text-xs shadow-lg"
     style:left={tip.x + 12 + 'px'} style:top={tip.y + 12 + 'px'}>
     {@html tip.html}
   </div>

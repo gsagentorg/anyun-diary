@@ -46,7 +46,7 @@ try:
     call(2, 'Emulation.setDeviceMetricsOverride',
          {'width': width, 'height': height, 'deviceScaleFactor': 1, 'mobile': width < 700, 'screenWidth': width, 'screenHeight': height})
     if view is not None:
-        call(3, 'Runtime.evaluate', {'expression': f"document.querySelectorAll('nav button')[{view}].click()", 'returnByValue': True})
+        call(3, 'Runtime.evaluate', {'expression': f"document.querySelectorAll('[role=tablist] button')[{view}].click()", 'returnByValue': True})
         time.sleep(0.8)
     res = call(4, 'Page.captureScreenshot', {'format': 'png', 'captureBeyondViewport': fullpage})
     open(outfile, 'wb').write(base64.b64decode(res['data']))

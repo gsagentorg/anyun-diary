@@ -1,18 +1,66 @@
 @import "tailwindcss";
 
 @theme {
+  /* 字号语义档 */
+  --text-2xs: 10px;
+  --text-2xs--line-height: 14px;
+  --text-xs: 11px;
+  --text-xs--line-height: 16px;
+  --text-sm: 12px;
+  --text-sm--line-height: 16px;
+  --text-base: 14px;
+  --text-base--line-height: 20px;
+  --text-lg: 16px;
+  --text-lg--line-height: 24px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+
+  /* 圆角 */
+  --radius-sm: 2px; /* 色块 */
+  --radius-md: 6px; /* 输入 */
+  --radius-lg: 10px; /* 卡片 */
+
+  /* 色彩 */
   --color-base-100: #ffffff;
   --color-base-200: #f4f4f5;
   --color-base-300: #e4e4e7;
   --color-base-content: #27272a;
   --color-accent: #7c5cfc;
   --color-accent-content: #ffffff;
+  --color-accent-muted: color-mix(in oklab, #7c5cfc 12%, #ffffff);
   --color-warning: #f59e0b;
   --color-warning-content: #ffffff;
+  --color-grid: #e8e8ec; /* 时间刻度线 */
+}
+
+:root {
+  /* 歌曲色相派生参数（供组件按需使用） */
+  --color-song-hue-sat: 70%;
+  --color-song-hue-light: 60%;
 }
 
 html {
   color-scheme: light;
   background: var(--color-base-100);
   color: var(--color-base-content);
+}
+
+body {
+  font-size: var(--text-base);
+  line-height: var(--text-base--line-height);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

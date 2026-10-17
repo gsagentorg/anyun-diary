@@ -14,6 +14,16 @@
 SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + `lucide-svelte` 图标。
 部署目标：**Vercel**（`@sveltejs/adapter-vercel`）。
 
+## 前端重构（refactor/frontend 分支）
+
+在 `refactor/frontend` 分支上完成的一次视觉/响应式重做，主分支不受影响。
+
+- **设计 token**：单一来源在 `src/app.css` 的 `@theme`（语义字号 `--text-2xs/xs/sm/base/lg/xl`、圆角 `--radius-sm/md/lg`、`--color-*`），组件不再写任意值字号/圆角。
+- **共享组件**（`src/lib/components/`）：`Chip.svelte`（胶囊徽标）、`HourAxis.svelte`（泳道/热力共用时间轴，按容器宽自适应 2h/3h/6h 刻度）、`Sheet.svelte`（播放列表面板，桌面右侧 / 窄屏底部抽屉）、`StateHint.svelte`（空列表/无数据/加载态）。
+- **配色选型页**：`static/design-variants.html`（`/design-variants.html`），可选主题/布局方案并导出 token。
+
+详见 `docs/frontend-refactor-plan.md`。
+
 ## 快速开始
 
 ```bash
@@ -116,4 +126,5 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 ## 待办
 
-- [ ] 前端视觉重构（计划已备，见 `docs/frontend-refactor-plan.md`，尚未执行）
+- [x] 前端视觉重构（见 `docs/frontend-refactor-plan.md`，已完成于 `refactor/frontend` 分支）
+- [ ] 合并 `refactor/frontend` 到 `main` 前重跑 Lighthouse 可访问性验收

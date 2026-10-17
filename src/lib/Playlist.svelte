@@ -108,11 +108,11 @@
       <ListMusic class="h-4 w-4" />
       动态播放列表
       {#if list.length > 0}
-        <span class="rounded-full bg-accent/15 px-2 text-[10px] tabular-nums opacity-80">
+        <span class="rounded-full bg-accent/15 px-2 text-2xs tabular-nums opacity-80">
           {list.length} 首 · {fmtDur(total)}
         </span>
         <button
-          class="flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] transition hover:bg-base-200 {player.shuffle ? 'border-accent text-accent' : 'border-base-300'}"
+          class="flex items-center gap-1 rounded-full border px-2 py-0.5 text-2xs transition hover:bg-base-200 {player.shuffle ? 'border-accent text-accent' : 'border-base-300'}"
           onclick={toggleShuffle}
           aria-pressed={player.shuffle}
           title="随机播放（乱序）"
@@ -120,7 +120,7 @@
           <Shuffle class="h-3 w-3" /> 随机{player.shuffle ? '：开' : ''}
         </button>
         <button
-          class="flex items-center gap-1 rounded-full border border-base-300 px-2 py-0.5 text-[10px] transition hover:bg-base-200"
+          class="flex items-center gap-1 rounded-full border border-base-300 px-2 py-0.5 text-2xs transition hover:bg-base-200"
           onclick={playRandom}
           title="从列表里随机挑一首播放"
         >
@@ -154,7 +154,7 @@
     </a>
     <select
       bind:value={fmt}
-      class="rounded border border-base-300 bg-base-200 px-1.5 py-1 text-[11px]"
+      class="rounded border border-base-300 bg-base-200 px-1.5 py-1 text-xs"
       aria-label="歌单格式"
       title="xspf/pls 是逐曲歌单（不会被当成 HLS 分片）；m3u 兼容性最广"
     >
@@ -206,10 +206,10 @@
             {:else}
               <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>
             {/if}
-            <span class="w-14 shrink-0 text-[10px] opacity-50">{fmtDay(t.rec.start).slice(5, 11)}</span>
-            <span class="w-10 shrink-0 text-[10px] opacity-50">{fmtOffset(t.clip.offsetStart)}</span>
+            <span class="w-14 shrink-0 text-2xs opacity-50">{fmtDay(t.rec.start).slice(5, 11)}</span>
+            <span class="w-10 shrink-0 text-2xs opacity-50">{fmtOffset(t.clip.offsetStart)}</span>
             <span class="truncate font-medium">{t.clip.title || '（未识别）'}</span>
-            <span class="shrink-0 text-[10px] opacity-50">{fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}</span>
+            <span class="shrink-0 text-2xs opacity-50">{fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}</span>
           </button>
         </li>
       {/each}

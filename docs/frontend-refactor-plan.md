@@ -1,6 +1,6 @@
 # 前端彻底重构计划 v2（2026-10-17 重排）
 
-> 状态：**执行中**。分支 `refactor/frontend`；开发实例（anyun-diary-dev.public.bcw2.top:3004）指向分支 worktree，生产（anyun-diary.public.bcw2.top:3004）锁 main。
+> 状态：**P0–P5 已完成，P6 收尾中（本提交）**。分支 `refactor/frontend`；开发实例（anyun-diary-dev.public.bcw2.top:3004）指向分支 worktree，生产（anyun-diary.public.bcw2.top:3004）锁 main。
 > 原则不变：不改数据管线、不改 URL 约定、不动音频托管（同源 /audio）。
 
 ## 0. 为什么推翻重做（现状证据）
@@ -85,12 +85,13 @@
 
 ## 8. 验收
 
-- [ ] 1440/1280/768/390 四档截图无溢出、无遮挡（播放条不盖内容）
-- [ ] 泳道在 1440 下单屏可读，小时标签不重叠
-- [ ] `npm run check` 0 错误；单测（playlist/shuffle）全绿
-- [ ] URL 参数播放列表、外部播放格式、睡眠定时器、随机、Media Session 行为全部不回退
-- [ ] Lighthouse a11y ≥95
-- [ ] git 全程在 refactor/frontend；merge 前生产不受影响
+- [x] 1440/1280/768/390 四档截图无溢出、无遮挡（播放条不盖内容）
+- [x] 泳道在 1440 下单屏可读，小时标签不重叠
+- [x] `npm run check` 0 错误（`svelte-check`：0 errors / 5 warnings）
+- [ ] 单测（playlist/shuffle）全绿 —— 本机缺 `vite-node`，未运行，合并前补跑
+- [x] URL 参数播放列表、外部播放格式、睡眠定时器、随机、Media Session 行为全部不回退
+- [ ] Lighthouse a11y ≥95 —— 未跑，保留待验收
+- [x] git 全程在 refactor/frontend；merge 前生产不受影响
 
 ## 9. 工作流与回滚
 

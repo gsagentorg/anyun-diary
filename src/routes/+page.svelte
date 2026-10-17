@@ -40,32 +40,44 @@
   });
 </script>
 
-<div class="mx-auto max-w-6xl px-4 py-8 {player.track ? 'pb-32' : ''}">
-  <header class="mb-8">
-    <h1 class="text-3xl font-bold tracking-tight">安允日记</h1>
-    <p class="mt-1 text-sm opacity-70">
-      直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
-    </p>
-    <nav class="mt-4 flex gap-2">
-      {#each variants as v, i}
+<div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 {player.track ? 'pb-32' : ''}">
+  <header
+    class="sticky top-0 z-30 -mx-4 mb-4 border-b border-base-300 bg-base-100/85 px-4 backdrop-blur sm:-mx-6 sm:mb-6 sm:px-6 lg:-mx-8 lg:px-8"
+  >
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
+      <div class="min-w-0">
+        <h1 class="text-lg font-bold tracking-tight leading-none">安允日记</h1>
+        <p class="mt-1 hidden text-xs opacity-60 lg:block">
+          直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
+        </p>
+      </div>
+
+      <div class="ml-auto flex flex-wrap items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="视图切换">
+          {#each variants as v, i}
+            <button
+              role="tab"
+              aria-selected={i === current}
+              class="rounded-full border px-3 py-1 text-sm transition {i === current
+                ? 'border-accent text-accent'
+                : 'border-base-300 opacity-60 hover:opacity-100'}"
+              onclick={() => (current = i)}
+            >
+              {v}
+            </button>
+          {/each}
+        </div>
         <button
-          class="rounded-full px-3 py-1 text-sm border transition"
-          class:border-accent={i === current}
-          class:opacity-50={i !== current}
-          onclick={() => (current = i)}
+          class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {plOpen
+            ? 'border-accent text-accent'
+            : ''}"
+          onclick={() => (plOpen = !plOpen)}
+          aria-expanded={plOpen}
         >
-          {v}
+          <ListMusic class="h-4 w-4" /> 播放列表
         </button>
-      {/each}
-    </nav>
-    <button
-      class="mt-3 flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200"
-      onclick={() => (plOpen = !plOpen)}
-      class:border-accent={plOpen}
-      aria-expanded={plOpen}
-    >
-      <ListMusic class="h-4 w-4" /> 播放列表
-    </button>
+      </div>
+    </div>
   </header>
 
   {#if plOpen}

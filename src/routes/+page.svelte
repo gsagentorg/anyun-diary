@@ -5,6 +5,7 @@
   import Heatmap from '$lib/Heatmap.svelte';
   import { player, adopt } from '$lib/player.svelte';
   import Playlist from '$lib/Playlist.svelte';
+  import Sheet from '$lib/components/Sheet.svelte';
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
@@ -80,11 +81,9 @@
     </div>
   </header>
 
-  {#if plOpen}
-    <div class="mb-6">
-      <Playlist {recordings} bind:open={plOpen} />
-    </div>
-  {/if}
+  <Sheet open={plOpen} onClose={() => (plOpen = false)} title="播放列表">
+    <Playlist {recordings} bind:open={plOpen} />
+  </Sheet>
 
   {#if current === 0}
     <Timeline recordings={recordings} />

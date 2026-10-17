@@ -43,6 +43,51 @@ function playCurrent() {
   a.src = audioUrl(t.clip.opus);
   a.load();
   a.play().catch(() => {});
+  updateMediaSession(t);
+}
+
+/* ---------- Media Session：让系统媒体浮层（Windows/手机锁屏）显示歌名并可上/下一首 ---------- */
+
+let mediaHandlersBound = false;
+
+function updateMediaSession(t: Track) {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  const ms = navigator.mediaSession;
+  ms.metadata = new MediaMetadata({
+    title: t.clip.title || '（未识别）',
+    artist: '安允日记',
+    album: t.rec.file,
+  });
+  if (!mediaHandlersBound) {
+    mediaHandlersBound = true;
+    ms.setActionHandler('play', () => getAudio().play().catch(() => {}));
+    ms.setActionHandler('pause', () => getAudio().pause());
+    ms.setActionHandler('previoustrack', () => step(-1));
+    ms.setActionHandler('nexttrack', () => step(1));
+    ms.setActionHandler('seekbackward', (d) => {
+      const a = getAudio();
+      a.currentTime = Math.max(0, a.currentTime - (d?.seekOffset ?? 10));
+    });
+    ms.setActionHandler('seekforward', (d) => {
+      const a = getAudio();
+      a.currentTime = Math.min(a.duration || 0, a.currentTime + (d?.seekOffset ?? 10));
+    });
+  }
+}
+
+/** 播放进度上报给系统浮层（timeupdate 里调用） */
+export function reportPlaybackState(duration: number, position: number) {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration,
+      position: Math.min(position, duration),
+      playbackRate: 1,
+    });
+  } catch {
+    /* 浏览器拒绝非法值时忽略 */
+  }
 }
 
 /** 采纳一个播放列表并从第 i 项开始播放 */

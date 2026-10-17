@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom, reportPlaybackState } from './player.svelte';
   import { fmtOffset, fmtClockShort, fmtDur } from './types';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle } from 'lucide-svelte';
 
@@ -19,7 +19,10 @@
       sleep.fired = false;
     };
     const onPause = () => (playing = false);
-    const onTime = () => (progress = a.currentTime);
+    const onTime = () => {
+      progress = a.currentTime;
+      reportPlaybackState(duration, a.currentTime); // 系统媒体浮层进度
+    };
     const onMeta = () => {
       duration = Number.isFinite(a.duration) ? a.duration : 0;
     };

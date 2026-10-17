@@ -3,7 +3,7 @@
   import { fmtDur, dateCard } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
-  import { ListMusic, MoonStar } from 'lucide-svelte';
+  import { ListMusic } from 'lucide-svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -20,7 +20,6 @@
     dayStart: number;
     recs: Recording[];
     songs: SongBlock[];
-    zzz: { start: number; end: number }[];
     clipCount: number;
     songDur: number;
   }
@@ -52,17 +51,10 @@
         if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
         else merged.push({ ...s });
       }
-      // 相邻歌块之间的空隙 = zzz
-      const zzz: { start: number; end: number }[] = [];
-      for (let i = 1; i < merged.length; i++) {
-        const gap = merged[i].start - merged[i - 1].end;
-        if (gap > 60) zzz.push({ start: merged[i - 1].end, end: merged[i].start });
-      }
       out.push({
         dayStart,
         recs: lane.recs,
         songs: merged,
-        zzz,
         clipCount: lane.recs.reduce((a, r) => a + (r.clips?.length ?? 0), 0),
         songDur: lane.songs.reduce((a, s) => a + s.end - s.start, 0),
       });
@@ -77,13 +69,6 @@
       html: `<b>${c.title || '（未识别）'}</b><br>${clock(b.start)}–${clock(b.end)}<br>${fmtDur(b.end - b.start)} · ${b.rec.file}`,
     };
   }
-  function showZzz(e: MouseEvent, z: { start: number; end: number }) {
-    tip = {
-      x: e.clientX, y: e.clientY,
-      html: `zzz<br>${clock(z.start)}–${clock(z.end)} · ${fmtDur(z.end - z.start)}`,
-    };
-  }
-
   function playSong(b: SongBlock) {
     const idx = (b.rec.clips ?? []).findIndex((c) => c.file === b.clip.file);
     if (idx >= 0) playClip(b.rec, idx);
@@ -137,20 +122,6 @@
             <div class="absolute top-0 h-full w-px bg-base-content/10" style:left={(i / nticks) * 100 + '%'}></div>
           {/each}
 
-          {#each lane.zzz as z, zi (zi)}
-            {@const x1 = xPct(z.start, lane.dayStart)}
-            {@const x2 = xPct(z.end, lane.dayStart)}
-            {@const w = Math.max(x2 - x1, 0.15)}
-            {#if w > 0.05}
-              <div
-                class="absolute top-1.5 h-5 rounded-sm bg-base-300/60"
-                style:left={x1 + '%'}; style:width={w + '%'}
-                onmousemove={(e) => showZzz(e, z)}
-                onmouseleave={() => (tip = null)}
-              ></div>
-            {/if}
-          {/each}
-
           {#each lane.songs as b, bi (bi)}
             {@const x1 = xPct(b.start, lane.dayStart)}
             {@const x2 = xPct(b.end, lane.dayStart)}
@@ -173,7 +144,6 @@
 
     <div class="mt-4 flex items-center gap-4 pl-48 text-xs">
       <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-base-300/60"></span><MoonStar class="h-3 w-3" /> zzz</span>
     </div>
   </div>
 </div>

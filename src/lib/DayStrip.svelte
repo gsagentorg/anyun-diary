@@ -6,11 +6,22 @@
 
   let { recordings }: { recordings: Recording[] } = $props();
 
+  // ffprobe 时长缺失（残缺录制）时，用切片/llc 段的最大末端估算，避免“有歌却无数据”
+  function recDur(rec: Recording): number | null {
+    if (rec.duration) return rec.duration;
+    const ends = [
+      ...(rec.clips ?? []).map((c) => c.offsetEnd),
+      ...(rec.segments ?? []).map((s) => s.end),
+    ];
+    return ends.length ? Math.max(...ends) : null;
+  }
+
   let open = $state<string | null>(null);
 </script>
 
 <div class="grid gap-4 sm:grid-cols-2">
   {#each recordings as rec (rec.file)}
+    {@const dur = recDur(rec)}
     {@const blocks = blocksOf(rec)}
     {@const songs = blocks.filter((b) => b.kind === 'song')}
     {@const zzz = blocks.filter((b) => b.kind === 'zzz')}
@@ -28,13 +39,13 @@
           >
             <ListMusic class="h-3 w-3" /> 列表 </span
           >
-          <div class="text-[10px] opacity-60">{rec.duration ? fmtDur(rec.duration) : '无数据'}</div>
+          <div class="text-[10px] opacity-60">{dur ? fmtDur(dur) : '无数据'}{rec.duration ? '' : '（估算）'}</div>
         </div>
       </div>
       <div class="mt-2 flex flex-wrap gap-2 text-[11px]">
         <span class="rounded-full bg-accent/15 px-2 py-0.5">🎵 {songs.length} 歌</span>
         <span class="rounded-full bg-base-300/50 px-2 py-0.5">🌙 zzz {fmtDur(zzz.reduce((a, b) => a + b.end - b.start, 0))}</span>
-        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {rec.duration ? fmtDur(rec.duration) : '无数据'}</span>
+        <span class="rounded-full bg-base-300/50 px-2 py-0.5">共 {dur ? fmtDur(dur) : '无数据'}{rec.duration ? '' : '（估算）'}</span>
       </div>
 
       {#if open === rec.file}

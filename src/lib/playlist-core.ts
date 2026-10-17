@@ -100,3 +100,42 @@ export function normalize(recs: Recording[]): Recording[] {
     clips: r.clips ?? [],
   }));
 }
+
+/** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
+export function trackKeyOf(clip: { title: string; file: string }): string {
+  return clip.title ? `T:${clip.title}` : `F:${clip.file}`;
+}
+
+/**
+ * 随机挑下标：已播过的「曲目」（同名歌曲一并算已播）优先不抽；
+ * 池抽干时重置（返回 reset=true），仅避开当前项。
+ * @param keys 播放列表每项的 trackKey
+ * @param playedKeys 已播曲目 key 集合（数组）
+ * @param currentPos 当前项下标
+ * @returns { index, reset } 或 null（列表为空/只有当前一项）
+ */
+export function pickShuffleIndex(
+  keys: string[],
+  playedKeys: string[],
+  currentPos: number,
+): { index: number; reset: boolean } | null {
+  const n = keys.length;
+  if (n === 0) return null;
+  if (n === 1) return currentPos === 0 ? null : { index: 0, reset: false };
+
+  const played = new Set(playedKeys);
+  let candidates: number[] = [];
+  let reset = false;
+
+  for (let i = 0; i < n; i++) {
+    if (i !== currentPos && !played.has(keys[i])) candidates.push(i);
+  }
+  if (candidates.length === 0) {
+    reset = true;
+    for (let i = 0; i < n; i++) {
+      if (i !== currentPos) candidates.push(i);
+    }
+  }
+  if (candidates.length === 0) return null;
+  return { index: candidates[Math.floor(Math.random() * candidates.length)], reset };
+}

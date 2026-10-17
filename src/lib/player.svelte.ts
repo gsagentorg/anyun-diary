@@ -1,5 +1,6 @@
 import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks } from './types';
+import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 
 export type { Track };
 export { buildRecTracks };
@@ -12,6 +13,7 @@ export const player = $state<{
   pos: number; // 当前播放项在 playlist 里的下标
   shuffle: boolean; // 随机播放
   history: number[]; // 随机模式下已播过的下标（上一首用）
+  playedTitles: string[]; // 已播曲目的「曲目标识」（同名歌曲视为同一首，随机不再抽）
 }>({
   track: null,
   loading: false,
@@ -19,7 +21,13 @@ export const player = $state<{
   pos: -1,
   shuffle: false,
   history: [],
+  playedTitles: [],
 });
+
+/** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
+function trackKey(t: Track): string {
+  return trackKeyOf(t.clip);
+}
 
 let audio: HTMLAudioElement | null = null;
 
@@ -96,6 +104,7 @@ export function adopt(list: Track[], i: number) {
   player.playlist = list;
   player.pos = i;
   player.history = [];
+  player.playedTitles = [trackKey(list[i])];
   playCurrent();
 }
 
@@ -103,26 +112,30 @@ export function adopt(list: Track[], i: number) {
 export function toggleShuffle() {
   player.shuffle = !player.shuffle;
   player.history = [];
+  player.playedTitles = player.track ? [trackKey(player.track)] : [];
 }
 
-/** 在当前列表里随机挑一首（尽量不重复已播）并播放 */
+/** 在当前列表里随机挑一首：已播过的「曲目」（含同名歌曲）优先不抽；全播过则重置池 */
 export function playRandom() {
-  const n = player.playlist.length;
-  if (n === 0) return;
-  if (n === 1) {
-    stepTo(0);
-    return;
-  }
-  const recent = new Set([player.pos, ...player.history.slice(-Math.floor(n / 2))]);
-  const pool = player.playlist.map((_, i) => i).filter((i) => !recent.has(i));
-  const candidates = pool.length > 0 ? pool : player.playlist.map((_, i) => i).filter((i) => i !== player.pos);
-  stepTo(candidates[Math.floor(Math.random() * candidates.length)]);
+  if (player.playlist.length === 0) return;
+  const keys = player.playlist.map(trackKey);
+  const pick = pickShuffleIndex(keys, player.playedTitles, player.pos);
+  if (!pick) return;
+  if (pick.reset) player.playedTitles = [];
+  stepTo(pick.index);
 }
 
-/** 跳到列表内第 i 项（记录历史，供随机模式返回上一首） */
+/** 跳到列表内第 i 项（记录历史与已播曲目，供随机模式去重/回退） */
 function stepTo(i: number) {
   if (i < 0 || i >= player.playlist.length || i === player.pos) return;
-  if (player.pos >= 0) player.history.push(player.pos);
+  if (player.pos >= 0) {
+    player.history.push(player.pos);
+    const cur = player.playlist[player.pos];
+    if (cur) {
+      const k = trackKey(cur);
+      if (!player.playedTitles.includes(k)) player.playedTitles.push(k);
+    }
+  }
   player.pos = i;
   playCurrent();
 }

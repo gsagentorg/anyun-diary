@@ -5,6 +5,7 @@
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { ListMusic } from 'lucide-svelte';
   import HourAxis from './components/HourAxis.svelte';
+  import StateHint from './components/StateHint.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -87,6 +88,9 @@
 </script>
 
 <div class="overflow-x-auto">
+  {#if lanes.length === 0}
+    <StateHint kind="empty" />
+  {:else}
   <div class="flex">
     <div class="w-24 shrink-0">
       <div class="mb-1 h-5"></div>
@@ -147,6 +151,7 @@
   <div class="mt-4 flex items-center gap-4 pl-24 text-xs">
     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
   </div>
+  {/if}
 </div>
 
 {#if tip}

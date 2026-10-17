@@ -3,6 +3,7 @@
   import { shDayStart } from './playlist-core';
   import { fmtDur, dateCard } from './types';
   import { adopt, buildRecTracks } from './player.svelte';
+  import StateHint from './components/StateHint.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -78,7 +79,7 @@
 
 <div class="overflow-x-auto">
   {#if days.length === 0}
-    <div class="py-6 text-center text-sm opacity-55">无数据</div>
+    <StateHint kind="no-data" />
   {:else}
     <div class="min-w-[640px]">
       <!-- 列头：MM/DD + 周几 -->

@@ -4,6 +4,7 @@
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { ListMusic } from 'lucide-svelte';
   import Chip from './components/Chip.svelte';
+  import StateHint from './components/StateHint.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
@@ -21,6 +22,9 @@
 </script>
 
 <div class="grid gap-4 sm:grid-cols-2">
+  {#if recordings.length === 0}
+    <div class="sm:col-span-2"><StateHint kind="empty" /></div>
+  {/if}
   {#each recordings as rec (rec.file)}
     {@const dur = recDur(rec)}
     {@const songs = rec.clips ?? []}
@@ -63,7 +67,7 @@
             </li>
           {/each}
           {#if songs.length === 0}
-            <li class="text-xs opacity-55">这一天没有已识别的歌</li>
+            <li><StateHint kind="no-data" /></li>
           {/if}
         </ol>
       {/if}

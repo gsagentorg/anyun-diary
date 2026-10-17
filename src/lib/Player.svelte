@@ -239,7 +239,7 @@
 
         <div class="min-w-0 flex-1">
           <div class="flex items-baseline gap-2">
-            <span class="truncate text-sm font-medium">{t.clip.title || '（未识别）'}</span>
+            <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
             {#if player.loading}
               <span class="shrink-0 text-2xs text-accent">加载中…</span>
             {/if}

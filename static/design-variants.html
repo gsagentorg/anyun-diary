@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="zh-CN" data-pal="0">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>安允日记 · 配色与布局选型</title>
+<style>
+*{box-sizing:border-box}
+:root{
+--ui-bg:#0d0e12;--ui-panel:#15161b;--ui-line:#26272f;--ui-fg:#e9e9ee;--ui-dim:#8b8d99;--ui-accent:#8b8dfc;
+font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+}
+body{margin:0;background:radial-gradient(1200px 600px at 50% -10%,#1a1c24,var(--ui-bg));color:var(--ui-fg)}
+.wrap{max-width:1080px;margin:0 auto;padding:28px 20px 64px}
+.lede h1{margin:0;font-size:20px;letter-spacing:.2px}
+.lede p{margin:6px 0 0;color:var(--ui-dim);font-size:13px}
+.panel{margin-top:18px;background:var(--ui-panel);border:1px solid var(--ui-line);border-radius:14px;padding:14px}
+.tabs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.tabs button{font:inherit;font-size:13px;color:var(--ui-dim);background:#1d1e25;border:1px solid var(--ui-line);border-radius:999px;padding:7px 14px;cursor:pointer;transition:.15s}
+.tabs button:hover{color:var(--ui-fg)}
+.tabs button[aria-selected="true"]{color:#0d0e12;background:var(--ui-accent);border-color:var(--ui-accent);font-weight:600}
+.frame{position:relative;height:400px;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--ui-line);border-radius:12px;background:var(--color-base-100);color:var(--color-base-content);transition:background .2s,color .2s}
+.frame.short{height:300px}
+.frame.tall{height:330px}
+.scroll{flex:1;overflow-y:auto;position:relative}
+.p-top{position:sticky;top:0;z-index:3;display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:color-mix(in srgb,var(--color-base-100) 85%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--color-base-300)}
+.p-brand h3{margin:0;font-size:15px;font-weight:700;line-height:1}
+.p-brand span{display:block;margin-top:3px;font-size:10px;opacity:.6}
+.p-tabs{display:flex;gap:6px;margin-left:auto}
+.pill{font:inherit;font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--color-base-300);background:transparent;color:inherit;opacity:.7;cursor:pointer;white-space:nowrap}
+.pill.on{border-color:var(--color-accent);color:var(--color-accent);opacity:1;font-weight:600}
+.content{padding:14px;padding-bottom:128px}
+.content.tight{padding-bottom:16px}
+.lane{display:grid;grid-template-columns:96px 1fr;gap:10px;height:40px;align-items:center;margin-bottom:8px}
+.llabel{display:flex;flex-direction:column;justify-content:center;gap:1px;min-width:0}
+.ll-top{display:flex;align-items:baseline;gap:4px}
+.ll-top b{font-size:13px}
+.ll-top i{font-style:normal;font-size:10px;opacity:.6}
+.ll-bot{display:flex;align-items:center;gap:6px;font-size:10px;min-width:0}
+.ll-link{color:var(--color-accent);font-weight:600;white-space:nowrap}
+.ll-meta{opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ltrack{position:relative;height:40px;border-radius:6px;background:color-mix(in srgb,var(--color-base-300) 45%,transparent)}
+.song{position:absolute;top:9px;height:22px;border-radius:2px;background:hsl(var(--song-hue,265) var(--color-song-hue-sat) var(--color-song-hue-light));transition:background .2s}
+.song.on{box-shadow:0 0 0 2px var(--color-accent)}
+.daycard{margin-top:6px;border:1px solid var(--color-base-300);border-radius:10px;padding:12px;background:var(--color-base-100)}
+.dc-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dc-head b{font-size:13px}
+.chips{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:10px;padding:2px 8px;border-radius:999px;border:1px solid var(--color-base-300);opacity:.85}
+.chip.acc{border-color:var(--color-accent);color:var(--color-accent);opacity:1}
+.chip.warn{border-color:var(--color-warning);color:var(--color-warning);opacity:1}
+.songs{list-style:none;margin:10px 0 0;padding:10px 0 0;border-top:1px solid var(--color-base-300)}
+.srow{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:6px}
+.srow.on{background:var(--color-accent);color:var(--color-accent-content)}
+.dot{width:10px;height:10px;border-radius:50%;flex:none;background:hsl(var(--song-hue,265) var(--color-song-hue-sat) var(--color-song-hue-light))}
+.off{width:38px;flex:none;font-size:10px;opacity:.55;font-variant-numeric:tabular-nums}
+.srow.on .off{opacity:.8}
+.ti{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:600}
+.du{flex:none;font-size:11px;opacity:.65;font-variant-numeric:tabular-nums}
+.playbar{position:absolute;left:0;right:0;bottom:0;z-index:4;display:flex;align-items:center;gap:10px;padding:9px 14px;border-top:1px solid var(--color-base-300);background:color-mix(in srgb,var(--color-base-100) 95%,transparent);backdrop-filter:blur(8px)}
+.pbtn{flex:none;width:34px;height:34px;border-radius:999px;border:none;background:var(--color-accent);color:var(--color-accent-content);cursor:pointer;font-size:12px;display:grid;place-items:center}
+.pmeta{flex:1;min-width:0}
+.ptitle{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.psub{font-size:10px;opacity:.6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.pbar{margin-top:5px;height:4px;border-radius:999px;background:var(--color-base-300)}
+.pbar i{display:block;height:4px;border-radius:999px;background:var(--color-accent)}
+.ptime{flex:none;font-size:10px;opacity:.6;font-variant-numeric:tabular-nums}
+.icon{flex:none;border:none;background:transparent;color:inherit;cursor:pointer;font-size:13px;padding:4px 6px;border-radius:6px}
+.icon:hover{background:var(--color-base-200)}
+.pnum{font-size:10px;opacity:.6}
+.mini-play{display:flex;align-items:center;gap:6px;margin-left:auto}
+.mprog{width:34px;height:4px;border-radius:999px;background:var(--color-base-300);position:relative}
+.mprog i{position:absolute;left:0;top:0;height:4px;width:45%;border-radius:999px;background:var(--color-accent)}
+.mbtn{border:1px solid var(--color-base-300);background:var(--color-base-100);color:inherit;border-radius:999px;width:22px;height:22px;display:grid;place-items:center;cursor:pointer;font-size:10px}
+.mbtn.play{background:var(--color-accent);border-color:var(--color-accent);color:var(--color-accent-content)}
+.flabel{position:relative;display:flex;align-items:center;height:40px}
+.fnum{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;width:40px}
+.fcard{position:absolute;left:0;top:calc(100% + 6px);z-index:6;width:190px;background:var(--color-base-100);border:1px solid var(--color-base-300);border-radius:10px;padding:8px 10px;box-shadow:0 10px 24px rgba(0,0,0,.28);opacity:0;transform:translateY(-4px);pointer-events:none;transition:opacity .15s,transform .15s}
+.flabel:hover .fcard{opacity:1;transform:none;pointer-events:auto}
+.fcard b{font-size:12px}
+.fcard div{font-size:10px;opacity:.65;margin-top:3px}
+.fcard .ll-link{display:inline-block;margin-top:6px}
+.demo-lane{display:grid;grid-template-columns:96px 1fr;gap:10px;height:40px;align-items:center;padding:6px 0}
+.tokens{margin-top:14px;border:1px solid var(--ui-line);border-radius:10px;background:#0b0c10;overflow:hidden}
+.tokens-head{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--ui-line);font-size:12px;color:var(--ui-dim)}
+.tokens-head b{color:var(--ui-fg)}
+.tokens-head button{margin-left:auto;font:inherit;font-size:12px;color:#0d0e12;background:var(--ui-accent);border:none;border-radius:7px;padding:5px 12px;cursor:pointer}
+pre{margin:0;padding:12px;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color:#cfd3dc;white-space:pre;overflow-x:auto}
+.section{margin-top:30px}
+.section h2{font-size:14px;margin:0 0 12px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.grid2{grid-template-columns:1fr}}
+.col{padding:12px}
+.cap{font-size:12px;color:var(--ui-dim);margin-bottom:8px}
+.cap b{color:var(--ui-fg)}
+html[data-pal="0"]{
+--color-base-100:#ffffff;--color-base-200:#f4f4f5;--color-base-300:#e4e4e7;
+--color-base-content:#27272a;--color-accent:#7c5cfc;--color-accent-content:#ffffff;
+--color-accent-muted:color-mix(in oklab,#7c5cfc 12%,#ffffff);
+--color-warning:#f59e0b;--color-grid:#e8e8ec;
+--color-song-hue-sat:70%;--color-song-hue-light:60%;
+}
+html[data-pal="1"]{
+--color-base-100:#fafaf9;--color-base-200:#f5f5f4;--color-base-300:#e7e5e4;
+--color-base-content:#292524;--color-accent:#0d9488;--color-accent-content:#ffffff;
+--color-accent-muted:color-mix(in oklab,#0d9488 12%,#fafaf9);
+--color-warning:#f59e0b;--color-grid:#dedcd9;
+--color-song-hue-sat:70%;--color-song-hue-light:58%;
+}
+html[data-pal="2"]{
+--color-base-100:#f8fafc;--color-base-200:#f1f5f9;--color-base-300:#e2e8f0;
+--color-base-content:#0f172a;--color-accent:#2563eb;--color-accent-content:#ffffff;
+--color-accent-muted:color-mix(in oklab,#2563eb 12%,#f8fafc);
+--color-warning:#f59e0b;--color-grid:#dbe3ec;
+--color-song-hue-sat:72%;--color-song-hue-light:58%;
+}
+html[data-pal="3"]{
+--color-base-100:#fffdf9;--color-base-200:#faf5ef;--color-base-300:#ece4d8;
+--color-base-content:#44403c;--color-accent:#ea580c;--color-accent-content:#ffffff;
+--color-accent-muted:color-mix(in oklab,#ea580c 12%,#fffdf9);
+--color-warning:#d97706;--color-grid:#e6ddcc;
+--color-song-hue-sat:74%;--color-song-hue-light:56%;
+}
+html[data-pal="4"]{
+--color-base-100:#18181b;--color-base-200:#27272a;--color-base-300:#3f3f46;
+--color-base-content:#fafafa;--color-accent:#a78bfa;--color-accent-content:#18181b;
+--color-accent-muted:color-mix(in oklab,#a78bfa 12%,#18181b);
+--color-warning:#fbbf24;--color-grid:#2a2a2e;
+--color-song-hue-sat:65%;--color-song-hue-light:62%;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="lede">
+<h1>安允日记 · 配色与布局选型</h1>
+<p>点击切换配色，下方实时预览</p>
+</header>
+<section class="panel">
+<div class="tabs" role="tablist" aria-label="配色切换">
+<button role="tab" aria-selected="true">现行紫</button>
+<button role="tab" aria-selected="false">青碧</button>
+<button role="tab" aria-selected="false">晨蓝</button>
+<button role="tab" aria-selected="false">暮橘</button>
+<button role="tab" aria-selected="false">墨夜(暗色)</button>
+</div>
+<div class="frame">
+<div class="scroll">
+<header class="p-top">
+<div class="p-brand"><h3>安允日记</h3><span>直播歌单时间线</span></div>
+<div class="p-tabs">
+<button class="pill on">泳道时间轴</button>
+<button class="pill">日卡片</button>
+<button class="pill">热力图</button>
+<button class="pill">▤ 播放列表</button>
+</div>
+</header>
+<div class="content">
+<div class="lane">
+<div class="llabel"><div class="ll-top"><b>10/02</b><i>周四</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">5 歌 · 21.3min</span></div></div>
+<div class="ltrack">
+<span class="song" style="left:6%;width:12%;--song-hue:265"></span>
+<span class="song on" style="left:30%;width:16%;--song-hue:322"></span>
+<span class="song" style="left:62%;width:10%;--song-hue:18"></span>
+</div>
+</div>
+<div class="lane">
+<div class="llabel"><div class="ll-top"><b>10/05</b><i>周日</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">7 歌 · 34.8min</span></div></div>
+<div class="ltrack">
+<span class="song" style="left:12%;width:9%;--song-hue:196"></span>
+<span class="song" style="left:40%;width:18%;--song-hue:150"></span>
+<span class="song" style="left:74%;width:14%;--song-hue:280"></span>
+</div>
+</div>
+<div class="lane">
+<div class="llabel"><div class="ll-top"><b>10/11</b><i>周六</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">4 歌 · 16.2min</span></div></div>
+<div class="ltrack">
+<span class="song" style="left:18%;width:20%;--song-hue:340"></span>
+<span class="song" style="left:56%;width:8%;--song-hue:44"></span>
+</div>
+</div>
+<div class="daycard">
+<div class="dc-head"><b>2025/10/02 周四</b>
+<span class="chips">
+<span class="chip acc">▤ 列表</span>
+<span class="chip">🎵 6 歌</span>
+<span class="chip warn">时长缺失（估算）</span>
+</span>
+</div>
+<ol class="songs">
+<li class="srow"><span class="dot" style="--song-hue:265"></span><span class="off">12:04</span><span class="ti">1. 夜航</span><span class="du">3:42</span></li>
+<li class="srow on"><span class="dot" style="--song-hue:322"></span><span class="off">18:31</span><span class="ti">2. 未接来电</span><span class="du">4:10</span></li>
+<li class="srow"><span class="dot" style="--song-hue:18"></span><span class="off">25:47</span><span class="ti">3. 傍晚的风</span><span class="du">2:58</span></li>
+</ol>
+</div>
+</div>
+</div>
+<div class="playbar">
+<button class="pbtn">▶</button>
+<div class="pmeta">
+<div class="ptitle">未接来电</div>
+<div class="psub">录像 +00:18 · 251002_001.mkv</div>
+<div class="pbar"><i style="width:38%"></i></div>
+</div>
+<span class="ptime">01:24 / 04:10</span>
+<button class="icon">⏮</button><span class="pnum">2/6</span><button class="icon">⏭</button>
+</div>
+</div>
+<div class="tokens">
+<div class="tokens-head"><b id="tok-name">现行紫</b><span>Tailwind v4 @theme token（可粘贴）</span><button id="copy" type="button">复制</button></div>
+<pre id="tok"></pre>
+</div>
+</section>
+<section class="section">
+<h2>布局备选</h2>
+<div class="grid2">
+<div class="panel col">
+<div class="cap"><b>布局 A · 底部播放条</b>（现行）：播放条固定底部，内容 pb-32</div>
+<div class="frame short">
+<div class="scroll">
+<header class="p-top"><div class="p-brand"><h3>安允日记</h3></div>
+<div class="p-tabs"><button class="pill on">泳道</button><button class="pill">▤ 播放列表</button></div></header>
+<div class="content">
+<div class="lane"><div class="llabel"><div class="ll-top"><b>10/02</b><i>周四</i></div><div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">5 歌</span></div></div>
+<div class="ltrack"><span class="song" style="left:8%;width:13%;--song-hue:265"></span><span class="song" style="left:35%;width:16%;--song-hue:322"></span><span class="song" style="left:66%;width:10%;--song-hue:18"></span></div></div>
+<div class="lane"><div class="llabel"><div class="ll-top"><b>10/05</b><i>周日</i></div><div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">7 歌</span></div></div>
+<div class="ltrack"><span class="song" style="left:14%;width:10%;--song-hue:196"></span><span class="song" style="left:42%;width:18%;--song-hue:150"></span></div></div>
+<div class="daycard"><div class="dc-head"><b>2025/10/02 周四</b><span class="chips"><span class="chip acc">▤ 列表</span><span class="chip">🎵 6 歌</span></span></div>
+<ol class="songs"><li class="srow"><span class="dot" style="--song-hue:265"></span><span class="off">12:04</span><span class="ti">1. 夜航</span><span class="du">3:42</span></li>
+<li class="srow"><span class="dot" style="--song-hue:322"></span><span class="off">18:31</span><span class="ti">2. 未接来电</span><span class="du">4:10</span></li></ol></div>
+</div>
+</div>
+<div class="playbar"><button class="pbtn">▶</button>
+<div class="pmeta"><div class="ptitle">未接来电</div><div class="psub">录像 +00:18</div><div class="pbar"><i style="width:42%"></i></div></div>
+<span class="ptime">01:24 / 04:10</span><button class="icon">⏮</button><span class="pnum">2/6</span><button class="icon">⏭</button></div>
+</div>
+</div>
+<div class="panel col">
+<div class="cap"><b>布局 B · 顶栏迷你播放器</b>：控制收进顶栏右侧，页面无底部条</div>
+<div class="frame short">
+<div class="scroll">
+<header class="p-top">
+<div class="p-brand"><h3>安允日记</h3><span>直播歌单时间线</span></div>
+<div class="mini-play">
+<span class="mprog" title="播放进度"><i></i></span>
+<button class="mbtn" aria-label="上一首">⏮</button>
+<button class="mbtn play" aria-label="播放">▶</button>
+<button class="mbtn" aria-label="下一首">⏭</button>
+<button class="pill on">▤ 播放列表</button>
+</div>
+</header>
+<div class="content tight">
+<div class="lane"><div class="llabel"><div class="ll-top"><b>10/02</b><i>周四</i></div><div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">5 歌</span></div></div>
+<div class="ltrack"><span class="song" style="left:8%;width:13%;--song-hue:265"></span><span class="song" style="left:35%;width:16%;--song-hue:322"></span><span class="song" style="left:66%;width:10%;--song-hue:18"></span></div></div>
+<div class="lane"><div class="llabel"><div class="ll-top"><b>10/05</b><i>周日</i></div><div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">7 歌</span></div></div>
+<div class="ltrack"><span class="song" style="left:14%;width:10%;--song-hue:196"></span><span class="song" style="left:42%;width:18%;--song-hue:150"></span></div></div>
+<div class="daycard"><div class="dc-head"><b>2025/10/02 周四</b><span class="chips"><span class="chip acc">▤ 列表</span><span class="chip">🎵 6 歌</span></span></div>
+<ol class="songs"><li class="srow"><span class="dot" style="--song-hue:265"></span><span class="off">12:04</span><span class="ti">1. 夜航</span><span class="du">3:42</span></li>
+<li class="srow on"><span class="dot" style="--song-hue:322"></span><span class="off">18:31</span><span class="ti">2. 未接来电</span><span class="du">4:10</span></li></ol></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+<section class="section">
+<h2>泳道标签样式</h2>
+<div class="grid2">
+<div class="panel col">
+<div class="cap"><b>紧凑两行式</b>（现行）：日期 + 星期 / 列表 + 统计</div>
+<div class="frame tall" style="overflow:visible">
+<div class="scroll">
+<div class="content tight demo-lane">
+<div class="llabel"><div class="ll-top"><b>10/02</b><i>周四</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">5 歌 · 21.3min</span></div></div>
+<div class="ltrack"><span class="song" style="left:8%;width:13%;--song-hue:265"></span><span class="song" style="left:38%;width:16%;--song-hue:322"></span></div>
+</div>
+<div class="content tight demo-lane" style="padding-top:0">
+<div class="llabel"><div class="ll-top"><b>10/05</b><i>周日</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">7 歌 · 34.8min</span></div></div>
+<div class="ltrack"><span class="song" style="left:16%;width:10%;--song-hue:196"></span><span class="song" style="left:44%;width:18%;--song-hue:150"></span></div>
+</div>
+<div class="content tight demo-lane" style="padding-top:0">
+<div class="llabel"><div class="ll-top"><b>10/11</b><i>周六</i></div>
+<div class="ll-bot"><span class="ll-link">▤ 列表</span><span class="ll-meta">4 歌 · 16.2min</span></div></div>
+<div class="ltrack"><span class="song" style="left:20%;width:20%;--song-hue:340"></span></div>
+</div>
+</div>
+</div>
+</div>
+<div class="panel col">
+<div class="cap"><b>悬浮式</b>：默认只显示日期数字，hover 浮出完整信息卡</div>
+<div class="frame tall" style="overflow:visible">
+<div class="scroll" style="overflow:visible">
+<div class="content tight demo-lane">
+<div class="flabel"><span class="fnum">02</span>
+<div class="fcard"><b>2025/10/02 周四</b><div>15:57 开播 · 5 歌 · 21.3min</div><span class="ll-link">▤ 加入播放列表</span></div></div>
+<div class="ltrack"><span class="song" style="left:8%;width:13%;--song-hue:265"></span><span class="song" style="left:38%;width:16%;--song-hue:322"></span></div>
+</div>
+<div class="content tight demo-lane" style="padding-top:0">
+<div class="flabel"><span class="fnum">05</span>
+<div class="fcard"><b>2025/10/05 周日</b><div>20:11 开播 · 7 歌 · 34.8min</div><span class="ll-link">▤ 加入播放列表</span></div></div>
+<div class="ltrack"><span class="song" style="left:16%;width:10%;--song-hue:196"></span><span class="song" style="left:44%;width:18%;--song-hue:150"></span></div>
+</div>
+<div class="content tight demo-lane" style="padding-top:0">
+<div class="flabel"><span class="fnum">11</span>
+<div class="fcard"><b>2025/10/11 周六</b><div>19:42 开播 · 4 歌 · 16.2min</div><span class="ll-link">▤ 加入播放列表</span></div></div>
+<div class="ltrack"><span class="song" style="left:20%;width:20%;--song-hue:340"></span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+<script>
+(function () {
+var N = ['现行紫', '青碧', '晨蓝', '暮橘', '墨夜(暗色)'];
+var C = [
+['#ffffff','#f4f4f5','#e4e4e7','#27272a','#7c5cfc','#ffffff','#f59e0b','#e8e8ec','70%','60%'],
+['#fafaf9','#f5f5f4','#e7e5e4','#292524','#0d9488','#ffffff','#f59e0b','#dedcd9','70%','58%'],
+['#f8fafc','#f1f5f9','#e2e8f0','#0f172a','#2563eb','#ffffff','#f59e0b','#dbe3ec','72%','58%'],
+['#fffdf9','#faf5ef','#ece4d8','#44403c','#ea580c','#ffffff','#d97706','#e6ddcc','74%','56%'],
+['#18181b','#27272a','#3f3f46','#fafafa','#a78bfa','#18181b','#fbbf24','#2a2a2e','65%','62%']
+];
+var V = ['--color-base-100','--color-base-200','--color-base-300','--color-base-content','--color-accent','--color-accent-content','--color-accent-muted','--color-warning','--color-grid','--color-song-hue-sat','--color-song-hue-light'];
+var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+var tok = document.getElementById('tok');
+var tokName = document.getElementById('tok-name');
+function render(i) {
+var c = C[i], lines = [];
+for (var k = 0; k < 4; k++) lines.push(V[k] + ': ' + c[k] + ';');
+lines.push(V[4] + ': ' + c[4] + ';', V[5] + ': ' + c[5] + ';');
+lines.push(V[6] + ': color-mix(in oklab, ' + c[4] + ' 12%, ' + c[0] + ');');
+lines.push(V[7] + ': ' + c[6] + ';', V[8] + ': ' + c[7] + ';');
+lines.push(V[9] + ': ' + c[8] + ';', V[10] + ': ' + c[9] + ';');
+tokName.textContent = N[i];
+tok.textContent = '@theme {\n  ' + lines.join('\n  ') + '\n}';
+}
+function select(i) {
+document.documentElement.setAttribute('data-pal', String(i));
+tabs.forEach(function (b, k) { b.setAttribute('aria-selected', k === i ? 'true' : 'false'); });
+render(i);
+}
+tabs.forEach(function (b, i) {
+b.addEventListener('click', function () { select(i); });
+b.addEventListener('keydown', function (e) {
+var j = e.key === 'ArrowRight' ? (i + 1) % tabs.length
+: e.key === 'ArrowLeft' ? (i - 1 + tabs.length) % tabs.length : -1;
+if (j >= 0) { e.preventDefault(); tabs[j].focus(); select(j); }
+});
+});
+var copy = document.getElementById('copy');
+copy.addEventListener('click', function () {
+var text = tok.textContent, old = copy.textContent;
+function done() {
+copy.textContent = '已复制 ✓';
+setTimeout(function () { copy.textContent = old; }, 1200);
+}
+if (navigator.clipboard && navigator.clipboard.writeText) {
+navigator.clipboard.writeText(text).then(done, done);
+} else { done(); }
+});
+select(0);
+})();
+</script>
+</body>
+</html>

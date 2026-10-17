@@ -1,14 +1,16 @@
 <script lang="ts">
   import type { Recording, Clip } from './types';
-  import { fmtDur, dateCard } from './types';
+  import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { ListMusic } from 'lucide-svelte';
+  import HourAxis from './components/HourAxis.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
   const DAY = 86400;
   let tip = $state<{ x: number; y: number; html: string } | null>(null);
+  let laneWidth = $state(0);
 
   interface SongBlock {
     start: number; // 绝对 epoch
@@ -80,57 +82,56 @@
     adopt(tracks, 0);
   }
 
-  const nticks = 48; // 每 30min 一格
   const xPct = (abs: number, dayStart: number) =>
     Math.min(100, Math.max(0, ((abs - dayStart) / DAY) * 100));
 </script>
 
 <div class="overflow-x-auto">
-  <div class="min-w-[860px]">
-    <div class="relative mb-1 ml-[188px] h-4">
-      {#each Array(13) as _, h}
-        {@const hour = h * 2}
-        <span
-          class="absolute top-0 text-[10px] opacity-40 {hour === 24 ? '-translate-x-full' : '-translate-x-1/2'}"
-          style:left={(hour / 24) * 100 + '%'}>{String(hour).padStart(2, '0')}:00</span>
+  <div class="flex">
+    <div class="w-24 shrink-0">
+      <div class="mb-1 h-5"></div>
+      {#each lanes as lane (lane.dayStart)}
+        {@const dc = dateCard(lane.dayStart)}
+        <div class="mb-2 flex h-10 flex-col justify-center">
+          <div class="flex items-center gap-1">
+            <span class="text-sm font-bold tabular-nums">{dc.md}</span>
+            <span class="text-2xs opacity-60">{dc.wd}</span>
+            {#if lane.recs.length > 1}
+              <span class="rounded-full border px-1 text-2xs opacity-70">{lane.recs.length} 场</span>
+            {/if}
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button
+              class="flex items-center gap-0.5 text-2xs text-accent transition hover:opacity-80"
+              title="把这天的歌加入播放列表"
+              onclick={() => playDay(lane)}
+            >
+              <ListMusic class="h-3 w-3" /> 列表
+            </button>
+            <span class="truncate text-2xs tabular-nums opacity-60"
+              >{lane.clipCount} 歌 · {fmtDur(lane.songDur)}</span
+            >
+          </div>
+        </div>
       {/each}
     </div>
 
-    {#each lanes as lane (lane.dayStart)}
-      {@const dc = dateCard(lane.dayStart)}
-      <div class="mb-2 flex items-center gap-3">
-        <div class="w-44 shrink-0">
-          <div class="flex items-baseline gap-1.5">
-            <span class="text-sm font-semibold tabular-nums">{dc.md}</span>
-            <span class="text-xs opacity-70">{dc.wd}</span>
-            {#if lane.recs.length > 1}<span class="text-[10px] opacity-50">{lane.recs.length} 场</span>{/if}
-          </div>
-          <div class="text-[10px] tabular-nums opacity-60">
-            {lane.clipCount} 歌 · 总 {fmtDur(lane.songDur)}
-          </div>
-          <button
-            class="mt-0.5 flex items-center gap-1 text-[10px] text-accent transition hover:opacity-80"
-            title="把这天的歌加入播放列表"
-            onclick={() => playDay(lane)}
-          >
-            <ListMusic class="h-3 w-3" /> 列表
-          </button>
-        </div>
+    <div class="min-w-0 flex-1" bind:clientWidth={laneWidth}>
+      <div class="mb-1"><HourAxis width={laneWidth} /></div>
 
-        <div class="relative h-8 flex-1 rounded bg-base-300/40">
-          {#each Array(nticks + 1) as _, i}
-            <div class="absolute top-0 h-full w-px bg-base-content/10" style:left={(i / nticks) * 100 + '%'}></div>
-          {/each}
-
+      {#each lanes as lane (lane.dayStart)}
+        <div class="relative mb-2 h-10 rounded bg-base-300/40">
           {#each lane.songs as b, bi (bi)}
             {@const x1 = xPct(b.start, lane.dayStart)}
             {@const x2 = xPct(b.end, lane.dayStart)}
+            {@const hue = hueOf(b.clip.title)}
             {@const active = player.track?.clip.file === b.clip.file}
             <div
-              class="absolute top-1.5 h-5 rounded-sm bg-accent transition-transform hover:scale-y-110"
+              class="absolute top-2.5 h-5 rounded-sm transition hover:brightness-110"
               class:ring-2={active}
               class:ring-accent={active}
               style:left={x1 + '%'}; style:width={Math.max(x2 - x1, 0.15) + '%'}
+              style:background="hsl({hue} 70% 60%)"
               role="button" tabindex="0"
               onclick={() => playSong(b)}
               onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playSong(b); } }}
@@ -139,12 +140,12 @@
             ></div>
           {/each}
         </div>
-      </div>
-    {/each}
-
-    <div class="mt-4 flex items-center gap-4 pl-48 text-xs">
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
+      {/each}
     </div>
+  </div>
+
+  <div class="mt-4 flex items-center gap-4 pl-24 text-xs">
+    <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
   </div>
 </div>
 

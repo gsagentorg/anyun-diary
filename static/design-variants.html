@@ -93,6 +93,13 @@ pre{margin:0;padding:12px;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consol
 .col{padding:12px}
 .cap{font-size:12px;color:var(--ui-dim);margin-bottom:8px}
 .cap b{color:var(--ui-fg)}
+html[data-pal="5"]{
+--color-base-100:#ffffff;--color-base-200:#f7f4fb;--color-base-300:#ece5f4;
+--color-base-content:#3b3450;--color-accent:#8a6cc9;--color-accent-content:#ffffff;
+--color-accent-muted:color-mix(in oklab,#8a6cc9 12%,#ffffff);
+--color-warning:#e0608e;--color-grid:#ece6f4;
+--color-song-hue-sat:62%;--color-song-hue-light:64%;
+}
 html[data-pal="0"]{
 --color-base-100:#ffffff;--color-base-200:#f4f4f5;--color-base-300:#e4e4e7;
 --color-base-content:#27272a;--color-accent:#7c5cfc;--color-accent-content:#ffffff;
@@ -143,6 +150,7 @@ html[data-pal="4"]{
 <button role="tab" aria-selected="false">晨蓝</button>
 <button role="tab" aria-selected="false">暮橘</button>
 <button role="tab" aria-selected="false">墨夜(暗色)</button>
+<button role="tab" aria-selected="false">主播色调</button>
 </div>
 <div class="frame">
 <div class="scroll">
@@ -318,8 +326,9 @@ html[data-pal="4"]{
 </div>
 <script>
 (function () {
-var N = ['现行紫', '青碧', '晨蓝', '暮橘', '墨夜(暗色)'];
+var N = ['主播色调', '现行紫', '青碧', '晨蓝', '暮橘', '墨夜(暗色)'];
 var C = [
+['#ffffff','#f7f4fb','#ece5f4','#3b3450','#8a6cc9','#ffffff','#e0608e','#ece6f4','62%','64%'],
 ['#ffffff','#f4f4f5','#e4e4e7','#27272a','#7c5cfc','#ffffff','#f59e0b','#e8e8ec','70%','60%'],
 ['#fafaf9','#f5f5f4','#e7e5e4','#292524','#0d9488','#ffffff','#f59e0b','#dedcd9','70%','58%'],
 ['#f8fafc','#f1f5f9','#e2e8f0','#0f172a','#2563eb','#ffffff','#f59e0b','#dbe3ec','72%','58%'],

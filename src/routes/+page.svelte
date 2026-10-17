@@ -9,10 +9,44 @@
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
-  import { ListMusic } from 'lucide-svelte';
+  import { ListMusic, ChevronDown } from 'lucide-svelte';
+  import Chip from '$lib/components/Chip.svelte';
+  import { onMount } from 'svelte';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
+
+  // 直播间状态
+  type LiveInfo = {
+    live: boolean | null;
+    title: string | null;
+    area: string | null;
+    cover: string | null;
+    checkedAt: string;
+  };
+  const LIVE_URL = 'https://live.bilibili.com/1732283852';
+  const LIVE_EMBED = 'https://live.bilibili.com/blanc/1732283852?lite=true';
+  let liveInfo = $state<LiveInfo | null>(null);
+  let liveOpen = $state(true);
+
+  onMount(() => {
+    liveOpen = window.matchMedia('(min-width: 768px)').matches;
+  });
+
+  $effect(() => {
+    let id: ReturnType<typeof setInterval> | undefined;
+    const load = async () => {
+      try {
+        const res = await fetch('/api/live');
+        liveInfo = (await res.json()) as LiveInfo;
+      } catch {
+        liveInfo = null;
+      }
+    };
+    load();
+    id = setInterval(load, 60_000);
+    return () => clearInterval(id);
+  });
 
   // 缺字段的录像（未导出切片/无时长）补空数组，避免组件里 undefined.length
   const recordings: Recording[] = (data.recordings as Recording[]).map((r) => ({
@@ -46,11 +80,18 @@
     class="sticky top-0 z-30 -mx-4 mb-4 border-b border-base-300 bg-base-100/85 px-4 backdrop-blur sm:-mx-6 sm:mb-6 sm:px-6 lg:-mx-8 lg:px-8"
   >
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
-      <div class="min-w-0">
-        <h1 class="text-lg font-bold tracking-tight leading-none">安允日记</h1>
-        <p class="mt-1 hidden text-xs opacity-60 lg:block">
-          直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
-        </p>
+      <div class="flex items-center gap-2">
+        <img
+          src="/brand/avatar.jpg"
+          alt="安允日记"
+          class="h-8 w-8 shrink-0 rounded-full border border-base-300 object-cover"
+        />
+        <div class="min-w-0">
+          <h1 class="text-lg font-bold tracking-tight leading-none">安允日记</h1>
+          <p class="mt-1 hidden text-xs opacity-60 lg:block">
+            直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
+          </p>
+        </div>
       </div>
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
@@ -80,6 +121,72 @@
       </div>
     </div>
   </header>
+
+  <section class="mb-4 sm:mb-6" aria-label="直播间">
+    <button
+      class="flex w-full items-center gap-2 rounded-md px-1 py-2 text-sm transition hover:bg-base-200"
+      onclick={() => (liveOpen = !liveOpen)}
+      aria-expanded={liveOpen}
+    >
+      <span
+        class="h-2 w-2 shrink-0 rounded-full {liveInfo?.live
+          ? 'animate-pulse bg-red-500'
+          : 'bg-base-300'}"
+      ></span>
+      <span>直播间</span>
+      <ChevronDown
+        class="ml-auto h-4 w-4 transition-transform {liveOpen ? 'rotate-180' : ''}"
+      />
+    </button>
+
+    {#if liveOpen && liveInfo && liveInfo.live === true}
+      <div class="overflow-hidden rounded-lg border border-base-300">
+        <div class="flex items-center gap-2 px-3 py-2">
+          <Chip variant="warning">
+            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500"></span>
+            直播中
+          </Chip>
+          <span class="min-w-0 truncate text-sm font-medium">{liveInfo.title ?? '安允日记'}</span>
+          {#if liveInfo.area}
+            <span class="hidden shrink-0 text-2xs opacity-60 sm:inline">{liveInfo.area}</span>
+          {/if}
+          <a
+            href={LIVE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="ml-auto shrink-0 rounded-full border border-accent px-3 py-1 text-2xs text-accent transition hover:bg-base-200"
+          >
+            去直播间
+          </a>
+        </div>
+        <iframe
+          src={LIVE_EMBED}
+          title="安允日记 直播间"
+          class="block w-full aspect-video"
+          allowfullscreen
+          loading="lazy"
+          referrerpolicy="no-referrer-when-downgrade"
+        ></iframe>
+      </div>
+    {:else if liveOpen && liveInfo && liveInfo.live === false}
+      <div class="flex items-center gap-3 rounded-lg border border-base-300 p-2">
+        <img
+          src="/brand/cover.jpg"
+          alt="直播间封面"
+          class="h-14 w-24 shrink-0 rounded-md object-cover"
+        />
+        <div class="min-w-0">
+          <p class="text-sm">当前未开播</p>
+          {#if liveInfo.title}
+            <p class="truncate text-2xs opacity-60">最近：{liveInfo.title}</p>
+          {/if}
+        </div>
+        <a href={LIVE_URL} target="_blank" rel="noopener noreferrer" class="ml-auto shrink-0">
+          <Chip variant="accent">去直播间</Chip>
+        </a>
+      </div>
+    {/if}
+  </section>
 
   <Sheet open={plOpen} onClose={() => (plOpen = false)} title="播放列表">
     <Playlist {recordings} bind:open={plOpen} />

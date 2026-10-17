@@ -22,21 +22,21 @@
 
   /* 色彩 */
   --color-base-100: #ffffff;
-  --color-base-200: #f4f4f5;
-  --color-base-300: #e4e4e7;
-  --color-base-content: #27272a;
-  --color-accent: #7c5cfc;
+  --color-base-200: #f7f4fb;
+  --color-base-300: #ece5f4;
+  --color-base-content: #3b3450;
+  --color-accent: #8a6cc9;
   --color-accent-content: #ffffff;
-  --color-accent-muted: color-mix(in oklab, #7c5cfc 12%, #ffffff);
-  --color-warning: #f59e0b;
+  --color-accent-muted: color-mix(in oklab, #8a6cc9 12%, #ffffff);
+  --color-warning: #e0608e;
   --color-warning-content: #ffffff;
-  --color-grid: #e8e8ec; /* 时间刻度线 */
+  --color-grid: #ece6f4; /* 时间刻度线 */
 }
 
 :root {
   /* 歌曲色相派生参数（供组件按需使用） */
-  --color-song-hue-sat: 70%;
-  --color-song-hue-light: 60%;
+  --color-song-hue-sat: 62%;
+  --color-song-hue-light: 64%;
 }
 
 html {

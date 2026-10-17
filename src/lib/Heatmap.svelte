@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { blocksOf, fmtDay, fmtClock, fmtDur } from './types';
+  import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { ListMusic } from 'lucide-svelte';
 
@@ -25,7 +26,7 @@
 
     {#each recordings as rec (rec.file)}
       {@const blocks = blocksOf(rec)}
-      {@const dayStart = Math.floor(rec.start / DAY) * DAY}
+      {@const dayStart = shDayStart(rec.start)}
       <div class="mb-2 flex items-center gap-3">
         <div class="w-40 shrink-0 text-right">
           <div class="text-xs font-medium">{fmtDay(rec.start)}</div>

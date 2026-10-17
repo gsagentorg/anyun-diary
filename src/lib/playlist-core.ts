@@ -107,6 +107,14 @@ export function trackKeyOf(clip: { title: string; file: string }): string {
 }
 
 /**
+ * epoch 秒 → Asia/Shanghai 当天 0 点的 epoch 秒。
+ * 注意：直接 floor(epoch/86400)*86400 得到的是 UTC 日界（=北京早上 8 点），会整体偏 8 小时。
+ */
+export function shDayStart(epoch: number): number {
+  return Math.floor((epoch + 8 * 3600) / 86400) * 86400 - 8 * 3600;
+}
+
+/**
  * 随机挑下标：已播过的「曲目」（同名歌曲一并算已播）优先不抽；
  * 池抽干时重置（返回 reset=true），仅避开当前项。
  * @param keys 播放列表每项的 trackKey

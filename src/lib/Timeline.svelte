@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Recording, Clip } from './types';
   import { fmtDur, dateCard } from './types';
+  import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { ListMusic, MoonStar } from 'lucide-svelte';
 
@@ -33,7 +34,7 @@
   const lanes = $derived.by(() => {
     const map = new Map<number, { recs: Recording[]; songs: SongBlock[] }>();
     for (const rec of recordings) {
-      const dayStart = Math.floor(rec.start / DAY) * DAY;
+      const dayStart = shDayStart(rec.start);
       let lane = map.get(dayStart);
       if (!lane) { lane = { recs: [], songs: [] }; map.set(dayStart, lane); }
       lane.recs.push(rec);
@@ -101,11 +102,12 @@
 
 <div class="overflow-x-auto">
   <div class="min-w-[860px]">
-    <div class="mb-1 flex pl-48">
-      {#each Array(25) as _, h}
-        {#if h % 2 === 0}
-          <span class="text-center text-[10px] opacity-40" style:width={2 / 25 * 100 + '%'}>{String(h).padStart(2, '0')}:00</span>
-        {/if}
+    <div class="relative mb-1 ml-[188px] h-4">
+      {#each Array(13) as _, h}
+        {@const hour = h * 2}
+        <span
+          class="absolute top-0 text-[10px] opacity-40 {hour === 24 ? '-translate-x-full' : '-translate-x-1/2'}"
+          style:left={(hour / 24) * 100 + '%'}>{String(hour).padStart(2, '0')}:00</span>
       {/each}
     </div>
 
@@ -131,7 +133,7 @@
         </div>
 
         <div class="relative h-8 flex-1 rounded bg-base-300/40">
-          {#each Array(nticks) as _, i}
+          {#each Array(nticks + 1) as _, i}
             <div class="absolute top-0 h-full w-px bg-base-content/10" style:left={(i / nticks) * 100 + '%'}></div>
           {/each}
 

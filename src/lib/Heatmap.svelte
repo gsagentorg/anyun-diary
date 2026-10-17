@@ -1,79 +1,124 @@
 <script lang="ts">
   import type { Recording } from './types';
-  import { blocksOf, fmtDay, fmtClock, fmtDur } from './types';
   import { shDayStart } from './playlist-core';
-  import { player, playClip, adopt, buildRecTracks } from './player.svelte';
-  import { ListMusic } from 'lucide-svelte';
+  import { fmtDur } from './types';
+  import { adopt, buildRecTracks } from './player.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
 
-  // 横向: 一天 24h; 纵向: 每个录像一行（按开播时间排序）
-  const DAY = 86400;
-  let tip = $state<{ x: number; y: number; html: string } | null>(null);
+  interface Cell {
+    day: number;       // 当天 0 点 epoch
+    hour: number;      // 0-23
+    seconds: number;   // 该小时唱歌总秒数
+    count: number;     // 歌数
+    dayRecs: Recording[];
+  }
 
-  function hourLabel(h: number) {
-    return `${String(h).padStart(2, '0')}:00`;
+  const md = (epoch: number) =>
+    new Date(epoch * 1000).toLocaleDateString('zh-CN', {
+      timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
+    });
+
+  // 聚合：天 × 小时 → 唱歌秒数（切片跨小时时按占比拆分）
+  const { days, cells, maxSeconds } = $derived.by(() => {
+    const cellMap = new Map<string, Cell>();
+    const daySet = new Map<number, Recording[]>();
+    for (const rec of recordings) {
+      const day = shDayStart(rec.start);
+      const arr = daySet.get(day) ?? [];
+      arr.push(rec);
+      daySet.set(day, arr);
+      for (const c of rec.clips ?? []) {
+        let s = rec.start + c.offsetStart;
+        const end = rec.start + c.offsetEnd;
+        while (s < end) {
+          const day = shDayStart(s);
+          const hour = Math.min(23, Math.max(0, Math.floor((s - day) / 3600)));
+          const hourEnd = day + (hour + 1) * 3600;
+          const seg = Math.min(end, hourEnd) - s;
+          const key = day + '|' + hour;
+          const cell = cellMap.get(key) ?? { day, hour, seconds: 0, count: 0, dayRecs: [] };
+          cell.seconds += seg;
+          cell.count += 1;
+          cellMap.set(key, cell);
+          s = hourEnd;
+        }
+      }
+    }
+    const days = [...daySet.keys()].sort((a, b) => a - b);
+    const cells = [...cellMap.values()];
+    for (const c of cells) c.dayRecs = daySet.get(c.day) ?? [];
+    const maxSeconds = Math.max(1, ...cells.map((c) => c.seconds));
+    return { days, cells, maxSeconds };
+  });
+
+  const cellAt = (day: number, hour: number) => cells.find((c) => c.day === day && c.hour === hour);
+
+  let tip = $state<{ x: number; y: number; html: string } | null>(null);
+  function show(e: MouseEvent, c: Cell) {
+    tip = {
+      x: e.clientX, y: e.clientY,
+      html: `<b>${md(c.day)} ${String(c.hour).padStart(2, '0')}:00–${String(c.hour + 1).padStart(2, '0')}:00</b><br>${c.count} 首 · 唱了 ${fmtDur(c.seconds)}`,
+    };
+  }
+
+  function bg(c: Cell | undefined): string {
+    if (!c || c.seconds <= 0) return 'hsl(0 0% 50% / 0.12)';
+    const r = Math.min(1, c.seconds / maxSeconds);
+    return `hsl(258 80% 60% / ${0.15 + 0.8 * r})`;
+  }
+
+  function playDay(c: Cell) {
+    const tracks = c.dayRecs
+      .flatMap((r) => buildRecTracks(r))
+      .sort((a, b) => a.rec.start + a.clip.offsetStart - (b.rec.start + b.clip.offsetStart));
+    if (tracks.length) adopt(tracks, 0);
   }
 </script>
 
 <div class="overflow-x-auto">
   <div class="min-w-[860px]">
-    <div class="mb-1 flex pl-40">
-      {#each Array(24) as _, h}
-        <span class="flex-1 text-center text-[10px] opacity-50">{hourLabel(h)}</span>
-      {/each}
-    </div>
+    <div class="flex">
+      <!-- 纵轴：0-23 时 -->
+      <div class="w-10 shrink-0 pt-6">
+        {#each Array(24) as _, h}
+          {#if h % 3 === 0}
+            <div class="text-right text-[9px] leading-[14px] opacity-40">{String(h).padStart(2, '0')}</div>
+          {:else}
+            <div class="leading-[14px]"></div>
+          {/if}
+        {/each}
+      </div>
 
-    {#each recordings as rec (rec.file)}
-      {@const blocks = blocksOf(rec)}
-      {@const dayStart = shDayStart(rec.start)}
-      <div class="mb-2 flex items-center gap-3">
-        <div class="w-40 shrink-0 text-right">
-          <div class="text-xs font-medium">{fmtDay(rec.start)}</div>
-          <div class="text-[10px] opacity-60">{fmtClock(rec.start)}</div>
-          <button
-            class="mt-0.5 flex items-center gap-1 text-[10px] text-accent transition hover:opacity-80"
-            title="把这天的歌加入播放列表"
-            onclick={() => adopt(buildRecTracks(rec), 0)}
-          >
-            <ListMusic class="h-3 w-3" /> 列表
-          </button>
-        </div>
-        <div class="relative h-7 flex-1 rounded bg-base-200/50">
-          {#each Array(24) as _, h}
-            <div class="absolute top-0 h-full w-px bg-base-content/10"
-              style:left={(h / 24) * 100 + '%'}></div>
-          {/each}
-          {#each blocks as b, bi (bi)}
-            {#if b.kind === 'song' && b.clip}
-              {@const clipIdx = (rec.clips ?? []).findIndex((c) => c.file === b.clip!.file)}
-              {@const active = player.track?.clip.file === b.clip!.file}
-              {@const x1 = Math.min(100, Math.max(0, ((rec.start + b.start - dayStart) / DAY) * 100))}
-              {@const x2 = Math.min(100, Math.max(0, ((rec.start + b.end - dayStart) / DAY) * 100))}
+      <!-- 主体：每天一列 -->
+      <div class="flex flex-1 gap-[3px]">
+        {#each days as day (day)}
+          <div class="flex flex-1 flex-col gap-[2px]">
+            {#each Array(24) as _, h}
+              {@const c = cellAt(day, h)}
               <div
-                class="absolute top-1 h-5 rounded-sm bg-accent hover:scale-y-110 transition-transform"
-                class:ring-2={active}
-                class:ring-accent={active}
-                style:left={x1 + '%'};
-                style:width={Math.max(x2 - x1, 0.3) + '%'}
-                role="button" tabindex="0"
-                onclick={() => { if (clipIdx >= 0) playClip(rec, clipIdx); }}
-                onkeydown={(e) => { if ((e.key === 'Enter' || e.key === ' ') && clipIdx >= 0) { e.preventDefault(); playClip(rec, clipIdx); } }}
-                onmousemove={(e) => {
-                  const abs = (s: number) => new Date((rec.start + s) * 1000)
-                    .toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-                  tip = { x: e.clientX, y: e.clientY, html: `<b>${b.clip?.title || '（未识别）'}</b><br>${abs(b.start)} · ${fmtDur(b.end - b.start)}` };
-                }}
+                class="h-[12px] rounded-[3px] transition-transform hover:scale-110"
+                style:background={bg(c)}
+                role={c ? 'button' : undefined}
+                tabindex={c ? 0 : undefined}
+                onclick={c ? () => playDay(c) : undefined}
+                onkeydown={(e) => { if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); playDay(c); } }}
+                onmousemove={(e) => c && show(e, c)}
                 onmouseleave={() => (tip = null)}
               ></div>
-            {/if}
-          {/each}
-        </div>
+            {/each}
+            <div class="mt-1 text-center text-[9px] tabular-nums opacity-50">{md(day).slice(3)}</div>
+          </div>
+        {/each}
       </div>
-    {/each}
+    </div>
 
-    <div class="mt-4 flex gap-4 pl-40 text-xs">
-      <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
+    <div class="mt-4 flex items-center gap-2 pl-10 text-xs">
+      <span class="opacity-60">少</span>
+      {#each [0.12, 0.3, 0.5, 0.7, 0.95] as o}
+        <span class="h-3 w-3 rounded-[3px]" style:background={`hsl(258 80% 60% / ${o})`}></span>
+      {/each}
+      <span class="opacity-60">多（颜色 = 该小时唱歌时长；点击格子装载当天播放列表）</span>
     </div>
   </div>
 </div>

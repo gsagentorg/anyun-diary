@@ -97,12 +97,17 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 
 ## 本地常驻（可选）
 
-本项目开发期用 `vite dev` 常驻 + 独立 frpc 容器暴露到公网（**不触碰系统 frpc**）：
+本项目常驻三件套（systemd user 单元）：生产 node 服务、开发 vite dev、独立 frpc（**不触碰系统 frpc**）：
 
 ```bash
-systemctl --user status anyun-diary-dev.service     # vite dev on 0.0.0.0:4173
-podman ps | grep anyun-frpc                          # 隧道 → anyun-diary.public.bcw2.top:3004
+systemctl --user status anyun-diary-web.service    # 生产（adapter-node build，:4173）
+systemctl --user status anyun-diary-dev.service    # 开发（vite dev，:5173）
+systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据，不碰系统 frpc）
+# 隧道：生产 anyun-diary.public.bcw2.top:3004 / 开发 anyun-diary-dev.public.bcw2.top:3004
 ```
+
+> 注意：frpc 的 `serverAddr` 钉的是 `192.168.1.51`（LAN）。`cloud.bcw2.top` 在容器/公网 DNS
+> 下会解析到另一台机器（115.195.46.106），那边的 frps 不被 nginx:3004 前置——注册“成功”也不会路由（曾导致整站 404）。
 
 ## 已知限制
 

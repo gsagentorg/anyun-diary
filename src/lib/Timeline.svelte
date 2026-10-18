@@ -86,7 +86,7 @@
   function showBlank(e: MouseEvent, s: Seg) {
     tip = {
       x: e.clientX, y: e.clientY,
-      html: `空 ${fmtDur(s.minutes * 60)} · 压至 1/${Math.round(s.c ?? 1)}`,
+      html: '空 ' + fmtDur(s.minutes * 60) + ' · ' + (s.c ?? 0).toFixed(1) + ' 分钟/像素',
     };
   }
   function playSong(b: SongBlock) {
@@ -148,12 +148,18 @@
     }
     return m;
   });
-  const legendBlankRgb = $derived.by(() => {
-    const ls = [...grayMap.values()];
-    if (ls.length === 0) return 'rgb(120, 120, 120)';
-    const mid = ls.reduce((a, b) => a + b, 0) / ls.length;
-    const rgb = lstarToRgb(mid);
-    return 'rgb(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ')';
+  const legendGray = $derived.by(() => {
+    const ds: number[] = [];
+    for (const e of laneScales) {
+      if (!e.scale) continue;
+      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null && sg.width >= 2) ds.push(sg.c);
+    }
+    if (ds.length === 0) return { css: 'rgb(120, 120, 120)', dMin: 0, dMax: 0 };
+    const dMin = Math.min(...ds), dMax = Math.max(...ds);
+    const light = lstarToRgb(lstarForRange(dMin, dMin, dMax));
+    const dark = lstarToRgb(lstarForRange(dMax, dMin, dMax));
+    const css = 'linear-gradient(to right, rgb(' + light[0] + ', ' + light[1] + ', ' + light[2] + '), rgb(' + dark[0] + ', ' + dark[1] + ', ' + dark[2] + '))';
+    return { css, dMin, dMax };
   });
 </script>
 
@@ -281,10 +287,12 @@
   <div class="mt-4 flex items-center gap-4 pl-24 text-xs">
     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
     {#if laneMode === 'compress'}
-      <span class="flex items-center gap-1">
-        <span class="h-3 w-3 rounded-sm" style="background:{legendBlankRgb}"></span>
-        灰度=空白压缩程度
-      </span>
+<span class="flex items-center gap-1">
+          <span class="text-2xs opacity-60 tabular-nums">{legendGray.dMin.toFixed(1)} 分/px</span>
+          <span class="h-3 w-16 rounded-sm" style="background:{legendGray.css}"></span>
+          <span class="text-2xs opacity-60 tabular-nums">{legendGray.dMax.toFixed(1)} 分/px</span>
+          空白时长密度（灰度×长度 = 空白时长）
+        </span>
     {/if}
   </div>
   {/if}

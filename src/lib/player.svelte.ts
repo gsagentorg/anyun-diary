@@ -66,6 +66,7 @@ function updateMediaSession(t: Track) {
     title: t.clip.title || '（未识别）',
     artist: '安允日记',
     album: md ? `安允日记 · ${md}` : '安允日记',
+    artwork: [{ src: '/brand/cover.jpg', sizes: 'any', type: 'image/jpeg' }],
   });
   if (!mediaHandlersBound) {
     mediaHandlersBound = true;

@@ -191,7 +191,7 @@
                 class:ring-2={active}
                 class:ring-accent={active}
                 style:left={x1 + '%'}; style:width={Math.max(x2 - x1, 0.15) + '%'}
-                style:background="hsl({hue} 70% 60%)"
+                style:background="hsl({hue} var(--color-song-hue-sat) var(--color-song-hue-light))"
                 role="button" tabindex="0"
                 onclick={() => playSong(b)}
                 onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playSong(b); } }}
@@ -251,7 +251,7 @@
                     class:ring-2={active}
                     class:ring-accent={active}
                     style:left={HIT_PAD + 'px'} style:width={visW + 'px'}
-                    style:background="hsl({hue} 70% 60%)"
+                    style:background="hsl({hue} var(--color-song-hue-sat) var(--color-song-hue-light))"
                   >
                     {#if visW >= 64}
                       <span

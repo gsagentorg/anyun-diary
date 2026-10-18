@@ -4,22 +4,19 @@
   import { tracksInRange, dayStartOf, validRange } from './playlist-core';
   import { onMount } from 'svelte';
   import { fmtDur } from './types';
-  import { Download, Link, ExternalLink, ListMusic, Search, X, Play } from 'lucide-svelte';
+  import { ListMusic, Search, X } from 'lucide-svelte';
 
   let { recordings, open = $bindable(false) }: { recordings: Recording[]; open?: boolean } = $props();
 
   let from = $state('');
   let to = $state('');
   let error = $state('');
-  let copied = $state(false);
 
-  // 从 URL 查询参数预填，保证「外部播放器」链接带上同一范围
-  let origin = $state('');
+  // 从 URL 查询参数预填，保证链接带上同一范围
   onMount(() => {
     const sp = new URLSearchParams(location.search);
     if (!from) from = sp.get('from') ?? '';
     if (!to) to = sp.get('to') ?? '';
-    origin = location.origin; // 歌单里的音频地址按当前页面协议生成（https 场景必需）
   });
 
   // 应用时把范围写回 URL（可分享/刷新保持）
@@ -29,13 +26,6 @@
     if (to) sp.set('to', to); else sp.delete('to');
     history.replaceState(null, '', '?' + sp.toString());
   }
-
-  // 服务端歌单端点：默认 m3u（外部播放器兼容面最广），xspf/pls 可选；inline 交给系统播放器
-  let fmt = $state<'xspf' | 'pls' | 'm3u'>('m3u');
-  const apiPath = $derived(
-    `/api/playlist?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}&format=${fmt}` +
-      (origin ? `&base=${encodeURIComponent(origin)}` : ''),
-  );
 
   // 范围预览：from/to 变化时展示 tracksInRange 结果（不再绑定播放队列）
   const preview = $derived.by(() => {
@@ -63,37 +53,6 @@
     if (n === 0) error = '范围内没有切片';
   }
 
-  function playExternal() {
-    // 直接打开（新标签）：浏览器若注册了 m3u 处理器（VLC）会交给它，否则才下载
-    if (from && to && !validRange(from, to)) {
-      error = '范围无效';
-      return;
-    }
-    error = '';
-    window.open(apiPath, '_blank', 'noopener');
-  }
-
-  function openVlc() {
-    if (from && to && !validRange(from, to)) {
-      error = '范围无效';
-      return;
-    }
-    error = '';
-    const abs = new URL(apiPath, location.origin).toString();
-    // vlc:// 由系统上的 VLC 协议处理器接管（Windows/macOS 通常已注册）
-    location.href = 'vlc://' + abs;
-  }
-
-  async function copyLink() {
-    const abs = new URL(apiPath, location.origin).toString();
-    try {
-      await navigator.clipboard.writeText(abs);
-      copied = true;
-      setTimeout(() => (copied = false), 1500);
-    } catch {
-      error = '复制失败，请手动复制：' + abs;
-    }
-  }
 </script>
 
 <div class="card rounded-xl border bg-base-100 p-4">
@@ -117,47 +76,6 @@
     >
       <Search class="h-3 w-3" /> 生成并插入队列
     </button>
-    <a
-      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      href={apiPath}
-      target="_blank"
-      rel="noopener"
-      title="交给系统里注册的播放器（VLC 等）播放；未注册处理器时浏览器会下载"
-    >
-      <ExternalLink class="h-3 w-3" /> 外部播放器打开
-    </a>
-    <select
-      bind:value={fmt}
-      class="rounded border border-base-300 bg-base-200 px-1.5 py-1 text-xs"
-      aria-label="歌单格式"
-      title="xspf/pls 是逐曲歌单（不会被当成 HLS 分片）；m3u 兼容性最广"
-    >
-      <option value="m3u">.m3u 逐曲歌单</option>
-      <option value="xspf">.xspf 逐曲歌单</option>
-      <option value="pls">.pls 逐曲歌单</option>
-    </select>
-    <button
-      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      onclick={openVlc}
-      title="用 vlc:// 协议直接唤起本机 VLC"
-    >
-      <Play class="h-3 w-3" /> 直开 VLC
-    </button>
-    <button
-      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      onclick={copyLink}
-      title="复制 m3u 端点链接，可粘到 VLC/mpv 里"
-    >
-      {#if copied}<Link class="h-3 w-3 text-accent" /> 已复制{:else}<Link class="h-3 w-3" /> 复制链接{/if}
-    </button>
-    <a
-      class="flex items-center gap-1 rounded border border-base-300 px-2.5 py-1 transition hover:bg-base-200"
-      href={`${apiPath}&download=1`}
-      download="anyun-diary-playlist"
-      title="保存为歌单文件"
-    >
-      <Download class="h-3 w-3" /> 下载
-    </a>
     {#if error}
       <span class="text-warning">{error}</span>
     {/if}

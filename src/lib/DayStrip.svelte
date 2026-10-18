@@ -11,10 +11,6 @@
   // 过滤无切片录像，避免渲染无歌空卡片
   const visible = $derived(recordings.filter((rec) => (rec.clips ?? []).length > 0));
 
-  // 日合计 = 切片时长求和（切片时长精确），不依赖录像 duration
-  const dayDur = (rec: Recording) =>
-    (rec.clips ?? []).reduce((a, c) => a + (c.offsetEnd - c.offsetStart), 0);
-
   let open = $state<string | null>(null);
 </script>
 
@@ -23,7 +19,6 @@
     <div class="sm:col-span-2 xl:col-span-3"><StateHint kind="empty" /></div>
   {/if}
   {#each visible as rec (rec.file)}
-    {@const dur = dayDur(rec)}
     {@const songs = rec.clips ?? []}
     <button
       class="block w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition hover:border-accent"
@@ -40,7 +35,6 @@
             <Chip variant="accent"><ListMusic class="h-3 w-3" /> 列表</Chip>
           </span>
           <Chip>🎵 {songs.length} 歌</Chip>
-          <Chip>共 {fmtDur(dur)}</Chip>
         </div>
       </div>
 
@@ -56,7 +50,7 @@
                 class:text-accent-content={active}
                 onclick={() => playClip(rec, i)}
               >
-                <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} 70% 60%)"></span>
+                <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hue} var(--color-song-hue-sat) var(--color-song-hue-light))"></span>
                 <span class="w-10 shrink-0 text-2xs tabular-nums opacity-50">{fmtOffset(c.offsetStart)}</span>
                 <span class="min-w-0 flex-1 truncate text-sm font-medium">{i + 1}. {c.title || '（未识别）'}</span>
                 <span class="shrink-0 text-xs tabular-nums opacity-60">{fmtDur(c.offsetEnd - c.offsetStart)}</span>

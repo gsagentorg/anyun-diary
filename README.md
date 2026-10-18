@@ -1,11 +1,11 @@
 # 安允日记 · 直播歌单时间线
 
-把 [主锚的直播间](https://live.bilibili.com/1732283852) 的每日录像，做成可浏览、可试听、可导出播放列表的歌单时间线。
+把 [主锚的直播间](https://live.bilibili.com/1732283852) 的每日录像，做成可浏览、可试听的歌单时间线。
 
 - **数据零手填**：全部由**文件名时间戳 + 切片自带的元数据**自动生成，不人工录入。
 - **三种视图**：泳道时间轴 / 日卡片 / 热力图。
 - **内置播放器**：点击任意歌块即播，支持上/下一首、进度、**睡眠定时器**。
-- **动态播放列表**：按 URL 时间范围或面板自定义范围生成，可**内置播放**，也可导出 **m3u 交给外部播放器（VLC/mpv）**。
+- **动态播放列表**：按 URL 时间范围或面板自定义范围生成，仅在浏览器内播放（外部播放器导出已移除）。
 
 > 注：“有音频但没识别出歌”的片段属录制导致，不代表开播，界面不展示。
 
@@ -47,13 +47,12 @@ src/
   app.css                     # Tailwind 主题（base-*/accent/warning）
   routes/
     +page.svelte              # 三视图切换 + 播放列表面板入口
-    api/playlist/+server.ts   # 动态播放列表 m3u 端点（inline，交给系统播放器）
   lib/
     types.ts                  # 类型 + 纯工具（blocksOf/audioUrl/格式化/Track）
     playlist-core.ts          # 纯逻辑：按时间范围取曲、m3u 生成、日期解析
     player.svelte.ts          # 播放器内核：播放列表、上/下一首、睡眠定时器
     Player.svelte             # 底部播放条（含睡眠定时器菜单）
-    Playlist.svelte           # 动态播放列表面板（范围选择 / 内置播放 / 外部播放 / 复制链接）
+    Playlist.svelte           # 动态播放列表面板（范围选择 / 生成并插入队列）
     Timeline.svelte           # 泳道时间轴
     DayStrip.svelte           # 日卡片
     Heatmap.svelte            # 热力图
@@ -67,9 +66,10 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 | 入口 | 行为 |
 | --- | --- |
 | URL | `/?from=2026-10-04&to=2026-10-05` 打开即装载该范围（Asia/Shanghai，含 to 当天） |
-| 顶部「播放列表」 | 打开面板：自定义范围、应用并播放、外部播放、复制链接、下载 |
+| 顶部「播放列表」 | 打开面板：自定义范围、生成并插入队列 |
 | 各视图「列表」按钮 | 时间轴 / 日卡片 / 热力图每行一个，一键把该场次全部曲目加入列表 |
-| 外部播放 | `GET /api/playlist?from=&to=` 返回 `Content-Type: audio/x-mpegurl` + `inline`，浏览器注册了 m3u 处理器（VLC）时直接播放；另有「直开 VLC」（`vlc://`）与「复制链接」 |
+
+> 外部播放器导出（m3u 端点 / VLC 直开 / 复制链接 / 下载）已移除；队列与生成器仅在浏览器内。
 
 ## 睡眠定时器
 
@@ -103,7 +103,7 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
    - `PUBLIC_AUDIO_BASE` = 托管音频的站点地址，例如自建公网入口 `https://anyun-diary.public.bcw2.top:3004`；留空则用同源 `/audio`。
 3. 部署包默认**不含音频**（`.vercelignore` 排除 `static/audio/`，约 264MB）。音频走 `PUBLIC_AUDIO_BASE` 指向的静态托管；若确需随部署包走，删掉该忽略行（注意体积）。
 
-构建产物：`.vercel/output/`（含 `functions/api/playlist` 服务端函数）。
+构建产物：`.vercel/output/`。
 
 ## 本地常驻（可选）
 

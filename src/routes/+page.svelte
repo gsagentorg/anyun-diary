@@ -161,6 +161,7 @@
     {#if plOpen}
       <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
         <Playlist {recordings} bind:open={plOpen} />
+        <QueueOverlay />
       </div>
     {:else}
       <button

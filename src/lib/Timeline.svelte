@@ -3,7 +3,7 @@
   import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
-  import { buildLaneScale, grayLStar, lstarToRgb } from './lane-scale';
+  import { buildLaneScale, grayLStar, lstarToRgb, layoutSongs } from './lane-scale';
   import type { LaneScale, Seg } from './lane-scale';
   import { ListMusic } from 'lucide-svelte';
   import HourAxis from './components/HourAxis.svelte';
@@ -18,6 +18,7 @@
   const CLUSTER_GAP = 600; // 与 lane-scale 默认 M 一致：>=10min 视为一簇间隔
   const LABEL_MIN_GAP = 48;
   const BLOCK_MIN_W = 12;
+  const BLOCK_GAP = 1;
   const HIT_PAD = 6;
 
   let tip = $state<{ x: number; y: number; html: string } | null>(null);
@@ -186,6 +187,13 @@
             lane.dayStart + DAY,
           )}
           {@const labels = scale ? laneLabels(lane.songs, scale) : []}
+          {@const rects = scale
+            ? layoutSongs(
+                lane.songs.map((b) => ({ x0: scale.xAt(b.start), x1: scale.xAt(b.end) })),
+                BLOCK_MIN_W,
+                BLOCK_GAP,
+              )
+            : []}
           <div class="relative mb-2 h-10">
             {#if scale}
               {#each scale.segs as s (s.t0)}
@@ -209,12 +217,9 @@
                 </div>
               {/each}
               {#each lane.songs as b, bi (bi)}
-                {@const sx = scale.xAt(b.start)}
-                {@const ex = scale.xAt(b.end)}
-                {@const visW = Math.max(BLOCK_MIN_W, ex - sx)}
-                {@const minLeft = bi > 0 ? scale.xAt(lane.songs[bi - 1].end) : 0}
-                {@const maxRight = bi < lane.songs.length - 1 ? scale.xAt(lane.songs[bi + 1].start) : laneWidth}
-                {@const visLeft = Math.min(Math.max((sx + ex) / 2 - visW / 2, minLeft), maxRight - visW)}
+                {@const rect = rects[bi]}
+                {@const visW = rect.width}
+                {@const visLeft = rect.left}
                 {@const hue = hueOf(b.clip.title)}
                 {@const active = player.track?.clip.file === b.clip.file}
                 <div

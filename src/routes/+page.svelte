@@ -9,9 +9,8 @@
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
-  import { ListMusic, ChevronDown } from 'lucide-svelte';
+  import { ListMusic } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
-  import { onMount } from 'svelte';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
@@ -25,13 +24,7 @@
     checkedAt: string;
   };
   const LIVE_URL = 'https://live.bilibili.com/1732283852';
-  const LIVE_EMBED = 'https://live.bilibili.com/blanc/1732283852?lite=true';
   let liveInfo = $state<LiveInfo | null>(null);
-  let liveOpen = $state(true);
-
-  onMount(() => {
-    liveOpen = window.matchMedia('(min-width: 768px)').matches;
-  });
 
   $effect(() => {
     let id: ReturnType<typeof setInterval> | undefined;
@@ -126,66 +119,38 @@
   </header>
 
   <section class="mb-4 sm:mb-6" aria-label="直播间">
-    <button
-      class="flex w-full items-center gap-2 rounded-md px-1 py-2 text-sm transition hover:bg-base-200"
-      onclick={() => (liveOpen = !liveOpen)}
-      aria-expanded={liveOpen}
-    >
-      <span
-        class="h-2 w-2 shrink-0 rounded-full {liveInfo?.live
-          ? 'animate-pulse bg-red-500'
-          : 'bg-base-300'}"
-      ></span>
-      <span>直播间</span>
-      <ChevronDown
-        class="ml-auto h-4 w-4 transition-transform {liveOpen ? 'rotate-180' : ''}"
-      />
-    </button>
-
-    {#if liveOpen && liveInfo && liveInfo.live === true}
-      <div class="overflow-hidden rounded-lg border border-base-300">
-        <div class="flex items-center gap-2 px-3 py-2">
-          <Chip variant="warning">
-            <span class="h-1.5 w-1.5 animate-pulse rounded-full bg-red-500"></span>
-            直播中
-          </Chip>
-          <span class="min-w-0 truncate text-sm font-medium">{liveInfo.title ?? '安允日记'}</span>
-          {#if liveInfo.area}
-            <span class="hidden shrink-0 text-2xs opacity-60 sm:inline">{liveInfo.area}</span>
-          {/if}
-          <a
-            href={LIVE_URL}
-            target="_blank"
-            rel="noopener noreferrer"
-            class="ml-auto shrink-0 rounded-full border border-accent px-3 py-1 text-2xs text-accent transition hover:bg-base-200"
-          >
-            去直播间
-          </a>
-        </div>
-        <iframe
-          src={LIVE_EMBED}
-          title="安允日记 直播间"
-          class="block w-full aspect-video"
-          allowfullscreen
-          loading="lazy"
-          referrerpolicy="no-referrer-when-downgrade"
-        ></iframe>
+    {#if liveInfo && liveInfo.live === true}
+      <div class="flex items-center gap-2 rounded-lg border border-base-300 px-3 py-2">
+        <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500"></span>
+        <Chip variant="warning">直播中</Chip>
+        <span class="min-w-0 truncate text-sm font-medium">{liveInfo.title ?? '安允日记'}</span>
+        <a
+          href={LIVE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ml-auto shrink-0 rounded-full border border-accent px-3 py-1 text-2xs text-accent transition hover:bg-base-200"
+        >
+          去直播间
+        </a>
       </div>
-    {:else if liveOpen && liveInfo && liveInfo.live === false}
-      <div class="flex items-center gap-3 rounded-lg border border-base-300 p-2">
+    {:else if liveInfo && liveInfo.live === false}
+      <div class="flex items-center gap-3 rounded-lg border border-base-300 px-3 py-2">
         <img
           src="/brand/cover.jpg"
           alt="直播间封面"
-          class="h-14 w-24 shrink-0 rounded-md object-cover"
+          class="h-9 w-16 shrink-0 rounded-md object-cover"
         />
-        <div class="min-w-0">
-          <p class="text-sm">当前未开播</p>
-          {#if liveInfo.title}
-            <p class="truncate text-2xs opacity-60">最近：{liveInfo.title}</p>
-          {/if}
-        </div>
-        <a href={LIVE_URL} target="_blank" rel="noopener noreferrer" class="ml-auto shrink-0">
-          <Chip variant="accent">去直播间</Chip>
+        <span class="shrink-0 text-sm">未开播</span>
+        {#if liveInfo.title}
+          <span class="min-w-0 truncate text-2xs opacity-60">最近：{liveInfo.title}</span>
+        {/if}
+        <a
+          href={LIVE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ml-auto shrink-0 rounded-full border border-accent px-3 py-1 text-2xs text-accent transition hover:bg-base-200"
+        >
+          去直播间
         </a>
       </div>
     {/if}

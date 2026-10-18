@@ -153,6 +153,33 @@ export function buildLaneScale(
   return { segs, xs, xAt, tAt };
 }
 
+/**
+ * 把歌块按原始 x 区间排布成互不重叠的视觉矩形（贪心前向，允许为满足最小宽度向右轻推）。
+ * - left = max(x0, cursor)
+ * - width = clamp(max(minW, x1-x0), 1, 可用)
+ *   可用 = (存在下一块 ? next.x0 - gap : x1 + minW) - left
+ * - cursor = left + width + gap
+ * 不变量：输出按序、两两不重叠（含 gap）、每块 ≥1px、顺序不乱。
+ */
+export function layoutSongs(
+  spans: { x0: number; x1: number }[],
+  minW = 12,
+  gap = 1,
+): { left: number; width: number }[] {
+  const out: { left: number; width: number }[] = [];
+  let cursor = 0;
+  for (let i = 0; i < spans.length; i++) {
+    const s = spans[i];
+    const left = Math.max(s.x0, cursor);
+    const rightBound = i < spans.length - 1 ? spans[i + 1].x0 - gap : s.x1 + minW;
+    const available = rightBound - left;
+    const width = Math.max(1, Math.min(Math.max(minW, s.x1 - s.x0), available));
+    out.push({ left, width });
+    cursor = left + width + gap;
+  }
+  return out;
+}
+
 /** 压缩倍数 c → 灰度 L*（light 越亮、dark 越暗），clamp 到可读区间 */
 export function grayLStar(c: number, dark = false): number {
   const k = Math.log2(Math.max(c, 1));

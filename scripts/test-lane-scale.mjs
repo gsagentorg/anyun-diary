@@ -1,4 +1,4 @@
-import { buildLaneScale, grayLStar, lstarToRgb } from '../src/lib/lane-scale.ts';
+import { buildLaneScale, grayLStar, lstarToRgb, layoutSongs } from '../src/lib/lane-scale.ts';
 
 let pass = 0;
 let total = 0;
@@ -129,6 +129,68 @@ ck(
   'lstarToRgb(40) 深灰且三通道差≤3',
   deep.every((v) => v < 160) && Math.max(...deep) - Math.min(...deep) <= 3,
   deep.join(','),
+);
+
+// ---------- 用例 6：layoutSongs 无重叠自适应布局 ----------
+const orderedNoOverlap = (rects, gap = 1) => {
+  let ok = true;
+  for (let i = 0; i < rects.length; i++) {
+    if (!(rects[i].width >= 1)) ok = false;
+    if (i > 0) {
+      if (rects[i].left < rects[i - 1].left) ok = false; // 顺序不乱
+      if (rects[i - 1].left + rects[i - 1].width + gap > rects[i].left) ok = false; // 含 gap 不重叠
+    }
+  }
+  return ok;
+};
+
+// 6a 密集链：10 块各 2px、x0 间隔 5px（块间净间隔 3px）
+const dense = Array.from({ length: 10 }, (_, i) => ({ x0: i * 5, x1: i * 5 + 2 }));
+const rDense = layoutSongs(dense, 12, 1);
+ck('case6a 密集链长度=10', rDense.length === 10, rDense.length);
+ck('case6a 密集链无重叠且每块≥1px', orderedNoOverlap(rDense), JSON.stringify(rDense));
+ck(
+  'case6a 密集链尽量 minW（内部块宽=4 受可用约束）',
+  rDense.slice(0, 9).every((r) => close(r.width, 4, 1e-9)),
+  rDense.map((r) => fmt(r.width)).join(','),
+);
+ck('case6a 密集链首块 left=0', close(rDense[0].left, 0, 1e-9), rDense[0].left);
+
+// 6b 宽松：全部 ≥minW 且 left==x0
+const loose = [{ x0: 0, x1: 10 }, { x0: 100, x1: 110 }, { x0: 200, x1: 220 }];
+const rLoose = layoutSongs(loose, 12, 1);
+ck('case6b 宽松长度=3', rLoose.length === 3, rLoose.length);
+ck('case6b 宽松全部 ≥minW', rLoose.every((r) => r.width >= 12), rLoose.map((r) => fmt(r.width)).join(','));
+ck(
+  'case6b 宽松 left==x0',
+  rLoose.every((r, i) => close(r.left, loose[i].x0, 1e-9)),
+  rLoose.map((r) => fmt(r.left)).join(','),
+);
+ck('case6b 宽松无重叠', orderedNoOverlap(rLoose), JSON.stringify(rLoose));
+
+// 6c 相邻零间隔
+const adjacent = [{ x0: 0, x1: 10 }, { x0: 10, x1: 20 }];
+const rAdj = layoutSongs(adjacent, 12, 1);
+ck('case6c 零间隔无重叠', orderedNoOverlap(rAdj), JSON.stringify(rAdj));
+ck('case6c 零间隔每块 ≥1px', rAdj.every((r) => r.width >= 1), rAdj.map((r) => fmt(r.width)).join(','));
+
+// 6d 单块
+const rSingle = layoutSongs([{ x0: 0, x1: 10 }], 12, 1);
+ck('case6d 单块 left=x0 且宽=max(minW,x1-x0)=12', rSingle.length === 1 && close(rSingle[0].left, 0, 1e-9) && close(rSingle[0].width, 12, 1e-9), JSON.stringify(rSingle));
+
+// 6e 空数组
+const rEmpty = layoutSongs([], 12, 1);
+ck('case6e 空数组⇒[]', Array.isArray(rEmpty) && rEmpty.length === 0, JSON.stringify(rEmpty));
+
+// 6f 窄容器整体压缩后仍无重叠
+const cramped = Array.from({ length: 8 }, (_, i) => ({ x0: i * 8, x1: i * 8 + 30 }));
+const rCramped = layoutSongs(cramped, 12, 1);
+ck('case6f 窄容器长度=8', rCramped.length === 8, rCramped.length);
+ck('case6f 窄容器无重叠且每块≥1px', orderedNoOverlap(rCramped), JSON.stringify(rCramped));
+ck(
+  'case6f 窄容器两两 left+width+gap ≤ next.left',
+  rCramped.every((r, i) => i === 0 || rCramped[i - 1].left + rCramped[i - 1].width + 1 <= r.left),
+  JSON.stringify(rCramped),
 );
 
 log(`\n${pass}/${total} PASS`);

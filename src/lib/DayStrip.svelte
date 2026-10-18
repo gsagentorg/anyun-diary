@@ -29,10 +29,13 @@
         <div class="text-base font-bold">{fmtDay(rec.start)}</div>
         <div class="flex flex-wrap items-center justify-end gap-2">
           <span
-            title="把这天的歌加入播放列表"
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); adopt(buildRecTracks(rec), 0); } }}
+            title="用这一天的歌替换播放列表"
             onclick={(e) => { e.stopPropagation(); adopt(buildRecTracks(rec), 0); }}
           >
-            <Chip variant="accent"><ListMusic class="h-3 w-3" /> 列表</Chip>
+            <Chip variant="accent"><ListMusic class="h-3 w-3" /> 替换列表</Chip>
           </span>
           <Chip>🎵 {songs.length} 歌</Chip>
         </div>

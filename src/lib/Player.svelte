@@ -306,14 +306,16 @@
           {@render shuffleControl('icon')}
           <div class="relative">
             <button
-              class="flex items-center gap-1 rounded-md px-2 py-2 transition hover:bg-base-200 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
+              class="relative rounded-md p-2 transition hover:bg-base-200 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
               onclick={() => (sleepOpen = !sleepOpen)}
               aria-label="睡眠定时器"
               aria-expanded={sleepOpen}
               title="睡眠定时器"
             >
               <MoonStar class="h-4 w-4" />
-              {#if sleepLabel()}<span class="text-2xs tabular-nums">{sleepLabel()}</span>{/if}
+              {#if sleepLabel()}
+                <span class="absolute -top-1 -right-1 rounded bg-accent px-0.5 text-2xs leading-tight text-accent-content tabular-nums">{sleepLabel()}</span>
+              {/if}
             </button>
             {#if sleepOpen}
               <div class="absolute bottom-full right-0 mb-2 w-48 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">

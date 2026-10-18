@@ -18,9 +18,9 @@
   let open = $state<string | null>(null);
 </script>
 
-<div class="grid gap-4 sm:grid-cols-2">
+<div class="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
   {#if visible.length === 0}
-    <div class="sm:col-span-2"><StateHint kind="empty" /></div>
+    <div class="sm:col-span-2 xl:col-span-3"><StateHint kind="empty" /></div>
   {/if}
   {#each visible as rec (rec.file)}
     {@const dur = dayDur(rec)}

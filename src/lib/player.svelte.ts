@@ -31,14 +31,15 @@ function trackKey(t: Track): string {
   return trackKeyOf(t.clip);
 }
 
-let audio: HTMLAudioElement | null = null;
+/** 音频单例挂 globalThis：HMR 重载本模块也不会产生第二实例（防叠播） */
+const gAudio = globalThis as typeof globalThis & { __anyunAudio?: HTMLAudioElement };
 
 function ensureAudio(): HTMLAudioElement {
-  if (!audio) {
-    audio = new Audio();
-    audio.preload = 'metadata';
+  if (!gAudio.__anyunAudio) {
+    gAudio.__anyunAudio = new Audio();
+    gAudio.__anyunAudio.preload = 'metadata';
   }
-  return audio;
+  return gAudio.__anyunAudio;
 }
 
 function playCurrent() {

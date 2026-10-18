@@ -29,6 +29,9 @@
         <div class="text-base font-bold">{fmtDay(rec.start)}</div>
         <div class="flex flex-wrap items-center justify-end gap-2">
           <span
+            role="button"
+            tabindex="0"
+            onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); adopt(buildRecTracks(rec), 0); } }}
             title="用这一天的歌替换播放列表"
             onclick={(e) => { e.stopPropagation(); adopt(buildRecTracks(rec), 0); }}
           >

@@ -1,9 +1,9 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
   import StateHint from './StateHint.svelte';
-  import { player, playAt, removeAt, clearQueue } from '$lib/player.svelte';
+  import { player, playAt, removeAt, clearQueue, moveTrack } from '$lib/player.svelte';
   import { fmtDur } from '$lib/types';
-  import { X } from 'lucide-svelte';
+  import { X, ChevronUp, ChevronDown } from 'lucide-svelte';
 
   const list = $derived(player.playlist);
   const total = $derived.by(() =>
@@ -39,6 +39,24 @@
               <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
                 {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
               </span>
+            </button>
+            <button
+              class="shrink-0 rounded p-1 transition hover:bg-base-200 disabled:opacity-40"
+              onclick={() => moveTrack(i, i - 1)}
+              disabled={i === 0}
+              aria-label="上移"
+              title="上移"
+            >
+              <ChevronUp class="h-3.5 w-3.5" />
+            </button>
+            <button
+              class="shrink-0 rounded p-1 transition hover:bg-base-200 disabled:opacity-40"
+              onclick={() => moveTrack(i, i + 1)}
+              disabled={i === list.length - 1}
+              aria-label="下移"
+              title="下移"
+            >
+              <ChevronDown class="h-3.5 w-3.5" />
             </button>
             <button
               class="shrink-0 rounded p-1 transition hover:bg-base-200"

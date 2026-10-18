@@ -151,6 +151,22 @@ export function removeAt(index: number) {
   }
 }
 
+/** 手动调序：把队列中 from 项移动到 to 位置；越界或相同位置直接返回 */
+export function moveTrack(from: number, to: number) {
+  const n = player.playlist.length;
+  if (from < 0 || to < 0 || from >= n || to >= n || from === to) return;
+  const removed = player.playlist.splice(from, 1)[0];
+  player.playlist.splice(to, 0, removed);
+  if (from === player.pos) {
+    player.pos = to;
+  } else if (from < player.pos && to >= player.pos) {
+    player.pos -= 1;
+  } else if (from > player.pos && to <= player.pos) {
+    player.pos += 1;
+  }
+  player.history = []; // 历史存的是下标，重排后已失效；清空避免随机回退错乱
+}
+
 /** 清空队列：移除除当前播放外的全部（无当前播放则全清） */
 export function clearQueue() {
   const cur = player.pos >= 0 ? player.playlist[player.pos] : null;

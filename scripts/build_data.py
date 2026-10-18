@@ -58,34 +58,22 @@ def read_title(path):
 
 def main():
 
-    # 主录像: 名称 → 开播时间 + 时长
-    recs = {}
+    # 主录像: 建索引（录像名(不含扩展名) → 视频文件名），供骨架种子 + 时长增强用
+    videoByName = {}
     for f in sorted(os.listdir(BASE)):
-        m = re.match(r"^(\d{4}-\d{2}-\d{2}) (\d{2}-\d{2}-\d{2})\.(mp4|mkv)$", f)
+        m = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})\.(mp4|mkv)$", f)
         if not m:
             continue
-        name = m.group(0)
-        start = dt.datetime.strptime(f"{m.group(1)} {m.group(2).replace('-', ':')}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+        videoByName[m.group(1)] = f
+
+    # 主录像索引同时作为骨架种子: 无切片的录像仍保留在输出中；
+    # 有切片但主录像缺失的录像由切片扫描补建（不再丢弃）
+    recs = {}
+    for name in videoByName:
+        start = dt.datetime.strptime(name[:11] + name[11:].replace('-', ':'), "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
         recs[name] = {"file": name, "start": int(start.timestamp()), "duration": None}
 
-    # llc: 切片段
-    for f in sorted(os.listdir(BASE)):
-        m = re.match(r"^(.*)-proj\.llc$", f)
-        if not m:
-            continue
-        key = m.group(1)
-        # llc 的 key 是录像名（不含扩展名）；找到对应录像
-        matches = [k for k in recs if k.rsplit('.', 1)[0] == key]
-        if not matches:
-            print(f"WARN: llc 无对应录像: {f}", file=sys.stderr)
-            continue
-        rec = recs[matches[0]]
-        rec["segments"] = []
-        txt = open(os.path.join(BASE, f), encoding="utf-8").read()
-        for sm in re.finditer(r"start:\s*([\d.]+),\s*end:\s*([\d.]+)", txt):
-            rec["segments"].append({"start": float(sm.group(1)), "end": float(sm.group(2))})
-
-    # 已打标签: 切片文件
+    # 已打标签: 切片文件 → 归并进骨架（rec_name 无录像时补建）
     tagged_dir = os.path.join(BASE, "已打标签")
     for f in sorted(os.listdir(tagged_dir)):
         m = SEG_RE.match(f)
@@ -93,16 +81,14 @@ def main():
             print(f"WARN: 无法解析切片名: {f}", file=sys.stderr)
             continue
         rec_name = m.group(1)
+        if rec_name not in recs:
+            start = dt.datetime.strptime(rec_name[:11] + rec_name[11:].replace('-', ':'), "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
+            recs[rec_name] = {"file": rec_name, "start": int(start.timestamp()), "duration": None}
         off_start = hms_ms(m.group(2), m.group(3), m.group(4), m.group(5))
         off_end = hms_ms(m.group(6), m.group(7), m.group(8), m.group(9))
         seg_no = m.group(10)
-        ext = m.group(11)
-        matches = [k for k in recs if k.rsplit('.', 1)[0] == rec_name]
-        if not matches:
-            print(f"WARN: 切片无对应录像: {f}", file=sys.stderr)
-            continue
         title = read_title(os.path.join(tagged_dir, f))
-        recs[matches[0]].setdefault("clips", []).append({
+        recs[rec_name].setdefault("clips", []).append({
             "file": f,
             "opus": f"{os.path.splitext(f)[0]}.opus",
             "offsetStart": round(off_start, 3),
@@ -111,11 +97,27 @@ def main():
             "title": title,
         })
 
-    # 录像时长（若 ffprobe 结果缓存存在则读入；否则留空由前端标"未知"）
+    # llc: 切片段（按录像名直接匹配骨架 key）
+    for f in sorted(os.listdir(BASE)):
+        m = re.match(r"^(.*)-proj\.llc$", f)
+        if not m:
+            continue
+        key = m.group(1)
+        if key not in recs:
+            print(f"WARN: llc 无对应录像: {f}", file=sys.stderr)
+            continue
+        rec = recs[key]
+        rec["segments"] = []
+        txt = open(os.path.join(BASE, f), encoding="utf-8").read()
+        for sm in re.finditer(r"start:\s*([\d.]+),\s*end:\s*([\d.]+)", txt):
+            rec["segments"].append({"start": float(sm.group(1)), "end": float(sm.group(2))})
+
+    # 录像时长（若 ffprobe 结果缓存存在则读入；无对应主录像则留空由前端标"未知"）
     dur_path = os.path.join(os.path.dirname(__file__), "durations.json")
     durs = json.load(open(dur_path)) if os.path.exists(dur_path) else {}
     for k, r in recs.items():
-        r["duration"] = durs.get(k["file"] if isinstance(k, dict) else k)
+        video = videoByName.get(k)
+        r["duration"] = durs.get(video) if video else None
 
     out = {
         "generatedAt": int(dt.datetime.now(TZ).timestamp()),

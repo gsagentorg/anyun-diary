@@ -160,10 +160,10 @@
           <div class="flex items-center gap-1.5">
             <button
               class="flex items-center gap-0.5 text-2xs text-accent transition hover:opacity-80"
-              title="把这天的歌加入播放列表"
+              title="用这一天的歌替换播放列表"
               onclick={() => playDay(lane)}
             >
-              <ListMusic class="h-3 w-3" /> 列表
+              <ListMusic class="h-3 w-3" /> 替换列表
             </button>
             <span class="truncate text-2xs tabular-nums opacity-60"
               >{lane.clipCount} 歌 · {fmtDur(lane.songDur)}</span

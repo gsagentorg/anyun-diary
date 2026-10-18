@@ -117,6 +117,7 @@
                   role={c ? 'button' : undefined}
                   tabindex={c ? 0 : undefined}
                   onclick={c ? () => playDay(c) : undefined}
+                  title={c ? "用这一天的歌替换播放列表" : undefined}
                   onkeydown={(e) => { if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); playDay(c); } }}
                   onmousemove={(e) => c && show(e, c)}
                   onmouseleave={() => (tip = null)}

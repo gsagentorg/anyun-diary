@@ -86,7 +86,7 @@
   function showBlank(e: MouseEvent, s: Seg) {
     tip = {
       x: e.clientX, y: e.clientY,
-      html: '空 ' + fmtDur(s.minutes * 60) + ' · ' + (s.c ?? 0).toFixed(1) + ' 分钟/像素',
+      html: '空 ' + fmtDur(s.minutes * 60) + ' · 压至 1/' + Math.round(s.c ?? 1),
     };
   }
   function playSong(b: SongBlock) {
@@ -132,35 +132,15 @@
         }))
       : [],
   );
-  const grayMap = $derived.by(() => {
-    const m = new Map<number, number>();
-    const cs: number[] = [];
-    for (const e of laneScales) {
-      if (!e.scale) continue;
-      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null) cs.push(sg.c);
-    }
-    if (cs.length === 0) return m;
-    const cMin = Math.min(...cs);
-    const cMax = Math.max(...cs);
-    for (const e of laneScales) {
-      if (!e.scale) continue;
-      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null) m.set(sg.c, lstarForRange(sg.c, cMin, cMax));
-    }
-    return m;
-  });
-  const legendGray = $derived.by(() => {
-    const ds: number[] = [];
-    for (const e of laneScales) {
-      if (!e.scale) continue;
-      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null && sg.width >= 2) ds.push(sg.c);
-    }
-    if (ds.length === 0) return { css: 'rgb(120, 120, 120)', dMin: 0, dMax: 0 };
-    const dMin = Math.min(...ds), dMax = Math.max(...ds);
-    const light = lstarToRgb(lstarForRange(dMin, dMin, dMax));
-    const dark = lstarToRgb(lstarForRange(dMax, dMin, dMax));
-    const css = 'linear-gradient(to right, rgb(' + light[0] + ', ' + light[1] + ', ' + light[2] + '), rgb(' + dark[0] + ', ' + dark[1] + ', ' + dark[2] + '))';
-    return { css, dMin, dMax };
-  });
+  // 固定对数域 [1,256]：整体缩放不影响 c，图例无需动态计算（owner 10:13 定）
+  const LGT_MAX = 256;
+  const lgLight = lstarToRgb(lstarForRange(1, 1, LGT_MAX));
+  const lgDark = lstarToRgb(lstarForRange(LGT_MAX, 1, LGT_MAX));
+  const legendGray = {
+    css:
+      'linear-gradient(to right, rgb(' + lgLight[0] + ', ' + lgLight[1] + ', ' + lgLight[2] + '), rgb(' +
+      lgDark[0] + ', ' + lgDark[1] + ', ' + lgDark[2] + '))',
+  };
 </script>
 
 <div class="overflow-x-auto">
@@ -234,7 +214,7 @@
               {#each scale.segs as s (s.t0)}
                 {#if s.kind === 'blank' && s.x1 - s.x0 >= 2}
                   {@const sw = s.x1 - s.x0}
-                  {@const rgb = lstarToRgb(grayMap.get(s.c ?? 1) ?? grayLStar(s.c ?? 1))}
+                  {@const rgb = lstarToRgb(lstarForRange(s.c ?? 1, 1, 256))}
                   <div
                     class="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm"
                     style:left={s.x0 + 'px'} style:width={sw + 'px'}
@@ -288,10 +268,10 @@
     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
     {#if laneMode === 'compress'}
 <span class="flex items-center gap-1">
-          <span class="text-2xs opacity-60 tabular-nums">{legendGray.dMin.toFixed(1)} 分/px</span>
+          <span class="text-2xs opacity-60 tabular-nums">×1（同歌速）</span>
           <span class="h-3 w-16 rounded-sm" style="background:{legendGray.css}"></span>
-          <span class="text-2xs opacity-60 tabular-nums">{legendGray.dMax.toFixed(1)} 分/px</span>
-          空白时长密度（灰度×长度 = 空白时长）
+          <span class="text-2xs opacity-60 tabular-nums">×256</span>
+          空白压缩倍数（相对歌的线性刻度，越深压得越狠）
         </span>
     {/if}
   </div>

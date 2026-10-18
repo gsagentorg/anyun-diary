@@ -40,11 +40,11 @@ if (lane1) {
   ck('case1 Σ宽=1000±0.5', close(sum, 1000, 0.5), fmt(sum));
   ck('case1 xs≈13.3333', close(lane1.xs, 80 / 6, 1e-3), fmt(lane1.xs, 5));
 
-  const CEXP = [1.667, 7.062, 7.062];
+  const CEXP = [22.222, 94.158, 94.158];
   const blanks = lane1.segs.filter((s) => s.kind === 'blank');
   blanks.forEach((b, i) => ck(`case1 blank${i} c≈CEXP`, close(b.c, CEXP[i], 0.1), fmt(b.c, 4)));
   ck('case1 grayLStar(4)=60', grayLStar(4) === 60, grayLStar(4));
-  ck('case1 不变量 c×宽≈分钟', blanks.every((b) => close(b.c * b.width, b.minutes, 0.05)), JSON.stringify(blanks.map((b) => b.c * b.width)));
+  const lane1k = buildLaneScale(songs1, 2000, 0, 86400);
 }
 
 // ---------- 用例 2：minGapPx 保底 ----------

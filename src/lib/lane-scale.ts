@@ -144,7 +144,7 @@ export function buildLaneScale(
     s.x0 = x;
     x += s.width;
     s.x1 = x;
-    if (s.kind === 'blank') s.c = s.minutes / s.width; // 绝对时间密度（分钟/像素）：d×宽=真实时长，跨泳道同尺度可比
+    if (s.kind === 'blank') s.c = (s.minutes / s.width) * xs; // 相对线性（歌）刻度的压缩倍数：无量纲、视口无关、整体缩放不变
   }
 
   const last = segs[segs.length - 1];

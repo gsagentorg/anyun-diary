@@ -80,7 +80,7 @@
     const c = b.clip;
     tip = {
       x: e.clientX, y: e.clientY,
-      html: `<b>${c.title || '（未识别）'}</b><br>${clock(b.start)}–${clock(b.end)}<br>${fmtDur(b.end - b.start)} · ${b.rec.file}`,
+      html: `<b>${c.title || '（未识别）'}</b><br>${clock(b.start)}–${clock(b.end)}<br>${fmtDur(b.end - b.start)}`,
     };
   }
   function showBlank(e: MouseEvent, s: Seg) {

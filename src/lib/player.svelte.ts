@@ -1,5 +1,5 @@
 import type { Clip, Recording, Track } from './types';
-import { audioUrl, buildRecTracks } from './types';
+import { audioUrl, buildRecTracks, dateCard } from './types';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 
 export type { Track };
@@ -61,10 +61,11 @@ let mediaHandlersBound = false;
 function updateMediaSession(t: Track) {
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
   const ms = navigator.mediaSession;
+  const md = Number.isFinite(t.rec.start) ? dateCard(t.rec.start).md : '';
   ms.metadata = new MediaMetadata({
     title: t.clip.title || '（未识别）',
     artist: '安允日记',
-    album: t.rec.file,
+    album: md ? `安允日记 · ${md}` : '安允日记',
   });
   if (!mediaHandlersBound) {
     mediaHandlersBound = true;

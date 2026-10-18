@@ -1,6 +1,6 @@
 <script lang="ts">
   import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom, reportPlaybackState } from './player.svelte';
-  import { fmtOffset, fmtClockShort, fmtDur } from './types';
+  import { fmtOffset, fmtClockShort, fmtDur, dateCard } from './types';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, MoreHorizontal } from 'lucide-svelte';
 
   let playing = $state(false);
@@ -154,6 +154,21 @@
     menuOpen = false;
   }
 
+  const clock = (epoch: number) =>
+    new Date(epoch * 1000).toLocaleTimeString('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
+    });
+
+  // 副信息：日期 + 切片绝对起止时间（替代内部录像文件名）
+  const whenLabel = $derived.by(() => {
+    const t = player.track;
+    if (!t) return '';
+    const md = dateCard(t.rec.start).md;
+    const a = clock(t.rec.start + t.clip.offsetStart);
+    const b = clock(t.rec.start + t.clip.offsetEnd);
+    return `${md} ${a}–${b}`;
+  });
+
   const total = $derived(player.playlist.length || (player.track ? (player.track.rec.clips?.length ?? 0) : 0));
   const pos = $derived(player.pos >= 0 ? player.pos : (player.track?.index ?? 0));
   const pct = $derived(duration > 0 ? Math.min(100, (progress / duration) * 100) : 0);
@@ -248,7 +263,7 @@
             {/if}
           </div>
           <div class="mt-0.5 hidden items-center gap-2 text-2xs opacity-60 sm:flex">
-            <span class="shrink-0">录像 {t.rec.file}</span>
+            <span class="shrink-0 tabular-nums">{whenLabel}</span>
             <span class="shrink-0 tabular-nums">+{fmtOffset(t.clip.offsetStart)}–{fmtOffset(t.clip.offsetEnd)}</span>
           </div>
         </div>

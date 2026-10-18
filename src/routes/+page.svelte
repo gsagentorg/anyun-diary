@@ -5,6 +5,7 @@
   import Heatmap from '$lib/Heatmap.svelte';
   import { player, adopt } from '$lib/player.svelte';
   import Playlist from '$lib/Playlist.svelte';
+  import QueueOverlay from '$lib/components/QueueOverlay.svelte';
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';

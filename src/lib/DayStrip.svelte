@@ -8,25 +8,22 @@
 
   let { recordings }: { recordings: Recording[] } = $props();
 
-  // ffprobe 时长缺失（残缺录制）时，用切片/llc 段的最大末端估算，避免“有歌却无数据”
-  function recDur(rec: Recording): number | null {
-    if (rec.duration) return rec.duration;
-    const ends = [
-      ...(rec.clips ?? []).map((c) => c.offsetEnd),
-      ...(rec.segments ?? []).map((s) => s.end),
-    ];
-    return ends.length ? Math.max(...ends) : null;
-  }
+  // 过滤无切片录像，避免渲染无歌空卡片
+  const visible = $derived(recordings.filter((rec) => (rec.clips ?? []).length > 0));
+
+  // 日合计 = 切片时长求和（切片时长精确），不依赖录像 duration
+  const dayDur = (rec: Recording) =>
+    (rec.clips ?? []).reduce((a, c) => a + (c.offsetEnd - c.offsetStart), 0);
 
   let open = $state<string | null>(null);
 </script>
 
 <div class="grid gap-4 sm:grid-cols-2">
-  {#if recordings.length === 0}
+  {#if visible.length === 0}
     <div class="sm:col-span-2"><StateHint kind="empty" /></div>
   {/if}
-  {#each recordings as rec (rec.file)}
-    {@const dur = recDur(rec)}
+  {#each visible as rec (rec.file)}
+    {@const dur = dayDur(rec)}
     {@const songs = rec.clips ?? []}
     <button
       class="block w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition hover:border-accent"
@@ -43,7 +40,7 @@
             <Chip variant="accent"><ListMusic class="h-3 w-3" /> 列表</Chip>
           </span>
           <Chip>🎵 {songs.length} 歌</Chip>
-          <Chip>共 {dur ? fmtDur(dur) : '无数据'}{rec.duration ? '' : '（估算）'}</Chip>
+          <Chip>共 {fmtDur(dur)}</Chip>
         </div>
       </div>
 

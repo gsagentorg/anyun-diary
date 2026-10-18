@@ -252,7 +252,15 @@
                     class:ring-accent={active}
                     style:left={HIT_PAD + 'px'} style:width={visW + 'px'}
                     style:background="hsl({hue} 70% 60%)"
-                  ></div>
+                  >
+                    {#if visW >= 64}
+                      <span
+                        class="pointer-events-none block truncate px-1 text-2xs leading-5 text-white"
+                        style:text-shadow="0 1px 2px rgb(0 0 0 / 0.45)"
+                        >{b.clip.title || '（未识别）'}</span
+                      >
+                    {/if}
+                  </div>
                 </div>
               {/each}
             {/if}

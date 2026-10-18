@@ -5,7 +5,6 @@
   import Heatmap from '$lib/Heatmap.svelte';
   import { player, adopt } from '$lib/player.svelte';
   import Playlist from '$lib/Playlist.svelte';
-  import Sheet from '$lib/components/Sheet.svelte';
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
@@ -50,7 +49,7 @@
   }));
 
   // URL 查询参数 ?from=YYYY-MM-DD&to=YYYY-MM-DD → 自动生成播放列表（不自动开播，只装载）
-  let plOpen = $state(false);
+  let plOpen = $state(true);
   const qFrom = $derived(page.url.searchParams.get('from') ?? '');
   const qTo = $derived(page.url.searchParams.get('to') ?? '');
   const qValid = $derived(!!(qFrom && qTo && validRange(qFrom, qTo)));
@@ -118,7 +117,8 @@
     </div>
   </header>
 
-  <section class="mb-4 sm:mb-6" aria-label="直播间">
+  <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
+  <section class="lg:w-[38%]" aria-label="直播间">
     {#if liveInfo && liveInfo.live === true}
       <div class="flex items-center gap-2 rounded-lg border border-base-300 px-3 py-2">
         <span class="h-2 w-2 shrink-0 animate-pulse rounded-full bg-red-500"></span>
@@ -156,9 +156,23 @@
     {/if}
   </section>
 
-  <Sheet open={plOpen} onClose={() => (plOpen = false)} title="播放列表">
-    <Playlist {recordings} bind:open={plOpen} />
-  </Sheet>
+  <div class="lg:flex-1">
+    {#if plOpen}
+      <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
+        <Playlist {recordings} bind:open={plOpen} />
+      </div>
+    {:else}
+      <button
+        class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm transition hover:border-accent"
+        onclick={() => (plOpen = true)}
+        aria-expanded={plOpen}
+      >
+        <span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4" /> 播放列表</span>
+        <span class="text-xs opacity-60">展开</span>
+      </button>
+    {/if}
+  </div>
+  </div>
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

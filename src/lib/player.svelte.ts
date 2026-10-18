@@ -14,6 +14,7 @@ export const player = $state<{
   shuffle: boolean; // 随机播放
   history: number[]; // 随机模式下已播过的下标（上一首用）
   playedTitles: string[]; // 已播曲目的「曲目标识」（同名歌曲视为同一首，随机不再抽）
+  queueOpen: boolean; // 播放队列叠层开关
 }>({
   track: null,
   loading: false,
@@ -22,6 +23,7 @@ export const player = $state<{
   shuffle: false,
   history: [],
   playedTitles: [],
+  queueOpen: false,
 });
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
@@ -108,6 +110,58 @@ export function adopt(list: Track[], i: number) {
   player.history = [];
   player.playedTitles = [trackKey(list[i])];
   playCurrent();
+}
+
+/** 按时间生成结果的插入语义：空队列整体设为队列并从首项播放；非空 append 队尾（不动当前播放）。返回插入数 */
+export function insertRange(tracks: Track[]): number {
+  if (tracks.length === 0) return 0;
+  if (player.playlist.length === 0) {
+    player.playlist = tracks;
+    player.pos = 0;
+    player.history = [];
+    player.playedTitles = [trackKey(tracks[0])];
+    playCurrent();
+    return tracks.length;
+  }
+  player.playlist = [...player.playlist, ...tracks];
+  return tracks.length;
+}
+
+/** 定位播放队列中第 i 项（记录历史与已播曲目，供随机模式去重/回退） */
+export function playAt(i: number) {
+  stepTo(i);
+}
+
+/** 移除队列中指定行：移除项在当前项之前 pos--；等于当前项则顺延播放下一首/停止 */
+export function removeAt(index: number) {
+  if (index < 0 || index >= player.playlist.length) return;
+  player.playlist = player.playlist.filter((_, i) => i !== index);
+  player.history = player.history.map((h) => (h > index ? h - 1 : h)).filter((h) => h !== index);
+  if (index < player.pos) {
+    player.pos -= 1;
+  } else if (index === player.pos) {
+    if (player.pos >= player.playlist.length) {
+      player.pos = -1;
+      player.track = null;
+      getAudio().pause();
+    } else {
+      playCurrent();
+    }
+  }
+}
+
+/** 清空队列：移除除当前播放外的全部（无当前播放则全清） */
+export function clearQueue() {
+  const cur = player.pos >= 0 ? player.playlist[player.pos] : null;
+  if (!cur) {
+    player.playlist = [];
+    player.pos = -1;
+    return;
+  }
+  player.playlist = [cur];
+  player.pos = 0;
+  player.history = [];
+  player.playedTitles = [trackKey(cur)];
 }
 
 /** 切换随机播放 */

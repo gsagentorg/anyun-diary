@@ -1,7 +1,7 @@
 <script lang="ts">
   import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom, reportPlaybackState } from './player.svelte';
   import { fmtOffset, fmtClockShort, fmtDur, dateCard } from './types';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, MoreHorizontal } from 'lucide-svelte';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, MoreHorizontal, ListMusic } from 'lucide-svelte';
 
   let playing = $state(false);
   let progress = $state(0);
@@ -345,6 +345,19 @@
             </div>
           {/if}
         </div>
+
+        <!-- 播放队列（有队列时直接平铺，与关闭按钮同级） -->
+        {#if player.playlist.length > 0}
+          <button
+            class="rounded-md p-2 transition hover:bg-base-200 {player.queueOpen ? 'text-accent' : ''}"
+            onclick={() => (player.queueOpen = !player.queueOpen)}
+            aria-label="播放队列"
+            aria-expanded={player.queueOpen}
+            title="播放队列"
+          >
+            <ListMusic class="h-4 w-4" />
+          </button>
+        {/if}
 
         <!-- 关闭（所有断点直接平铺） -->
         <button

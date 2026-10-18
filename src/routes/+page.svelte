@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { theme, toggleTheme } from '$lib/theme.svelte';
   import data from '$lib/data.json';
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
@@ -10,7 +11,7 @@
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
-  import { ListMusic } from 'lucide-svelte';
+  import { ListMusic, Sun, Moon } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
   import * as publicEnv from '$env/static/public';
 
@@ -113,6 +114,14 @@
             </button>
           {/each}
         </div>
+        <button
+          class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
+          onclick={toggleTheme}
+          aria-label="切换深色模式"
+          title="切换深色模式"
+        >
+          {#if theme.mode === 'dark'}<Sun class="h-4 w-4" />{:else}<Moon class="h-4 w-4" />{/if}
+        </button>
         <button
           class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {plOpen
             ? 'border-accent text-accent'

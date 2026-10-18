@@ -39,6 +39,20 @@
   --color-song-hue-light: 64%;
 }
 
+html[data-theme='dark'] {
+  --color-base-100: #18181b;
+  --color-base-200: #27272a;
+  --color-base-300: #3f3f46;
+  --color-base-content: #fafafa;
+  --color-accent: #a78bfa;
+  --color-accent-content: #18181b;
+  --color-accent-muted: color-mix(in oklab, #a78bfa 14%, #18181b);
+  --color-warning: #fbbf24;
+  --color-warning-content: #18181b;
+  --color-grid: #2a2a2e;
+  color-scheme: dark;
+}
+
 html {
   color-scheme: light;
   background: var(--color-base-100);

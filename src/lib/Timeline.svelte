@@ -4,6 +4,8 @@
   import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
+  import { theme } from './theme.svelte';
+  const grayL = (c: number) => theme.mode === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
   import type { LaneScale, Seg } from './lane-scale';
   import { ListMusic } from 'lucide-svelte';
   import HourAxis from './components/HourAxis.svelte';
@@ -214,7 +216,7 @@
               {#each scale.segs as s (s.t0)}
                 {#if s.kind === 'blank' && s.x1 - s.x0 >= 2}
                   {@const sw = s.x1 - s.x0}
-                  {@const rgb = lstarToRgb(lstarForRange(s.c ?? 1, 1, 256))}
+                  {@const rgb = lstarToRgb(grayL(s.c ?? 1))}
                   <div
                     class="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm"
                     style:left={s.x0 + 'px'} style:width={sw + 'px'}

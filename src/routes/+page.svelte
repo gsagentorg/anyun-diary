@@ -12,6 +12,7 @@
   import { browser } from '$app/environment';
   import { ListMusic } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
+  import * as publicEnv from '$env/static/public';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
@@ -24,11 +25,17 @@
     cover: string | null;
     checkedAt: string;
   };
-  const LIVE_URL = 'https://live.bilibili.com/1732283852';
+  const rawRoomId = (publicEnv as unknown as Record<string, string | undefined>)['PUBLIC_LIVE_ROOM_ID'];
+  const LIVE_ROOM_ID = rawRoomId && /^\d+$/.test(rawRoomId) ? Number(rawRoomId) : 0;
+  const LIVE_URL = LIVE_ROOM_ID > 0 ? `https://live.bilibili.com/${LIVE_ROOM_ID}` : '';
   let liveInfo = $state<LiveInfo | null>(null);
 
   $effect(() => {
     let id: ReturnType<typeof setInterval> | undefined;
+    if (!LIVE_URL) {
+      liveInfo = null;
+      return;
+    }
     const load = async () => {
       try {
         const res = await fetch('/api/live');
@@ -120,6 +127,7 @@
   </header>
 
   <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
+  {#if LIVE_URL}
   <section class="lg:w-[38%]" aria-label="直播间">
     {#if liveInfo && liveInfo.live === true}
       <div class="flex items-center gap-2 rounded-lg border border-base-300 px-3 py-2">
@@ -157,6 +165,7 @@
       </div>
     {/if}
   </section>
+  {/if}
 
   <div class="lg:flex-1">
     {#if plOpen}

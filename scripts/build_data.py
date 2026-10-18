@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""build_data.py — 从 NAS 目录自动生成前端数据。
-输入: /mnt/Share/安允日记/{主录像, *-proj.llc, 已打标签/}
+"""build_data.py — 从素材目录自动生成前端数据。
+输入: <AUDIO_ROOT>/{主录像, *-proj.llc, 已打标签/}
 输出: ../../static/data.json （时间轴 + 切片 + 歌名 + opus 引用）
 
 文件名约定（自动推导，不手填）:
@@ -13,7 +13,9 @@
 """
 import json, os, re, sys, subprocess, datetime as dt
 
-BASE = "/mnt/Share/安允日记"
+BASE = os.environ.get("AUDIO_ROOT", "").strip()
+if not BASE:
+    sys.exit("需要设置 AUDIO_ROOT 环境变量（指向切片素材目录）")
 TZ = dt.timezone(dt.timedelta(hours=8))
 
 SEG_RE = re.compile(

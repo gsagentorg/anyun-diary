@@ -1,6 +1,8 @@
 import type { RequestHandler } from './$types';
+import * as publicEnv from '$env/static/public';
 
-const ROOM_ID = 1732283852;
+const rawRoomId = (publicEnv as unknown as Record<string, string | undefined>)['PUBLIC_LIVE_ROOM_ID'];
+const ROOM_ID = rawRoomId && /^\d+$/.test(rawRoomId) ? Number(rawRoomId) : 0;
 const TTL = 60_000;
 
 type LiveInfo = {
@@ -20,6 +22,17 @@ const json = (data: LiveInfo) =>
   });
 
 export const GET: RequestHandler = async () => {
+  if (!ROOM_ID) {
+    // 未配置 PUBLIC_LIVE_ROOM_ID：优雅降级
+    return json({
+      live: null,
+      title: null,
+      area: null,
+      cover: null,
+      checkedAt: new Date().toISOString(),
+    });
+  }
+
   const now = Date.now();
   if (cache && now - cache.at < TTL) return json(cache.data);
 

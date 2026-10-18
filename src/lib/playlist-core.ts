@@ -79,7 +79,7 @@ export function buildPls(tracks: Track[], base: string, plName: string): string 
 }
 
 /** 生成 m3u 文本：绝对 URL 指向 opus 文件（外部播放器用）。
- * base 传站点 origin（如 https://anyun-diary.public.bcw2.top:3004）。
+ * base 传站点 origin（如 <your-site-origin>）。
  */
 export function buildM3u(tracks: Track[], base: string, plName: string): string {
   const lines = ['#EXTM3U', '#PLAYLIST:' + plName];

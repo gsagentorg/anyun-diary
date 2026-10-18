@@ -342,15 +342,19 @@
               <div class="mt-1 border-t border-base-300 pt-1 lg:hidden">
                 {@render sleepPanel()}
               </div>
-              <button
-                class="mt-1 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200"
-                onclick={closePlayer}
-              >
-                <X class="h-4 w-4" /> 关闭播放条
-              </button>
             </div>
           {/if}
         </div>
+
+        <!-- 关闭（所有断点直接平铺） -->
+        <button
+          class="rounded-md p-2 transition hover:bg-base-200"
+          onclick={closePlayer}
+          aria-label="关闭播放器"
+          title="关闭播放器"
+        >
+          <X class="h-4 w-4" />
+        </button>
       </div>
     </div>
   </div>

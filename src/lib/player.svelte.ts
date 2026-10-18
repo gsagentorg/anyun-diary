@@ -142,17 +142,30 @@ function stepTo(i: number) {
   playCurrent();
 }
 
-/** 播放某录像内的第 i 个切片：优先在当前列表里找，找不到则临时用「该录像」作为列表 */
+/** 播放某录像内的第 i 个切片：已在当前列表（按 clip.file）则定位播放；否则构造曲目插入当前播放位置之后并播放，绝不整体替换列表 */
 export function playClip(rec: Recording, i: number) {
   const clip = rec.clips?.[i];
   if (!clip) return;
-  const hit = player.playlist.findIndex((t) => t.rec.file === rec.file && t.clip.file === clip.file);
+  const hit = player.playlist.findIndex((t) => t.clip.file === clip.file);
   if (hit >= 0) {
     player.pos = hit;
     playCurrent();
-  } else {
-    adopt(buildRecTracks(rec), i);
+    return;
   }
+  const track = buildRecTracks(rec)[i];
+  if (!track) return;
+  const at = player.pos < 0 ? 0 : player.pos + 1;
+  if (player.pos >= 0) {
+    player.history.push(player.pos);
+    const cur = player.playlist[player.pos];
+    if (cur) {
+      const k = trackKey(cur);
+      if (!player.playedTitles.includes(k)) player.playedTitles.push(k);
+    }
+  }
+  player.playlist = [...player.playlist.slice(0, at), track, ...player.playlist.slice(at)];
+  player.pos = at;
+  playCurrent();
 }
 
 /** 在当前播放列表中上/下一首（随机模式下走乱序） */

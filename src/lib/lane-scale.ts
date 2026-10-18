@@ -16,6 +16,7 @@ export type Seg = {
 export type LaneScale = {
   segs: Seg[];
   xs: number;
+  rho: number;
   xAt(t: number): number;
   tAt(x: number): number;
 };
@@ -23,17 +24,28 @@ export type LaneScale = {
 export type LaneScaleParams = {
   M: number;
   sigma: number;
-  rho: number;
+  songShare: number;
   minGapPx: number;
 };
 
-const DEFAULT_PARAMS: LaneScaleParams = { M: 600, sigma: 1, rho: 0.25, minGapPx: 6 };
+const DEFAULT_PARAMS: LaneScaleParams = { M: 600, sigma: 1, songShare: 0.8, minGapPx: 6 };
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+
+/** 页面级归一化灰阶：c 在 [cMin,cMax] 内 log2 感知等距映射到 [lo,hi]，cMin 最浅、cMax 最深；区间退化取中点 */
+export function lstarForRange(c: number, cMin: number, cMax: number, lo = 45, hi = 88): number {
+  if (!(c > 1)) return hi;
+  const lmin = Math.log2(Math.max(cMin, 1.0001));
+  const lmax = Math.log2(Math.max(cMax, lmin * 1.0001));
+  if (lmax <= lmin) return (lo + hi) / 2;
+  const t = Math.min(Math.max((Math.log2(c) - lmin) / (lmax - lmin), 0), 1);
+  return hi - (hi - lo) * t;
+}
 
 /**
  * 把一天的音频时间线压缩成三段式泳道坐标：
  * song（原速） / micro（簇内小间隙，按 sigma 压缩） / blank（大段空白，按 rho 压缩）。
+ * rho 每条泳道独立自适应，使歌区恒约占 songShare（B 过小时 clamp 到 1，占比只会更高）。
  * 全部用分钟做中间计算，避免秒级大数浮点误差。
  */
 export function buildLaneScale(
@@ -83,13 +95,16 @@ export function buildLaneScale(
     else if (r.kind === 'micro') T_micro += m;
     else T_blank += m;
   }
-  const denom = T_song + P.sigma * T_micro + P.rho * T_blank;
+  const S = T_song + P.sigma * T_micro;
+  const B = T_blank;
+  const rho = clamp(((1 - P.songShare) / P.songShare) * (S / B), 0.0001, 1);
+  const denom = S + rho * B;
   if (!(denom > 0)) return null;
   const xs = widthPx / denom;
 
   const segs: Seg[] = raws.map((r) => {
     const m = mins(r.t0, r.t1);
-    const w = r.kind === 'song' ? m * xs : r.kind === 'micro' ? m * P.sigma * xs : m * P.rho * xs;
+    const w = r.kind === 'song' ? m * xs : r.kind === 'micro' ? m * P.sigma * xs : m * rho * xs;
     return { kind: r.kind, t0: r.t0, t1: r.t1, x0: 0, x1: 0, minutes: m, width: w, c: null };
   });
 
@@ -150,7 +165,7 @@ export function buildLaneScale(
     return last.t1;
   };
 
-  return { segs, xs, xAt, tAt };
+  return { segs, xs, rho, xAt, tAt };
 }
 
 /**

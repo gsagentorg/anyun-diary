@@ -3,7 +3,7 @@
   import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
-  import { buildLaneScale, grayLStar, lstarToRgb, layoutSongs } from './lane-scale';
+  import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
   import type { LaneScale, Seg } from './lane-scale';
   import { ListMusic } from 'lucide-svelte';
   import HourAxis from './components/HourAxis.svelte';
@@ -118,8 +118,43 @@
     return out;
   }
 
-  const legendBlank = lstarToRgb(grayLStar(4));
-  const legendBlankRgb = `rgb(${legendBlank[0]}, ${legendBlank[1]}, ${legendBlank[2]})`;
+  // compress 模式：先建全部泳道 scale（单一对象，供灰度 Map 键 c 值），再做页面级灰度归一化
+  const laneScales = $derived(
+    laneWidth > 0
+      ? lanes.map((lane) => ({
+          lane,
+          scale: buildLaneScale(
+            lane.songs.map((s) => ({ start: s.start, end: s.end })),
+            laneWidth,
+            lane.dayStart,
+            lane.dayStart + DAY,
+          ),
+        }))
+      : [],
+  );
+  const grayMap = $derived.by(() => {
+    const m = new Map<number, number>();
+    const cs: number[] = [];
+    for (const e of laneScales) {
+      if (!e.scale) continue;
+      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null) cs.push(sg.c);
+    }
+    if (cs.length === 0) return m;
+    const cMin = Math.min(...cs);
+    const cMax = Math.max(...cs);
+    for (const e of laneScales) {
+      if (!e.scale) continue;
+      for (const sg of e.scale.segs) if (sg.kind === 'blank' && sg.c != null) m.set(sg.c, lstarForRange(sg.c, cMin, cMax));
+    }
+    return m;
+  });
+  const legendBlankRgb = $derived.by(() => {
+    const ls = [...grayMap.values()];
+    if (ls.length === 0) return 'rgb(120, 120, 120)';
+    const mid = ls.reduce((a, b) => a + b, 0) / ls.length;
+    const rgb = lstarToRgb(mid);
+    return 'rgb(' + rgb[0] + ', ' + rgb[1] + ', ' + rgb[2] + ')';
+  });
 </script>
 
 <div class="overflow-x-auto">
@@ -157,7 +192,7 @@
         <div class="mb-1"><HourAxis width={laneWidth} /></div>
       {/if}
 
-      {#each lanes as lane (lane.dayStart)}
+      {#each laneScales as { lane, scale } (lane.dayStart)}
         {#if laneMode === 'linear'}
           <div class="relative mb-2 h-10 rounded bg-base-300/40">
             {#each lane.songs as b, bi (bi)}
@@ -180,12 +215,6 @@
             {/each}
           </div>
         {:else if laneWidth > 0}
-          {@const scale = buildLaneScale(
-            lane.songs.map((s) => ({ start: s.start, end: s.end })),
-            laneWidth,
-            lane.dayStart,
-            lane.dayStart + DAY,
-          )}
           {@const labels = scale ? laneLabels(lane.songs, scale) : []}
           {@const rects = scale
             ? layoutSongs(
@@ -199,7 +228,7 @@
               {#each scale.segs as s (s.t0)}
                 {#if s.kind === 'blank' && s.x1 - s.x0 >= 2}
                   {@const sw = s.x1 - s.x0}
-                  {@const rgb = lstarToRgb(grayLStar(s.c ?? 1))}
+                  {@const rgb = lstarToRgb(grayMap.get(s.c ?? 1) ?? grayLStar(s.c ?? 1))}
                   <div
                     class="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm"
                     style:left={s.x0 + 'px'} style:width={sw + 'px'}

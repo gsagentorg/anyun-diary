@@ -1,4 +1,4 @@
-import { buildLaneScale, grayLStar, lstarToRgb, layoutSongs } from '../src/lib/lane-scale.ts';
+import { buildLaneScale, lstarForRange, grayLStar, lstarToRgb, layoutSongs } from '../src/lib/lane-scale.ts';
 
 let pass = 0;
 let total = 0;
@@ -31,17 +31,18 @@ if (lane1) {
   ck('case1 段序列 blank,song,micro,song,blank,song,blank', kinds === 'blank,song,micro,song,blank,song,blank', kinds);
   ck('case1 段数=7', lane1.segs.length === 7, lane1.segs.length);
 
-  const exp = [6.17, 24.69, 12.35, 37.04, 160.49, 74.07, 685.2];
+  const exp = [6, 133.333, 66.667, 200, 36.818, 400, 157.182];
   lane1.segs.forEach((s, i) =>
     ck(`case1 seg${i}(${s.kind}) 宽≈${exp[i]}`, close(s.width, exp[i]), `${fmt(s.width)} / 期望 ${exp[i]}`),
   );
 
   const sum = lane1.segs.reduce((a, s) => a + s.width, 0);
   ck('case1 Σ宽=1000±0.5', close(sum, 1000, 0.5), fmt(sum));
-  ck('case1 xs≈2.4691', close(lane1.xs, 1000 / 405, 1e-3), fmt(lane1.xs, 5));
+  ck('case1 xs≈13.3333', close(lane1.xs, 80 / 6, 1e-3), fmt(lane1.xs, 5));
 
+  const CEXP = [22.222, 94.158, 94.158];
   const blanks = lane1.segs.filter((s) => s.kind === 'blank');
-  blanks.forEach((b, i) => ck(`case1 blank${i} c≈4`, close(b.c, 4, 0.01), fmt(b.c, 4)));
+  blanks.forEach((b, i) => ck(`case1 blank${i} c≈CEXP`, close(b.c, CEXP[i], 0.1), fmt(b.c, 4)));
   ck('case1 grayLStar(4)=60', grayLStar(4) === 60, grayLStar(4));
 }
 
@@ -101,7 +102,7 @@ if (laneS) {
   ck('case4 单歌段数=3', laneS.segs.length === 3, laneS.segs.length);
   const ks = laneS.segs.map((s) => s.kind).join(',');
   ck('case4 单歌序列 blank,song,blank', ks === 'blank,song,blank', ks);
-  const expS = [6.8027, 27.2109, 965.9864];
+  const expS = [6, 800, 194.0];
   laneS.segs.forEach((s, i) =>
     ck(`case4 seg${i}(${s.kind})≈${expS[i]}`, close(s.width, expS[i]), `${fmt(s.width, 4)} / 期望 ${expS[i]}`),
   );
@@ -109,7 +110,7 @@ if (laneS) {
   ck('case4 Σ宽=1000±0.5', close(sumS, 1000, 0.5), fmt(sumS, 4));
   const blankTotal = laneS.segs.filter((s) => s.kind === 'blank').reduce((a, s) => a + s.width, 0);
   const songW = laneS.segs.find((s) => s.kind === 'song').width;
-  ck('case4 比例正确（song:blank = 10:357.5）', close(songW / blankTotal, 10 / 357.5, 1e-3), fmt(songW / blankTotal, 5));
+ck('case4 歌区占比≈0.8', close(laneS.segs.reduce((a2, s2) => a2 + (s2.kind === 'song' ? s2.width : 0), 0) / 1000, 0.8, 0.01), 'ok');
 }
 
 // ---------- 用例 5：灰度映射 ----------
@@ -192,6 +193,12 @@ ck(
   rCramped.every((r, i) => i === 0 || rCramped[i - 1].left + rCramped[i - 1].width + 1 <= r.left),
   JSON.stringify(rCramped),
 );
+
+ck('lstarForRange cMin→88', lstarForRange(2, 2, 8) === 88, lstarForRange(2, 2, 8));
+ck('lstarForRange cMax→45', lstarForRange(8, 2, 8) === 45, lstarForRange(8, 2, 8));
+ck('lstarForRange 中点≈66.5', close(lstarForRange(4, 2, 8), 66.5, 0.1), lstarForRange(4, 2, 8));
+ck('lstarForRange 退化区间取中点', close(lstarForRange(4, 4, 4), 66.5, 0.1), lstarForRange(4, 4, 4));
+ck('lstarForRange c≤1→88', lstarForRange(1, 2, 8) === 88, lstarForRange(1, 2, 8));
 
 log(`\n${pass}/${total} PASS`);
 process.exit(pass === total ? 0 : 1);

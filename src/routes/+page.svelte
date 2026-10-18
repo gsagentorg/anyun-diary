@@ -61,6 +61,9 @@
   const qFrom = $derived(page.url.searchParams.get('from') ?? '');
   const qTo = $derived(page.url.searchParams.get('to') ?? '');
   const qValid = $derived(!!(qFrom && qTo && validRange(qFrom, qTo)));
+  const laneMode = $derived(
+    page.url.searchParams.get('lane') === 'linear' ? 'linear' : 'compress',
+  );
 
   $effect(() => {
     if (!qValid || player.playlist.length > 0) return;
@@ -193,7 +196,7 @@
   </Sheet>
 
   {#if current === 0}
-    <Timeline recordings={recordings} />
+    <Timeline recordings={recordings} laneMode={laneMode} />
   {:else if current === 1}
     <DayStrip recordings={recordings} />
   {:else}

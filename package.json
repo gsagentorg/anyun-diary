@@ -7,7 +7,7 @@
     "dev": "vite dev --host",
     "build": "vite build",
     "preview": "vite preview",
-    "data": "node scripts/build.mjs",
+    "data": "python3 scripts/build_data.py",
     "audio": "bash scripts/to-opus.sh",
     "check": "svelte-kit sync && svelte-check",
     "test": "vite-node scripts/test-playlist.mjs"

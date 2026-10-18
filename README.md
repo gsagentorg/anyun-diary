@@ -14,12 +14,12 @@
 SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + `lucide-svelte` 图标。
 部署目标：**Vercel**（`@sveltejs/adapter-vercel`）。
 
-## 前端重构（refactor/frontend 分支）
+## 前端重构（已合并 main · 2026-10-18 发版）
 
 在 `refactor/frontend` 分支上完成的一次视觉/响应式重做，主分支不受影响。
 
 - **设计 token**：单一来源在 `src/app.css` 的 `@theme`（语义字号 `--text-2xs/xs/sm/base/lg/xl`、圆角 `--radius-sm/md/lg`、`--color-*`），组件不再写任意值字号/圆角。
-- **共享组件**（`src/lib/components/`）：`Chip.svelte`（胶囊徽标）、`HourAxis.svelte`（泳道/热力共用时间轴，按容器宽自适应 2h/3h/6h 刻度）、`Sheet.svelte`（播放列表面板，桌面右侧 / 窄屏底部抽屉）、`StateHint.svelte`（空列表/无数据/加载态）。
+- **共享组件**（`src/lib/components/`）：`Chip.svelte`（胶囊徽标）、`HourAxis.svelte`（泳道/热力共用时间轴，按容器宽自适应 2h/3h/6h 刻度）、`Sheet.svelte`（叠层容器，队列叠层用）、`QueueOverlay.svelte`（播放队列叠层：跳播/移出/上下移/清空）、`StateHint.svelte`（空列表/无数据/加载态）。
 - **配色选型页**：`static/design-variants.html`（`/design-variants.html`），可选主题/布局方案并导出 token。
 
 详见 `docs/frontend-refactor-plan.md`。
@@ -36,9 +36,21 @@ npm run build      # 用 adapter-vercel 构建到 .vercel/output
 ### 生成数据（可选，需先有 NAS/素材）
 
 ```bash
-npm run data       # scripts/build.mjs → 解析录像名 + *-proj.llc + 切片元数据 → src/lib/data.json
+npm run data       # scripts/build_data.py → 解析切片（唯一数据源）+ 可选录像/llc 增强 → src/lib/data.json
 npm run audio      # scripts/to-opus.sh → 切片转 64kbps opus 到 static/audio/
 ```
+
+### 数据同步（日常导入，幂等可重跑）
+1. 打标切片落 `/mnt/Share/安允日记/已打标签/`（文件名=录像名+起止偏移，歌名在自带 tag；**切片是唯一数据源**）
+2. `npm run audio` → 全量转 64k opus 进 static/audio（已有的自动跳过）
+3. `npm run data` → 重建 data.json（录像时长/llc 段均为可选增强，缺失不丢歌）
+dev 自动热更。
+
+### 发版（本地生产）
+```
+npm run build && systemctl --user restart anyun-diary-web
+```
+生产 = `https://anyun-diary.public.bcw2.top:3004`（主 frp）；开发 = `https://anyun-diary-dev.public.bcw2.top:3004`
 
 ## 目录结构
 

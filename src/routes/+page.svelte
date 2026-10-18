@@ -9,6 +9,7 @@
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
+  import { browser } from '$app/environment';
   import { ListMusic } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
 
@@ -51,11 +52,11 @@
 
   // URL 查询参数 ?from=YYYY-MM-DD&to=YYYY-MM-DD → 自动生成播放列表（不自动开播，只装载）
   let plOpen = $state(true);
-  const qFrom = $derived(page.url.searchParams.get('from') ?? '');
-  const qTo = $derived(page.url.searchParams.get('to') ?? '');
+  const qFrom = $derived(browser ? (page.url.searchParams.get('from') ?? '') : '');
+  const qTo = $derived(browser ? (page.url.searchParams.get('to') ?? '') : '');
   const qValid = $derived(!!(qFrom && qTo && validRange(qFrom, qTo)));
   const laneMode = $derived(
-    page.url.searchParams.get('lane') === 'linear' ? 'linear' : 'compress',
+    (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
   );
 
   $effect(() => {
@@ -161,7 +162,6 @@
     {#if plOpen}
       <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
         <Playlist {recordings} bind:open={plOpen} />
-        <QueueOverlay />
       </div>
     {:else}
       <button
@@ -175,6 +175,8 @@
     {/if}
   </div>
   </div>
+
+  <QueueOverlay />
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

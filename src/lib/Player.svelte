@@ -1,16 +1,22 @@
 <script lang="ts">
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState } from './player.svelte';
+  import { onMount } from 'svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic } from 'lucide-svelte';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge } from 'lucide-svelte';
 
   let progress = $state(0);
   let duration = $state(0);
   let sleepOpen = $state(false);
+  let rateOpen = $state(false);
   let customMin = $state(15);
   let dragging = $state(false);
   let playing = $state(false);
+  let rateInput = $state(1);
 
-  const PRESETS = [10, 15, 30, 45, 60, 90];
+  const PRESETS = [15, 25, 30, 45, 60, 90];
+  const RATE_PRESETS = [0.5, 1, 1.5, 2, 3];
+
+  onMount(() => initRate());
 
   $effect(() => {
     const a = getAudio();
@@ -64,6 +70,18 @@
       a.removeEventListener('play', onPlaySt);
       a.removeEventListener('pause', onPauseSt);
     };
+  });
+
+  // 倍速同步：切歌或改档后统一应用到 audio 单例（audio 复用，防 track 切换丢档）
+  $effect(() => {
+    const track = player.track;
+    const rate = player.playbackRate;
+    if (track) getAudio().playbackRate = rate;
+  });
+
+  // 倍速面板输入框跟随当前倍速
+  $effect(() => {
+    rateInput = player.playbackRate;
   });
 
   // 被抢占/假播放纠偏：状态说播放但音频没响 → 立即拉回暂停显示；回前台再核一次
@@ -142,6 +160,17 @@
   function pick(minutes: number | null, afterTrack = false) {
     startSleep(minutes, afterTrack);
     sleepOpen = false;
+  }
+
+  // 倍速按钮角标：整数省小数，否则两位小数
+  function rateLabel() {
+    const r = player.playbackRate;
+    return (Number.isInteger(r) ? String(r) : r.toFixed(2)) + 'x';
+  }
+
+  function applyRateInput() {
+    const v = Number(rateInput);
+    if (Number.isFinite(v)) setRate(v);
   }
 
   function closePlayer() {
@@ -227,10 +256,54 @@
   {/if}
 {/snippet}
 
+{#snippet ratePanel()}
+  <div class="px-1 pb-1 text-2xs uppercase tracking-wide opacity-50">播放倍速</div>
+  <input
+    type="range"
+    min="0.01"
+    max="8"
+    step="0.01"
+    bind:value={rateInput}
+    oninput={applyRateInput}
+    class="w-full accent-accent"
+    aria-label="播放倍速滑杆"
+  />
+  <div class="mt-1 flex items-center gap-1">
+    <input
+      type="number"
+      min="0.01"
+      max="8"
+      step="0.01"
+      bind:value={rateInput}
+      onchange={applyRateInput}
+      class="w-16 rounded-md border border-base-300 bg-base-200 px-1.5 py-0.5 text-xs tabular-nums"
+      aria-label="倍速数值"
+    />
+    <span class="text-2xs opacity-60">x</span>
+    <span class="ml-auto text-xs tabular-nums">{player.playbackRate.toFixed(2)}x</span>
+  </div>
+  <div class="mt-1 grid grid-cols-5 gap-1">
+    {#each RATE_PRESETS as r (r)}
+      <button
+        class="rounded-md px-1 py-1 text-2xs tabular-nums transition hover:bg-base-200 {player.playbackRate === r ? 'bg-accent text-accent-content' : ''}"
+        onclick={() => setRate(r)}
+      >
+        {r}x
+      </button>
+    {/each}
+  </div>
+  <button
+    class="mt-1 w-full rounded-md px-2 py-1 text-left text-xs transition hover:bg-base-200"
+    onclick={() => { setRate(1); rateOpen = false; }}
+  >
+    重置 1x
+  </button>
+{/snippet}
+
 {#if player.track}
   {@const t = player.track}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
-    <div class="mx-auto flex h-14 max-w-6xl items-center gap-2 px-3 sm:gap-3 sm:px-4">
+    <div class="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center gap-2 px-3 py-1 sm:gap-3 sm:px-4">
       <!-- 左区：播放/暂停 + 曲目信息 -->
       <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button
@@ -264,7 +337,7 @@
       </div>
 
       <!-- 中区：进度条 + 时间 -->
-      <div class="flex min-w-0 flex-1 items-center gap-2">
+      <div class="flex min-w-[160px] flex-1 items-center gap-2">
         <div
           class="relative h-1.5 min-w-0 flex-1 cursor-pointer touch-none rounded-full bg-base-200"
           role="slider" tabindex="0"
@@ -283,8 +356,8 @@
         </div>
       </div>
 
-      <!-- 右区：上/下一首 + 计数 + 控制 -->
-      <div class="flex shrink-0 items-center gap-0.5 sm:gap-1">
+      <!-- 右区：上/下一首 + 计数 + 控制（全断点平铺，窄屏整体换行） -->
+      <div class="flex shrink-0 flex-wrap items-center gap-0.5 sm:gap-1">
         <button class="rounded-md p-2 transition hover:bg-base-200 disabled:opacity-30"
           onclick={() => step(-1)} disabled={pos <= 0} aria-label="上一首">
           <SkipBack class="h-4 w-4" />
@@ -295,28 +368,47 @@
           <SkipForward class="h-4 w-4" />
         </button>
 
-        <!-- >=1024px：随机与睡眠平铺 -->
-        <div class="hidden items-center gap-1 lg:flex">
-          {@render shuffleControl('icon')}
-          <div class="relative">
-            <button
-              class="relative rounded-md p-2 transition hover:bg-base-200 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
-              onclick={() => (sleepOpen = !sleepOpen)}
-              aria-label="睡眠定时器"
-              aria-expanded={sleepOpen}
-              title="睡眠定时器"
-            >
-              <MoonStar class="h-4 w-4" />
-              {#if sleepLabel()}
-                <span class="absolute -top-1 -right-1 rounded bg-accent px-0.5 text-2xs leading-tight text-accent-content tabular-nums">{sleepLabel()}</span>
-              {/if}
-            </button>
-            {#if sleepOpen}
-              <div class="absolute bottom-full right-0 mb-2 w-48 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
-                {@render sleepPanel()}
-              </div>
+        <!-- 随机播放（全断点平铺） -->
+        {@render shuffleControl('icon')}
+
+        <!-- 睡眠定时器（全断点平铺） -->
+        <div class="relative">
+          <button
+            class="relative rounded-md p-2 transition hover:bg-base-200 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
+            onclick={() => (sleepOpen = !sleepOpen)}
+            aria-label="睡眠定时器"
+            aria-expanded={sleepOpen}
+            title="睡眠定时器"
+          >
+            <MoonStar class="h-4 w-4" />
+            {#if sleepLabel()}
+              <span class="absolute -top-1 -right-1 rounded bg-accent px-0.5 text-2xs leading-tight text-accent-content tabular-nums">{sleepLabel()}</span>
             {/if}
-          </div>
+          </button>
+          {#if sleepOpen}
+            <div class="absolute bottom-full right-0 mb-2 w-48 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+              {@render sleepPanel()}
+            </div>
+          {/if}
+        </div>
+
+        <!-- 倍速（全断点平铺，常显当前倍速角标） -->
+        <div class="relative">
+          <button
+            class="relative rounded-md p-2 transition hover:bg-base-200 {player.playbackRate !== 1 ? 'text-accent' : ''}"
+            onclick={() => (rateOpen = !rateOpen)}
+            aria-label="播放倍速"
+            aria-expanded={rateOpen}
+            title="播放倍速"
+          >
+            <Gauge class="h-4 w-4" />
+            <span class="absolute -top-1 -right-1 rounded px-0.5 text-2xs leading-tight tabular-nums {player.playbackRate !== 1 ? 'bg-accent text-accent-content' : 'bg-base-200'}">{rateLabel()}</span>
+          </button>
+          {#if rateOpen}
+            <div class="absolute bottom-full right-0 mb-2 w-56 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+              {@render ratePanel()}
+            </div>
+          {/if}
         </div>
 
         <!-- 播放队列（有队列时直接平铺，与关闭按钮同级） -->

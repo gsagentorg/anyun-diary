@@ -16,6 +16,7 @@ export const player = $state<{
   history: number[]; // 随机模式下已播过的下标（上一首用）
   playedTitles: string[]; // 已播曲目的「曲目标识」（同名歌曲视为同一首，随机不再抽）
   queueOpen: boolean; // 播放队列叠层开关
+  playbackRate: number; // 播放倍速（clamp 到 [0.01, 8]）
 }>({
   track: null,
   loading: false,
@@ -26,7 +27,41 @@ export const player = $state<{
   history: [],
   playedTitles: [],
   queueOpen: false,
+  playbackRate: 1,
 });
+
+const RATE_KEY = 'anyun-rate';
+const RATE_MIN = 0.01;
+const RATE_MAX = 8;
+
+function clampRate(r: number): number {
+  if (!Number.isFinite(r)) return 1;
+  return Math.min(RATE_MAX, Math.max(RATE_MIN, r));
+}
+
+/** 设置播放倍速：clamp 到 [0.01, 8]，写 state + localStorage('anyun-rate') */
+export function setRate(r: number) {
+  const v = clampRate(r);
+  player.playbackRate = v;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(RATE_KEY, String(v));
+    } catch {
+      /* 忽略存储失败 */
+    }
+  }
+}
+
+/** 从 localStorage 恢复倍速（非法值回退 1）；仅浏览器环境调用 */
+export function initRate() {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(RATE_KEY);
+    if (raw != null) player.playbackRate = clampRate(Number(raw));
+  } catch {
+    /* 忽略读取失败 */
+  }
+}
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
 function trackKey(t: Track): string {
@@ -45,6 +80,7 @@ function ensureAudio(): HTMLAudioElement {
   if (!gAudio.__anyunAudio) {
     const a = new Audio();
     a.preload = 'metadata';
+    a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
     a.addEventListener('play', () => (player.playing = true));
     a.addEventListener('pause', () => (player.playing = false));

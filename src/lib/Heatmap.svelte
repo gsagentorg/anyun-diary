@@ -3,6 +3,7 @@
   import { shDayStart } from './playlist-core';
   import { fmtDur, dateCard } from './types';
   import { adopt, buildRecTracks } from './player.svelte';
+  import { theme } from './theme.svelte';
   import StateHint from './components/StateHint.svelte';
 
   let { recordings }: { recordings: Recording[] } = $props();
@@ -66,7 +67,8 @@
   function bg(c: Cell | undefined): string {
     if (!c || c.seconds <= 0) return 'hsl(0 0% 50% / 0.12)';
     const r = Math.min(1, c.seconds / maxSeconds);
-    return `hsl(258 80% 60% / ${0.15 + 0.8 * r})`;
+    const hsl = theme.resolved === 'dark' ? 'hsl(258 90% 72%' : 'hsl(258 80% 60%';
+    return `${hsl} / ${0.15 + 0.8 * r})`;
   }
 
   function playDay(c: Cell) {
@@ -133,7 +135,11 @@
         <span class="text-2xs opacity-55">少</span>
         <div
           class="h-2 w-24 rounded-full"
-          style:background="linear-gradient(90deg, hsl(258 80% 60% / 0.15), hsl(258 80% 60% / 0.95))"
+          style:background={
+            theme.resolved === 'dark'
+              ? 'linear-gradient(90deg, hsl(258 90% 72% / 0.15), hsl(258 90% 72% / 0.95))'
+              : 'linear-gradient(90deg, hsl(258 80% 60% / 0.15), hsl(258 80% 60% / 0.95))'
+          }
         ></div>
         <span class="text-2xs opacity-55">多</span>
         <span class="ml-2 text-2xs opacity-55">点击格子装载当天播放列表</span>

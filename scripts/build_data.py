@@ -10,12 +10,14 @@
            → 时间戳即录像内偏移（与 llc 一致，交叉验证）
 歌名: 切片文件自带的元数据（不依赖任何外部打标产物）
   m4a → format_tags.title ; ogg → stream_tags.TITLE
+  生成期可用 SONG_FMT 环境变量套模板（占位符 {title}{artist}），默认 {title} 与原样一致
 """
 import json, os, re, sys, subprocess, datetime as dt
 
 BASE = os.environ.get("AUDIO_ROOT", "").strip()
 if not BASE:
     sys.exit("需要设置 AUDIO_ROOT 环境变量（指向切片素材目录）")
+SONG_FMT = os.environ.get("SONG_FMT", "{title}")
 TZ = dt.timezone(dt.timedelta(hours=8))
 
 SEG_RE = re.compile(
@@ -28,10 +30,11 @@ SEG_RE = re.compile(
 def hms_ms(a, b, c, d):
     return int(a) * 3600 + int(b) * 60 + int(c) + int(d) / 1000.0
 
-def read_title(path):
-    """读切片文件自带的歌名标签。
-    m4a → format_tags.title；ogg(Opus) → stream_tags 里的 title/TITLE（ffprobe 版本不同大小写不一）。
+def read_tags(path):
+    """读切片文件自带的 title/artist 标签，返回 (title, artist)。
+    m4a → format_tags；ogg(Opus) → stream_tags（ffprobe 版本不同大小写不一：title/TITLE、artist/ARTIST 均兼容）。
     """
+    title = artist = ""
     try:
         out = subprocess.run(
             ["ffprobe", "-v", "quiet", "-show_entries", "format_tags:stream_tags",
@@ -39,24 +42,32 @@ def read_title(path):
             capture_output=True, text=True, timeout=15
         ).stdout
         j = json.loads(out or "{}")
-        def pick(tags):
+        def pick(tags, keys):
             if not isinstance(tags, dict):
                 return None
-            for k in ("title", "TITLE"):
+            for k in keys:
                 v = tags.get(k)
                 if v and str(v).strip():
                     return str(v).strip()
             return None
-        t = pick((j.get("format", {}) or {}).get("tags"))
-        if t:
-            return t
+        sources = [((j.get("format", {}) or {}).get("tags"))]
         for st in j.get("streams", []) or []:
-            t = pick((st or {}).get("tags"))
-            if t:
-                return t
+            sources.append((st or {}).get("tags"))
+        for tags in sources:
+            if not title:
+                title = pick(tags, ("title", "TITLE")) or ""
+            if not artist:
+                artist = pick(tags, ("artist", "ARTIST")) or ""
+            if title and artist:
+                break
     except Exception as e:
         print(f"WARN: 读标签失败 {os.path.basename(path)}: {e}", file=sys.stderr)
-    return ""
+    return title, artist
+
+def fmt_title(tag_title, tag_artist):
+    """按 SONG_FMT 模板生成歌名；模板渲染为空则回退原始 title 标签。默认 {title} 与未设 env 完全一致。"""
+    s = SONG_FMT.replace("{title}", tag_title or "").replace("{artist}", tag_artist or "").strip()
+    return s or (tag_title or "")
 
 def main():
 
@@ -89,7 +100,8 @@ def main():
         off_start = hms_ms(m.group(2), m.group(3), m.group(4), m.group(5))
         off_end = hms_ms(m.group(6), m.group(7), m.group(8), m.group(9))
         seg_no = m.group(10)
-        title = read_title(os.path.join(tagged_dir, f))
+        tag_title, tag_artist = read_tags(os.path.join(tagged_dir, f))
+        title = fmt_title(tag_title, tag_artist)
         recs[rec_name].setdefault("clips", []).append({
             "file": f,
             "opus": f"{os.path.splitext(f)[0]}.opus",

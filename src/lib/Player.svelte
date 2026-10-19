@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, fmtSong, reportPlaybackState } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic } from 'lucide-svelte';
 
@@ -249,7 +249,7 @@
 
         <div class="min-w-0 flex-1">
           <div class="flex items-baseline gap-2">
-            <span class="truncate text-sm font-medium" aria-live="polite">{fmtSong(t) || '（未识别）'}</span>
+            <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
             {#if player.loading}
               <span class="shrink-0 text-2xs text-accent">加载中…</span>
             {/if}

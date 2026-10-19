@@ -1,5 +1,5 @@
 import type { Clip, Recording, Track } from './types';
-import { audioUrl, buildRecTracks, dateCard, fmtDur } from './types';
+import { audioUrl, buildRecTracks, dateCard } from './types';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 
 export type { Track };
@@ -27,51 +27,6 @@ export const player = $state<{
   playedTitles: [],
   queueOpen: false,
 });
-
-/* ---------- 歌名格式：模板可自定义（文件名前缀只作区分，不参与显示） ---------- */
-
-const SONGFMT_KEY = 'anyun-songfmt';
-const SONG_FIELDS = new Set(['title', 'artist', 'date', 'time', 'dur']);
-
-/** 歌名模板（默认只显示标题）；改动请走 setSongFmt 以便持久化 */
-export const songFmt = $state<{ tpl: string }>({ tpl: '{title}' });
-
-if (typeof localStorage !== 'undefined') {
-  try {
-    const saved = localStorage.getItem(SONGFMT_KEY);
-    if (saved) songFmt.tpl = saved;
-  } catch {
-    /* 隐私模式等禁用本地存储时忽略 */
-  }
-}
-
-/** 写入歌名格式模板：state + localStorage */
-export function setSongFmt(tpl: string) {
-  songFmt.tpl = tpl;
-  try {
-    localStorage.setItem(SONGFMT_KEY, tpl);
-  } catch {
-    /* 存储不可用时仅内存生效 */
-  }
-}
-
-/**
- * 按 songFmt.tpl 渲染歌名。占位符：{title}{artist}{date}{time}{dur}
- * 已知占位但无对应数据 → 空串；模板里未识别的 {x} 原样保留（方便看出写错）
- */
-export function fmtSong(t: Track): string {
-  const vals: Record<string, string> = {
-    title: t.clip.title,
-    // data.json 的 clip 无 artist 字段 → 渲染为空串（不造字段）
-    artist: (t.clip as { artist?: string }).artist ?? '',
-    date: dateCard(t.rec.start).md,
-    time: dateCard(t.rec.start + t.clip.offsetStart).hm,
-    dur: fmtDur(t.clip.offsetEnd - t.clip.offsetStart),
-  };
-  return songFmt.tpl.replace(/\{(\w+)\}/g, (m, key: string) =>
-    SONG_FIELDS.has(key) ? (vals[key] ?? '') : m,
-  );
-}
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
 function trackKey(t: Track): string {

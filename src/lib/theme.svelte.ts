@@ -1,14 +1,25 @@
-export const theme = $state<{ mode: 'light' | 'dark' }>({ mode: 'light' });
+export const theme = $state<{
+  mode: 'light' | 'dark' | 'system';
+  resolved: 'light' | 'dark';
+}>({ mode: 'system', resolved: 'light' });
 
 const KEY = 'anyun-theme';
+const DARK_QUERY = '(prefers-color-scheme: dark)';
+
+function systemDark(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia(DARK_QUERY).matches
+    : false;
+}
 
 function apply() {
+  theme.resolved = theme.mode === 'system' ? (systemDark() ? 'dark' : 'light') : theme.mode;
   if (typeof document === 'undefined') return;
-  document.documentElement.dataset.theme = theme.mode;
+  document.documentElement.dataset.theme = theme.resolved;
 }
 
 export function toggleTheme() {
-  theme.mode = theme.mode === 'dark' ? 'light' : 'dark';
+  theme.mode = theme.mode === 'system' ? 'light' : theme.mode === 'light' ? 'dark' : 'system';
   apply();
   try {
     localStorage.setItem(KEY, theme.mode);
@@ -17,17 +28,22 @@ export function toggleTheme() {
   }
 }
 
-/** 启动入口（+layout 顶层调用）：localStorage → 系统偏好 → light */
+/** 启动入口（+layout 顶层调用）：localStorage → system */
 export function initTheme() {
   if (typeof document === 'undefined') return;
-  let m: 'light' | 'dark' = 'light';
+  let m: 'light' | 'dark' | 'system' = 'system';
   try {
     const saved = localStorage.getItem(KEY);
-    if (saved === 'dark' || saved === 'light') m = saved;
-    else if (window.matchMedia?.('(prefers-color-scheme: dark)').matches) m = 'dark';
+    if (saved === 'light' || saved === 'dark' || saved === 'system') m = saved;
   } catch {
-    /* localStorage 不可用则用默认 */
+    /* localStorage 不可用则用默认 system */
   }
   theme.mode = m;
   apply();
+  if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
+    window.matchMedia(DARK_QUERY).addEventListener('change', () => {
+      if (theme.mode !== 'system') return;
+      apply();
+    });
+  }
 }

@@ -5,7 +5,7 @@
   import { player, playClip, adopt, buildRecTracks } from './player.svelte';
   import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
   import { theme } from './theme.svelte';
-  const grayL = (c: number) => theme.mode === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
+  const grayL = (c: number) => theme.resolved === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
   /** 三次贝塞尔缓动（等价 cubic-bezier(0.65,0,0.35,1)）：渐变 alpha 非线性推进 */
   const bez = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
   /** 空白条背景：<14px 平涂；≥14px 贝塞尔缓动的边缘渐隐（中心最实、两侧透明），不再是扎眼的整条黑 */

@@ -1,5 +1,5 @@
 import type { Clip, Recording, Track } from './types';
-import { audioUrl, buildRecTracks, dateCard } from './types';
+import { audioUrl, buildRecTracks, dateCard, fmtDur } from './types';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 
 export type { Track };
@@ -9,6 +9,7 @@ export { buildRecTracks };
 export const player = $state<{
   track: Track | null;
   loading: boolean;
+  playing: boolean; // 真实播放状态（由 audio 事件驱动 + 看门狗纠偏）
   playlist: Track[];
   pos: number; // 当前播放项在 playlist 里的下标
   shuffle: boolean; // 随机播放
@@ -18,6 +19,7 @@ export const player = $state<{
 }>({
   track: null,
   loading: false,
+  playing: false,
   playlist: [],
   pos: -1,
   shuffle: false,
@@ -26,20 +28,92 @@ export const player = $state<{
   queueOpen: false,
 });
 
+/* ---------- 歌名格式：模板可自定义（文件名前缀只作区分，不参与显示） ---------- */
+
+const SONGFMT_KEY = 'anyun-songfmt';
+const SONG_FIELDS = new Set(['title', 'artist', 'date', 'time', 'dur']);
+
+/** 歌名模板（默认只显示标题）；改动请走 setSongFmt 以便持久化 */
+export const songFmt = $state<{ tpl: string }>({ tpl: '{title}' });
+
+if (typeof localStorage !== 'undefined') {
+  try {
+    const saved = localStorage.getItem(SONGFMT_KEY);
+    if (saved) songFmt.tpl = saved;
+  } catch {
+    /* 隐私模式等禁用本地存储时忽略 */
+  }
+}
+
+/** 写入歌名格式模板：state + localStorage */
+export function setSongFmt(tpl: string) {
+  songFmt.tpl = tpl;
+  try {
+    localStorage.setItem(SONGFMT_KEY, tpl);
+  } catch {
+    /* 存储不可用时仅内存生效 */
+  }
+}
+
+/**
+ * 按 songFmt.tpl 渲染歌名。占位符：{title}{artist}{date}{time}{dur}
+ * 已知占位但无对应数据 → 空串；模板里未识别的 {x} 原样保留（方便看出写错）
+ */
+export function fmtSong(t: Track): string {
+  const vals: Record<string, string> = {
+    title: t.clip.title,
+    // data.json 的 clip 无 artist 字段 → 渲染为空串（不造字段）
+    artist: (t.clip as { artist?: string }).artist ?? '',
+    date: dateCard(t.rec.start).md,
+    time: dateCard(t.rec.start + t.clip.offsetStart).hm,
+    dur: fmtDur(t.clip.offsetEnd - t.clip.offsetStart),
+  };
+  return songFmt.tpl.replace(/\{(\w+)\}/g, (m, key: string) =>
+    SONG_FIELDS.has(key) ? (vals[key] ?? '') : m,
+  );
+}
+
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
 function trackKey(t: Track): string {
   return trackKeyOf(t.clip);
 }
 
 /** 音频单例挂 globalThis：HMR 重载本模块也不会产生第二实例（防叠播） */
-const gAudio = globalThis as typeof globalThis & { __anyunAudio?: HTMLAudioElement };
+const gAudio = globalThis as typeof globalThis & {
+  __anyunAudio?: HTMLAudioElement;
+  /** 看门狗去重 + 指向最新模块的纠偏函数（HMR 后仍纠正当前 state） */
+  __anyunFixFake?: () => void;
+  __anyunWatchdog?: boolean;
+};
 
 function ensureAudio(): HTMLAudioElement {
   if (!gAudio.__anyunAudio) {
-    gAudio.__anyunAudio = new Audio();
-    gAudio.__anyunAudio.preload = 'metadata';
+    const a = new Audio();
+    a.preload = 'metadata';
+    // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
+    a.addEventListener('play', () => (player.playing = true));
+    a.addEventListener('pause', () => (player.playing = false));
+    a.addEventListener('ended', () => (player.playing = false));
+    gAudio.__anyunAudio = a;
   }
   return gAudio.__anyunAudio;
+}
+
+/** 假播放纠偏：状态说在播、音频却 paused（移动端切后台被系统抢占/被其它媒体打断）→ 立即改回未播放 */
+function fixFakePlaying() {
+  const a = gAudio.__anyunAudio;
+  if (!a || !player.track || !player.playing) return;
+  if (a.paused) player.playing = false;
+}
+gAudio.__anyunFixFake = fixFakePlaying;
+
+if (typeof window !== 'undefined' && !gAudio.__anyunWatchdog) {
+  gAudio.__anyunWatchdog = true;
+  // 看门狗：每秒对账一次；回前台立刻对账（OS 抢占无法阻止，只保证状态诚实）
+  setInterval(() => gAudio.__anyunFixFake?.(), 1000);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') gAudio.__anyunFixFake?.();
+  });
 }
 
 function playCurrent() {

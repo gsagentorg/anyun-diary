@@ -1,7 +1,7 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
   import StateHint from './StateHint.svelte';
-  import { player, playAt, removeAt, clearQueue, moveTrack } from '$lib/player.svelte';
+  import { player, playAt, removeAt, clearQueue, moveTrack, fmtSong, songFmt, setSongFmt } from '$lib/player.svelte';
   import { fmtDur } from '$lib/types';
   import { X } from 'lucide-svelte';
 
@@ -143,7 +143,7 @@
               }}
             >
               <span class="w-6 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
-              <span class="truncate font-medium">{t.clip.title || '（未识别）'}</span>
+              <span class="truncate font-medium">{fmtSong(t) || '（未识别）'}</span>
               <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
                 {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
               </span>
@@ -162,6 +162,14 @@
     </ol>
 
     <div class="mt-3 flex items-center gap-2 border-t border-base-300 pt-3">
+      <input
+        class="w-36 rounded border border-base-300 bg-base-200 px-2 py-1 text-2xs"
+        value={songFmt.tpl}
+        oninput={(e) => setSongFmt(e.currentTarget.value)}
+        placeholder="{'{title} · {artist}'}"
+        title="{'歌名显示格式：占位符 {title}{artist}{date}{time}{dur}'}"
+        aria-label="歌名格式"
+      />
       <button
         class="rounded border border-base-300 px-2.5 py-1 text-xs transition hover:bg-base-200 disabled:opacity-40"
         onclick={clearQueue}

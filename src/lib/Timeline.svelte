@@ -6,6 +6,21 @@
   import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
   import { theme } from './theme.svelte';
   const grayL = (c: number) => theme.mode === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
+  /** 三次贝塞尔缓动（等价 cubic-bezier(0.65,0,0.35,1)）：渐变 alpha 非线性推进 */
+  const bez = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  /** 空白条背景：<14px 平涂；≥14px 贝塞尔缓动的边缘渐隐（中心最实、两侧透明），不再是扎眼的整条黑 */
+  const blankBg = (c: number | null, w: number) => {
+    const [r, g, b] = lstarToRgb(grayL(c ?? 1));
+    if (w < 14) return 'rgb(' + r + ', ' + g + ', ' + b + ')';
+    const N = 10;
+    const stops: string[] = [];
+    for (let i = 0; i <= N; i++) {
+      const t = i / N;
+      const a = bez(2 * Math.min(t, 1 - t));
+      stops.push('rgba(' + r + ', ' + g + ', ' + b + ', ' + a.toFixed(3) + ') ' + (t * 100).toFixed(1) + '%');
+    }
+    return 'linear-gradient(to right, ' + stops.join(', ') + ')';
+  };
   import type { LaneScale, Seg } from './lane-scale';
   import { ListMusic } from 'lucide-svelte';
   import HourAxis from './components/HourAxis.svelte';
@@ -216,11 +231,10 @@
               {#each scale.segs as s (s.t0)}
                 {#if s.kind === 'blank' && s.x1 - s.x0 >= 2}
                   {@const sw = s.x1 - s.x0}
-                  {@const rgb = lstarToRgb(grayL(s.c ?? 1))}
                   <div
                     class="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm"
                     style:left={s.x0 + 'px'} style:width={sw + 'px'}
-                    style:background="rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
+                    style:background={blankBg(s.c, sw)}
                     role="img"
                     aria-label="空白 {fmtDur(s.minutes * 60)}"
                     onmousemove={(e) => showBlank(e, s)}

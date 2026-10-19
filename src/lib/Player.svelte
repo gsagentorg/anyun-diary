@@ -1,29 +1,23 @@
 <script lang="ts">
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, playRandom, reportPlaybackState } from './player.svelte';
-  import { fmtOffset, fmtClockShort, fmtDur, dateCard } from './types';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, MoreHorizontal, ListMusic } from 'lucide-svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, fmtSong, reportPlaybackState } from './player.svelte';
+  import { fmtClockShort, dateCard } from './types';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic } from 'lucide-svelte';
 
-  let playing = $state(false);
   let progress = $state(0);
   let duration = $state(0);
   let sleepOpen = $state(false);
   let customMin = $state(15);
-  let menuOpen = $state(false);
   let dragging = $state(false);
-
-  let menuRoot: HTMLDivElement | null = $state(null);
-  let menuEl: HTMLDivElement | null = $state(null);
+  let playing = $state(false);
 
   const PRESETS = [10, 15, 30, 45, 60, 90];
 
   $effect(() => {
     const a = getAudio();
     const onPlay = () => {
-      playing = true;
       player.loading = false;
       sleep.fired = false;
     };
-    const onPause = () => (playing = false);
     const onTime = () => {
       if (!dragging) progress = a.currentTime;
       reportPlaybackState(duration, a.currentTime); // 系统媒体浮层进度
@@ -44,7 +38,6 @@
     const onEnded = () => onTrackEnded();
     const onErr = () => (player.loading = false);
     a.addEventListener('play', onPlay);
-    a.addEventListener('pause', onPause);
     a.addEventListener('timeupdate', onTime);
     a.addEventListener('loadedmetadata', onMeta);
     a.addEventListener('durationchange', onDurChange);
@@ -53,9 +46,13 @@
     a.addEventListener('playing', onPlaying);
     a.addEventListener('ended', onEnded);
     a.addEventListener('error', onErr);
+    const onPlaySt = () => (playing = true);
+    const onPauseSt = () => (playing = false);
+    a.addEventListener('play', onPlaySt);
+    a.addEventListener('pause', onPauseSt);
+    playing = !a.paused; // 挂载即对齐真值
     return () => {
       a.removeEventListener('play', onPlay);
-      a.removeEventListener('pause', onPause);
       a.removeEventListener('timeupdate', onTime);
       a.removeEventListener('loadedmetadata', onMeta);
       a.removeEventListener('durationchange', onDurChange);
@@ -64,25 +61,24 @@
       a.removeEventListener('playing', onPlaying);
       a.removeEventListener('ended', onEnded);
       a.removeEventListener('error', onErr);
+      a.removeEventListener('play', onPlaySt);
+      a.removeEventListener('pause', onPauseSt);
     };
   });
 
-  // 弹出菜单：点击外部 / Esc 关闭，打开时聚焦第一项
-  function onDocPointer(e: PointerEvent) {
-    if (menuRoot && !menuRoot.contains(e.target as Node)) menuOpen = false;
-  }
-  function onMenuKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') menuOpen = false;
-  }
+  // 被抢占/假播放纠偏：状态说播放但音频没响 → 立即拉回暂停显示；回前台再核一次
   $effect(() => {
-    if (!menuOpen) return;
-    const id = window.setTimeout(() => menuEl?.querySelector<HTMLElement>('button')?.focus());
-    window.addEventListener('pointerdown', onDocPointer);
-    window.addEventListener('keydown', onMenuKey);
+    if (!player.track) return;
+    const iv = setInterval(() => {
+      if (playing && getAudio().paused) playing = false;
+    }, 1000);
+    const onVis = () => {
+      if (!document.hidden && playing && getAudio().paused) playing = false;
+    };
+    document.addEventListener('visibilitychange', onVis);
     return () => {
-      clearTimeout(id);
-      window.removeEventListener('pointerdown', onDocPointer);
-      window.removeEventListener('keydown', onMenuKey);
+      clearInterval(iv);
+      document.removeEventListener('visibilitychange', onVis);
     };
   });
 
@@ -151,7 +147,6 @@
   function closePlayer() {
     getAudio().pause();
     player.track = null;
-    menuOpen = false;
   }
 
   const clock = (epoch: number) =>
@@ -254,7 +249,7 @@
 
         <div class="min-w-0 flex-1">
           <div class="flex items-baseline gap-2">
-            <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
+            <span class="truncate text-sm font-medium" aria-live="polite">{fmtSong(t) || '（未识别）'}</span>
             {#if player.loading}
               <span class="shrink-0 text-2xs text-accent">加载中…</span>
             {/if}
@@ -264,7 +259,6 @@
           </div>
           <div class="mt-0.5 hidden items-center gap-2 text-2xs opacity-60 sm:flex">
             <span class="shrink-0 tabular-nums">{whenLabel}</span>
-            <span class="shrink-0 tabular-nums">+{fmtOffset(t.clip.offsetStart)}–{fmtOffset(t.clip.offsetEnd)}</span>
           </div>
         </div>
       </div>
@@ -323,29 +317,6 @@
               </div>
             {/if}
           </div>
-        </div>
-
-        <!-- 更多菜单（弹出向上面板） -->
-        <div class="relative" bind:this={menuRoot}>
-          <button
-            class="rounded-md p-2 transition hover:bg-base-200"
-            onclick={() => (menuOpen = !menuOpen)}
-            aria-label="更多"
-            aria-expanded={menuOpen}
-          >
-            <MoreHorizontal class="h-4 w-4" />
-          </button>
-          {#if menuOpen}
-            <div
-              bind:this={menuEl}
-              class="absolute bottom-full right-0 mb-2 w-56 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg"
-            >
-              <div class="lg:hidden">{@render shuffleControl('row')}</div>
-              <div class="mt-1 border-t border-base-300 pt-1 lg:hidden">
-                {@render sleepPanel()}
-              </div>
-            </div>
-          {/if}
         </div>
 
         <!-- 播放队列（有队列时直接平铺，与关闭按钮同级） -->

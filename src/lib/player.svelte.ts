@@ -178,10 +178,10 @@ export function adopt(list: Track[], i: number) {
   playCurrent();
 }
 
-/** 按时间生成结果的插入语义：空队列整体设为队列并从首项播放；非空 append 队尾（不动当前播放）。返回插入数 */
+/** 按时间生成结果的插入语义：空闲（无当前曲）或空队列 → 整队替换并从首项播放；正在播 → append 队尾不动当前。返回插入数 */
 export function insertRange(tracks: Track[]): number {
   if (tracks.length === 0) return 0;
-  if (player.playlist.length === 0) {
+  if (player.playlist.length === 0 || !player.track) {
     player.playlist = tracks;
     player.pos = 0;
     player.history = [];
@@ -190,12 +190,6 @@ export function insertRange(tracks: Track[]): number {
     return tracks.length;
   }
   player.playlist = [...player.playlist, ...tracks];
-  if (!player.track) {
-    player.pos = player.playlist.length - tracks.length;
-    player.history = [];
-    player.playedTitles = [trackKey(tracks[0])];
-    playCurrent();
-  }
   return tracks.length;
 }
 

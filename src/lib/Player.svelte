@@ -22,6 +22,9 @@
   let barEl = $state<HTMLDivElement>();
   let rowEl = $state<HTMLDivElement>();
   let residentEl = $state<HTMLDivElement>();
+  let titleEl = $state<HTMLSpanElement>();
+  let titleBoxEl = $state<HTMLDivElement>();
+  let titleOverflow = $state(false);
   let rateBtnEl = $state<HTMLButtonElement>();
   let sleepBtnEl = $state<HTMLButtonElement>();
   let dotsBtn = $state<HTMLButtonElement>();
@@ -256,7 +259,11 @@
     void sleep.until;
     void sleep.afterTrack;
     void foldCount;
+    void player.track?.clip.title;
+    void player.loading;
     recalc();
+    // 标题溢出检测：放不下 → 视觉隐藏（opacity-0，文本仍在 DOM 供浏览器查找）
+    if (titleEl && titleBoxEl) titleOverflow = titleEl.scrollWidth > titleBoxEl.clientWidth + 1;
   });
 
   const clock = (epoch: number) =>
@@ -418,9 +425,14 @@
           {/if}
         </button>
 
-        <div class="min-w-[110px] flex-1">
+        <div class="min-w-[110px] flex-1" bind:this={titleBoxEl}>
           <div class="flex items-baseline gap-2">
-            <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
+            <span
+              bind:this={titleEl}
+              class="{titleOverflow ? 'opacity-0 select-none' : 'truncate'} text-sm font-medium"
+              aria-live="polite"
+              title={t.clip.title || '（未识别）'}
+            >{t.clip.title || '（未识别）'}</span>
             {#if player.loading}
               <span class="shrink-0 text-2xs text-accent">加载中…</span>
             {/if}

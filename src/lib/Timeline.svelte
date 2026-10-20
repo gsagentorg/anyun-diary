@@ -149,15 +149,15 @@
         }))
       : [],
   );
-  // 固定对数域 [1,256]：整体缩放不影响 c，图例无需动态计算（owner 10:13 定）
+  // 固定对数域 [1,256]：整体缩放不影响 c；端点复用图表同一 grayL，方向跟随主题（owner 10:13 定）
   const LGT_MAX = 256;
-  const lgLight = lstarToRgb(lstarForRange(1, 1, LGT_MAX));
-  const lgDark = lstarToRgb(lstarForRange(LGT_MAX, 1, LGT_MAX));
-  const legendGray = {
+  const lgStart = $derived(lstarToRgb(grayL(1)));
+  const lgEnd = $derived(lstarToRgb(grayL(LGT_MAX)));
+  const legendGray = $derived({
     css:
-      'linear-gradient(to right, rgb(' + lgLight[0] + ', ' + lgLight[1] + ', ' + lgLight[2] + '), rgb(' +
-      lgDark[0] + ', ' + lgDark[1] + ', ' + lgDark[2] + '))',
-  };
+      'linear-gradient(to right, rgb(' + lgStart[0] + ', ' + lgStart[1] + ', ' + lgStart[2] + '), rgb(' +
+      lgEnd[0] + ', ' + lgEnd[1] + ', ' + lgEnd[2] + '))',
+  });
 </script>
 
 <div class="overflow-x-auto">

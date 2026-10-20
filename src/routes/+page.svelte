@@ -11,7 +11,7 @@
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
-  import { ListMusic, Sun, Moon, SunMoon } from 'lucide-svelte';
+  import { ListMusic, Sun, Moon, Monitor } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
   import * as publicEnv from '$env/static/public';
 
@@ -122,7 +122,7 @@
         >
           {#if theme.mode === 'dark'}<Sun class="h-4 w-4" />
           {:else if theme.mode === 'light'}<Moon class="h-4 w-4" />
-          {:else}<SunMoon class="h-4 w-4" />{/if}
+          {:else}<Monitor class="h-4 w-4" />{/if}
         </button>
         <button
           class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {plOpen

@@ -4,7 +4,7 @@
   import { tracksInRange, dayStartOf, validRange } from './playlist-core';
   import { onMount } from 'svelte';
   import { fmtDur } from './types';
-  import { ListMusic, Search, X } from 'lucide-svelte';
+  import { ListMusic, Plus, Check, Search, X } from 'lucide-svelte';
 
   let { recordings, open = $bindable(false) }: { recordings: Recording[]; open?: boolean } = $props();
 
@@ -53,6 +53,16 @@
     if (n === 0) error = '范围内没有切片';
   }
 
+  let addedIdx = $state<number | null>(null);
+  let addTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function addToQueue(i: number) {
+    insertRange([preview.tracks[i]]);
+    addedIdx = i;
+    clearTimeout(addTimer);
+    addTimer = setTimeout(() => (addedIdx = null), 1200);
+  }
+
 </script>
 
 <div class="card rounded-xl border bg-base-100 p-4">
@@ -88,12 +98,24 @@
     {#if preview.ok}
       <ol class="mt-2 max-h-64 space-y-0.5 overflow-y-auto">
         {#each previewTop as t, i (t.clip.file)}
-          <li class="flex items-center gap-2 px-1 py-0.5 text-xs">
-            <span class="w-7 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
-            <span class="truncate">{t.clip.title || '（未识别）'}</span>
-            <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
-              {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
-            </span>
+          <li>
+            <button
+              type="button"
+              class="group flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs transition hover:bg-base-200"
+              aria-label={`加入队列：${t.clip.title || '（未识别）'}`}
+              onclick={() => addToQueue(i)}
+            >
+              <span class="w-7 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
+              <span class="truncate">{t.clip.title || '（未识别）'}</span>
+              <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
+                {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
+              </span>
+              {#if addedIdx === i}
+                <Check class="h-3 w-3 shrink-0 text-accent" />
+              {:else}
+                <Plus class="h-3 w-3 shrink-0 opacity-40 transition group-hover:text-accent group-hover:opacity-100" />
+              {/if}
+            </button>
           </li>
         {/each}
         {#if previewRest > 0}

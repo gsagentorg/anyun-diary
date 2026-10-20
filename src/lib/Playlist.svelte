@@ -42,8 +42,6 @@
   const previewTop = $derived(preview.tracks.slice(0, 20));
   const previewRest = $derived(Math.max(0, preview.tracks.length - 20));
 
-  let genOk = $state<number | null>(null);
-  let genTimer: ReturnType<typeof setTimeout> | undefined;
   let addedIdx = $state<number | null>(null);
   let addTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -55,14 +53,7 @@
     error = '';
     syncUrl();
     const n = insertRange(preview.tracks);
-    if (n === 0) {
-      error = '范围内没有切片';
-      return;
-    }
-    player.queueOpen = true;
-    genOk = n;
-    clearTimeout(genTimer);
-    genTimer = setTimeout(() => (genOk = null), 1500);
+    if (n === 0) error = '范围内没有切片';
   }
 
   function addToQueue(i: number) {
@@ -89,19 +80,12 @@
     <input type="date" bind:value={from} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums" />
     <span class="opacity-50">→</span>
     <input type="date" bind:value={to} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums" />
-    <span aria-live="polite">
-      <button
-        class="flex items-center gap-1 rounded px-2.5 py-1 text-accent-content transition hover:opacity-90 {genOk !== null ? 'bg-accent/85' : 'bg-accent'}"
-        aria-label={genOk !== null ? `已加入 ${genOk} 首` : '生成并插入队列'}
-        onclick={generate}
-      >
-        {#if genOk !== null}
-          <Check class="h-3 w-3" /> 已加入 {genOk} 首
-        {:else}
-          <Search class="h-3 w-3" /> 生成并插入队列
-        {/if}
-      </button>
-    </span>
+    <button
+      class="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-accent-content transition hover:opacity-90"
+      onclick={generate}
+    >
+      <Search class="h-3 w-3" /> 生成并插入队列
+    </button>
     {#if error}
       <span class="text-warning">{error}</span>
     {/if}

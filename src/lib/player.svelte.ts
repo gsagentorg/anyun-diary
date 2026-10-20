@@ -190,6 +190,12 @@ export function insertRange(tracks: Track[]): number {
     return tracks.length;
   }
   player.playlist = [...player.playlist, ...tracks];
+  if (!player.track) {
+    player.pos = player.playlist.length - tracks.length;
+    player.history = [];
+    player.playedTitles = [trackKey(tracks[0])];
+    playCurrent();
+  }
   return tracks.length;
 }
 

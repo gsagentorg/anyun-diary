@@ -12,10 +12,13 @@
 
   // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=折睡眠（全部进 ⋮）
   let foldCount = $state(0);
+  // 两行退路：全折后仍放不下（约 <480px）→ 右区独占一行（order-last basis-full justify-around）
+  let stacked = $state(typeof document === 'undefined' ? false : document.documentElement.clientWidth < 480);
   let widths = $state<{ rate?: number; shuffle?: number; sleep?: number }>({});
   const FOLD_ORDER = ['rate', 'shuffle', 'sleep'] as const;
   type FoldKey = (typeof FOLD_ORDER)[number];
-  const TITLE_MIN = 160;
+  const TITLE_MIN = 110; // 左区标题块 min-width（与模板 min-w-[110px] 同步）
+  const PROGRESS_MIN = 80; // 中区进度条 min-width（与模板 min-w-[80px] 同步）
   let barEl = $state<HTMLDivElement>();
   let rowEl = $state<HTMLDivElement>();
   let residentEl = $state<HTMLDivElement>();
@@ -203,7 +206,8 @@
 
   function needFor(fold: number, resident: number, gap: number): number {
     const vis = FOLD_ORDER.slice(fold) as readonly FoldKey[];
-    const dots = fold > 0 && fold < FOLD_ORDER.length ? dotsW : 0;
+    // foldCount>0 就渲染 ⋮（fold=3 时它是折进菜单的唯一入口），宽度计入
+    const dots = fold > 0 ? dotsW : 0;
     const wSum = vis.reduce((s, k) => s + (widths[k] ?? 0), 0);
     const items = 1 + vis.length + (dots > 0 ? 1 : 0);
     return resident + dots + wSum + gap * Math.max(0, items - 1);
@@ -220,13 +224,18 @@
     setW('shuffle', shuffleEl);
     setW('sleep', sleepBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
-    const avail = bar.clientWidth < 640 ? bar.clientWidth - 24 : bar.clientWidth - TITLE_MIN;
+    // 单行档（≥480）可用宽度 = bar - padding24 - 标题min - 进度min - 时间
+    const barW = bar.clientWidth;
+    const avail = barW - 24 - TITLE_MIN - PROGRESS_MIN - (barW < 640 ? 45 : 90);
     const residentW = res.offsetWidth;
     if (!avail || !residentW) return;
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
     let fold = 0;
     while (fold < FOLD_ORDER.length && needFor(fold, residentW, gap) > avail) fold++;
+    // 全折仍 > avail（约 <480 才会发生）→ 两行退路
+    const overflow = needFor(fold, residentW, gap) > avail;
     if (fold !== foldCount) foldCount = fold;
+    if (stacked !== overflow) stacked = overflow;
     if (foldCount === 0 && menuOpen) menuOpen = false;
   }
 
@@ -409,7 +418,7 @@
           {/if}
         </button>
 
-        <div class="min-w-[140px] flex-1">
+        <div class="min-w-[110px] flex-1">
           <div class="flex items-baseline gap-2">
             <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
             {#if player.loading}
@@ -426,7 +435,7 @@
       </div>
 
       <!-- 中区：进度条 + 时间 -->
-      <div class="flex min-w-[160px] flex-1 items-center gap-2">
+      <div class="flex min-w-[80px] flex-1 items-center gap-2">
         <div
           class="relative h-1.5 min-w-0 flex-1 cursor-pointer touch-none rounded-full bg-base-200"
           role="slider" tabindex="0"
@@ -441,12 +450,13 @@
           <div class="h-1.5 rounded-full bg-accent" style:width={pct + '%'}></div>
         </div>
         <div class="shrink-0 text-2xs tabular-nums opacity-60">
-          {player.loading ? '加载中…' : `${fmtClockShort(progress)}${duration ? ' / ' + fmtClockShort(duration) : ''}`}
+          {player.loading ? '加载中…' : fmtClockShort(progress)}
+          {#if !player.loading && duration}<span class="hidden sm:inline"> / {fmtClockShort(duration)}</span>{/if}
         </div>
       </div>
 
       <!-- 右区：常驻级平铺 + 折叠级按空间进 ⋮ 菜单 -->
-      <div class="order-last flex w-full basis-full items-center justify-around gap-1 sm:order-none sm:w-auto sm:basis-auto sm:justify-start sm:gap-1" bind:this={rowEl}>
+      <div class="flex items-center gap-1 {stacked ? 'order-last w-full basis-full justify-around' : 'shrink-0 justify-start'}" bind:this={rowEl}>
         <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 / 队列 / 关闭 -->
         <div class="flex items-center gap-0.5 sm:gap-1" bind:this={residentEl}>
           <button class="rounded-md p-2 transition hover:bg-base-200 disabled:opacity-30"

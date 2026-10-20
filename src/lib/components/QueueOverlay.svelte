@@ -117,7 +117,7 @@
     <StateHint kind="empty" />
   {:else}
     <ol class="mt-3 space-y-1 text-xs">
-      {#each list as t, i (t.clip.file)}
+      {#each list as t, i (t.clip.file + '@' + i)}
         <li>
           <div
             class="flex items-center gap-1 rounded border-l-2 px-1 py-0.5 {i === player.pos

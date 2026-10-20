@@ -220,7 +220,7 @@
     setW('shuffle', shuffleEl);
     setW('sleep', sleepBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
-    const avail = bar.clientWidth - TITLE_MIN;
+    const avail = bar.clientWidth < 640 ? bar.clientWidth - 24 : bar.clientWidth - TITLE_MIN;
     const residentW = res.offsetWidth;
     if (!avail || !residentW) return;
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
@@ -409,7 +409,7 @@
           {/if}
         </button>
 
-        <div class="min-w-0 flex-1">
+        <div class="min-w-[140px] flex-1">
           <div class="flex items-baseline gap-2">
             <span class="truncate text-sm font-medium" aria-live="polite">{t.clip.title || '（未识别）'}</span>
             {#if player.loading}
@@ -446,7 +446,7 @@
       </div>
 
       <!-- 右区：常驻级平铺 + 折叠级按空间进 ⋮ 菜单 -->
-      <div class="flex shrink-0 items-center gap-0.5 sm:gap-1" bind:this={rowEl}>
+      <div class="order-last flex w-full basis-full items-center justify-around gap-1 sm:order-none sm:w-auto sm:basis-auto sm:justify-start sm:gap-1" bind:this={rowEl}>
         <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 / 队列 / 关闭 -->
         <div class="flex items-center gap-0.5 sm:gap-1" bind:this={residentEl}>
           <button class="rounded-md p-2 transition hover:bg-base-200 disabled:opacity-30"

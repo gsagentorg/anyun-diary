@@ -433,6 +433,9 @@
               aria-live="polite"
               title={t.clip.title || '（未识别）'}
             >{t.clip.title || '（未识别）'}</span>
+            {#if sleep.until != null || sleep.afterTrack}
+              <span class="shrink-0 text-2xs text-accent tabular-nums flex items-center gap-0.5"><MoonStar class="h-3 w-3" />{sleepLabel()}</span>
+            {/if}
             {#if player.loading}
               <span class="shrink-0 text-2xs text-accent">加载中…</span>
             {/if}

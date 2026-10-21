@@ -174,6 +174,24 @@
           去直播间
         </a>
       </div>
+    {:else}
+      <!-- 兜底：liveInfo 尚未拉到（首次加载/接口瞬时失败）或 live === null → 未开播版式，条不消失 -->
+      <div class="flex items-center gap-3 rounded-lg border border-base-300 px-3 py-2">
+        <img
+          src="/brand/cover.jpg"
+          alt="直播间封面"
+          class="h-9 w-16 shrink-0 rounded-md object-cover"
+        />
+        <span class="shrink-0 text-sm">未开播</span>
+        <a
+          href={LIVE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="ml-auto shrink-0 rounded-full border border-accent px-3 py-1 text-2xs text-accent transition hover:bg-base-200"
+        >
+          去直播间
+        </a>
+      </div>
     {/if}
   </section>
   {/if}

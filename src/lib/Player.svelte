@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { fly } from 'svelte/transition';
   import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical } from 'lucide-svelte';
@@ -9,16 +10,14 @@
   let sleepOpen = $state(false);
   let rateOpen = $state(false);
   let menuOpen = $state(false);
+  let menuPanelEl = $state<HTMLDivElement>();
 
-  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=折睡眠（全部进 ⋮）
+  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折睡眠，4=再折播放队列（全部进 ⋮）
   let foldCount = $state(0);
-  // 两行退路：全折后仍放不下（约 <480px）→ 右区独占一行（order-last basis-full justify-around）
-  let stacked = $state(typeof document === 'undefined' ? false : document.documentElement.clientWidth < 480);
-  let widths = $state<{ rate?: number; shuffle?: number; sleep?: number }>({});
-  const FOLD_ORDER = ['rate', 'shuffle', 'sleep'] as const;
+  let widths = $state<{ rate?: number; shuffle?: number; sleep?: number; queue?: number }>({});
+  const FOLD_ORDER = ['rate', 'shuffle', 'sleep', 'queue'] as const;
   type FoldKey = (typeof FOLD_ORDER)[number];
-  const TITLE_MIN = 110; // 左区标题块 min-width（与模板 min-w-[110px] 同步）
-  const PROGRESS_MIN = 80; // 中区进度条 min-width（与模板 min-w-[80px] 同步）
+  // 左区标题块 / 中区进度条 min-width：<640 收窄（与模板 min-w-[90px] sm:min-w-[110px] 等同步）
   let barEl = $state<HTMLDivElement>();
   let rowEl = $state<HTMLDivElement>();
   let residentEl = $state<HTMLDivElement>();
@@ -28,6 +27,7 @@
   let rateBtnEl = $state<HTMLButtonElement>();
   let sleepBtnEl = $state<HTMLButtonElement>();
   let dotsBtn = $state<HTMLButtonElement>();
+  let queueBtnEl = $state<HTMLButtonElement>();
   let shuffleEl = $state<HTMLElement>();
   let dotsW = 36;
   let customMin = $state(15);
@@ -35,7 +35,7 @@
   let playing = $state(false);
   let rateInput = $state(1);
 
-  const PRESETS = [15, 25, 30, 45, 60, 90];
+  const PRESETS = [15, 25, 40, 55, 70, 90];
   const RATE_PRESETS = [0.5, 1, 1.5, 2, 3];
 
   onMount(() => initRate());
@@ -200,6 +200,16 @@
     player.track = null;
   }
 
+  // ⋮ 菜单点击外部关闭：不在菜单面板、也不在 ⋮ 按钮内 → 收起（浏览器守卫）
+  function onOutsidePointerDown(e: PointerEvent) {
+    if (typeof document === 'undefined' || !menuOpen) return;
+    const target = e.target as Node | null;
+    if (!target) return;
+    if (menuPanelEl?.contains(target)) return;
+    if (dotsBtn?.contains(target)) return;
+    menuOpen = false;
+  }
+
   // 缓存折叠级按钮实测宽（仅可见时更新，进菜单后保留上次缓存）
   function setW(k: FoldKey, el?: HTMLElement) {
     if (!el) return;
@@ -209,14 +219,14 @@
 
   function needFor(fold: number, resident: number, gap: number): number {
     const vis = FOLD_ORDER.slice(fold) as readonly FoldKey[];
-    // foldCount>0 就渲染 ⋮（fold=3 时它是折进菜单的唯一入口），宽度计入
+    // foldCount>0 就渲染 ⋮（fold=4 时它是折进菜单的唯一入口），宽度计入
     const dots = fold > 0 ? dotsW : 0;
     const wSum = vis.reduce((s, k) => s + (widths[k] ?? 0), 0);
     const items = 1 + vis.length + (dots > 0 ? 1 : 0);
     return resident + dots + wSum + gap * Math.max(0, items - 1);
   }
 
-  // 从「全不折」贪心翻折：放不下就依次折倍速 → 随机 → 睡眠
+  // 从「全不折」贪心翻折：放不下就依次折倍速 → 随机 → 睡眠 → 播放队列
   function recalc() {
     if (typeof window === 'undefined') return;
     const bar = barEl;
@@ -226,19 +236,17 @@
     setW('rate', rateBtnEl);
     setW('shuffle', shuffleEl);
     setW('sleep', sleepBtnEl);
+    setW('queue', queueBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
-    // 单行档（≥480）可用宽度 = bar - padding24 - 标题min - 进度min - 时间
+    // 可用宽度 = bar - padding24 - 标题min - 进度min - 时间（<640 收窄 + 时间完全隐藏不计宽）
     const barW = bar.clientWidth;
-    const avail = barW - 24 - TITLE_MIN - PROGRESS_MIN - (barW < 640 ? 45 : 90);
+    const avail = barW - 24 - (barW < 640 ? 90 : 110) - (barW < 640 ? 60 : 80) - (barW < 640 ? 0 : 45);
     const residentW = res.offsetWidth;
     if (!avail || !residentW) return;
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
     let fold = 0;
     while (fold < FOLD_ORDER.length && needFor(fold, residentW, gap) > avail) fold++;
-    // 全折仍 > avail（约 <480 才会发生）→ 两行退路
-    const overflow = needFor(fold, residentW, gap) > avail;
     if (fold !== foldCount) foldCount = fold;
-    if (stacked !== overflow) stacked = overflow;
     if (foldCount === 0 && menuOpen) menuOpen = false;
   }
 
@@ -425,7 +433,7 @@
           {/if}
         </button>
 
-        <div class="min-w-[110px] flex-1" bind:this={titleBoxEl}>
+        <div class="min-w-[90px] flex-1 sm:min-w-[110px]" bind:this={titleBoxEl}>
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
@@ -449,8 +457,8 @@
         </div>
       </div>
 
-      <!-- 中区：进度条 + 时间 -->
-      <div class="flex min-w-[80px] flex-1 items-center gap-2">
+      <!-- 中区：进度条 + 时间（<sm 时间完全隐藏，仅留进度条） -->
+      <div class="flex min-w-[60px] flex-1 items-center gap-2 sm:min-w-[80px]">
         <div
           class="relative h-1.5 min-w-0 flex-1 cursor-pointer touch-none rounded-full bg-base-200"
           role="slider" tabindex="0"
@@ -464,40 +472,28 @@
         >
           <div class="h-1.5 rounded-full bg-accent" style:width={pct + '%'}></div>
         </div>
-        <div class="shrink-0 text-2xs tabular-nums opacity-60">
+        <div class="hidden shrink-0 text-2xs tabular-nums opacity-60 sm:block">
           {player.loading ? '加载中…' : fmtClockShort(progress)}
           {#if !player.loading && duration}<span class="hidden sm:inline"> / {fmtClockShort(duration)}</span>{/if}
         </div>
       </div>
 
       <!-- 右区：常驻级平铺 + 折叠级按空间进 ⋮ 菜单 -->
-      <div class="flex items-center gap-1 {stacked ? 'order-last w-full basis-full justify-around' : 'shrink-0 justify-start'}" bind:this={rowEl}>
-        <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 / 队列 / 关闭 -->
+      <div class="flex shrink-0 items-center justify-start gap-1" bind:this={rowEl}>
+        <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 / 关闭 -->
         <div class="flex items-center gap-0.5 sm:gap-1" bind:this={residentEl}>
-          <button class="rounded-md p-2 transition hover:bg-base-200 disabled:opacity-30"
+          <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
             onclick={() => step(-1)} disabled={pos <= 0} aria-label="上一首">
             <SkipBack class="h-4 w-4" />
           </button>
           <span class="text-2xs tabular-nums opacity-60">{pos + 1}/{total}</span>
-          <button class="rounded-md p-2 transition hover:bg-base-200 disabled:opacity-30"
+          <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
             onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
             <SkipForward class="h-4 w-4" />
           </button>
 
-          {#if player.playlist.length > 0}
-            <button
-              class="rounded-md p-2 transition hover:bg-base-200 {player.queueOpen ? 'text-accent' : ''}"
-              onclick={() => (player.queueOpen = !player.queueOpen)}
-              aria-label="播放队列"
-              aria-expanded={player.queueOpen}
-              title="播放队列"
-            >
-              <ListMusic class="h-4 w-4" />
-            </button>
-          {/if}
-
           <button
-            class="rounded-md p-2 transition hover:bg-base-200"
+            class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2"
             onclick={closePlayer}
             aria-label="关闭播放器"
             title="关闭播放器"
@@ -511,7 +507,7 @@
           <div class="relative">
             <button
               bind:this={rateBtnEl}
-              class="relative rounded-md p-2 transition hover:bg-base-200 {player.playbackRate !== 1 ? 'text-accent' : ''}"
+              class="relative rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.playbackRate !== 1 ? 'text-accent' : ''}"
               onclick={() => (rateOpen = !rateOpen)}
               aria-label="播放倍速"
               aria-expanded={rateOpen}
@@ -535,12 +531,12 @@
           </span>
         {/if}
 
-        <!-- 折叠级：睡眠定时器（最后折） -->
+        <!-- 折叠级：睡眠定时器 -->
         {#if foldCount < 3}
           <div class="relative">
             <button
               bind:this={sleepBtnEl}
-              class="relative rounded-md p-2 transition hover:bg-base-200 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
+              class="relative rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {(sleep.until != null || sleep.afterTrack) ? 'text-accent' : ''}"
               onclick={() => (sleepOpen = !sleepOpen)}
               aria-label="睡眠定时器"
               aria-expanded={sleepOpen}
@@ -559,12 +555,26 @@
           </div>
         {/if}
 
+        <!-- 折叠级：播放队列（最后折；折进 ⋮ 菜单时由菜单项打开队列） -->
+        {#if foldCount < 4 && player.playlist.length > 0}
+          <button
+            bind:this={queueBtnEl}
+            class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.queueOpen ? 'text-accent' : ''}"
+            onclick={() => (player.queueOpen = !player.queueOpen)}
+            aria-label="播放队列"
+            aria-pressed={player.queueOpen}
+            title="播放队列"
+          >
+            <ListMusic class="h-4 w-4" />
+          </button>
+        {/if}
+
         <!-- ⋮ 折叠菜单（仅折了钮时出现） -->
         {#if foldCount > 0}
           <div class="relative">
             <button
               bind:this={dotsBtn}
-              class="rounded-md p-2 transition hover:bg-base-200"
+              class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2"
               onclick={() => (menuOpen = !menuOpen)}
               aria-label="更多功能"
               aria-expanded={menuOpen}
@@ -573,10 +583,27 @@
               <MoreVertical class="h-4 w-4" />
             </button>
             {#if menuOpen}
-              <div class="absolute bottom-full right-0 mb-2 w-56 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+              <div
+                bind:this={menuPanelEl}
+                transition:fly={{ y: -8, duration: 160 }}
+                class="absolute bottom-full right-0 mb-2 w-56 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg"
+              >
                 {#if foldCount >= 1}{@render rateRow()}{/if}
                 {#if foldCount >= 2}<div class="mt-1 border-t border-base-300 pt-1">{@render shuffleControl('row')}</div>{/if}
                 {#if foldCount >= 3}<div class="mt-1 border-t border-base-300 pt-1">{@render sleepPanel()}</div>{/if}
+                {#if foldCount >= 4 && player.playlist.length > 0}
+                  <div class="mt-1 border-t border-base-300 pt-1">
+                    <button
+                      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.queueOpen ? 'text-accent' : ''}"
+                      onclick={() => { player.queueOpen = true; menuOpen = false; }}
+                      aria-label="播放队列"
+                      title="播放队列"
+                    >
+                      <ListMusic class="h-4 w-4" />
+                      <span>播放队列</span>
+                    </button>
+                  </div>
+                {/if}
               </div>
             {/if}
           </div>
@@ -585,3 +612,5 @@
     </div>
   </div>
 {/if}
+
+<svelte:window onpointerdown={onOutsidePointerDown} />

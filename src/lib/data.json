@@ -1,5 +1,5 @@
 {
- "generatedAt": 1792836711,
+ "generatedAt": 1792845509,
  "timezone": "Asia/Shanghai",
  "recordings": [
   {
@@ -3053,6 +3053,16 @@
    "file": "2026-10-21 08-31-56",
    "start": 1792542716,
    "duration": null,
+   "clips": [
+    {
+     "file": "2026-10-21 08-31-56-00.07.08.526-00.10.05.182.m4a",
+     "opus": "2026-10-21 08-31-56-00.07.08.526-00.10.05.182.opus",
+     "offsetStart": 428.526,
+     "offsetEnd": 605.182,
+     "seg": null,
+     "title": "明明"
+    }
+   ],
    "segments": [
     {
      "start": 428.525806,

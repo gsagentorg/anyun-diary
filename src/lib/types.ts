@@ -3,7 +3,7 @@ export interface Clip {
   opus: string;
   offsetStart: number;
   offsetEnd: number;
-  seg: string;
+  seg: string | null;
   title: string;
 }
 

@@ -1,6 +1,7 @@
 import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
+import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
 
 export type { Track };
 export { buildRecTracks };
@@ -17,6 +18,8 @@ export const player = $state<{
   playedTitles: string[]; // 已播曲目的「曲目标识」（同名歌曲视为同一首，随机不再抽）
   queueOpen: boolean; // 播放队列叠层开关
   playbackRate: number; // 播放倍速（clamp 到 [0.01, 8]）
+  dedupByName: boolean; // 随机去重：同名不同词是否算重复（true=同名即同曲，不重抽）
+  lyricsOpen: boolean; // 歌词面板开关
 }>({
   track: null,
   loading: false,
@@ -28,6 +31,8 @@ export const player = $state<{
   playedTitles: [],
   queueOpen: false,
   playbackRate: 1,
+  dedupByName: true,
+  lyricsOpen: false,
 });
 
 const RATE_KEY = 'anyun-rate';
@@ -63,9 +68,38 @@ export function initRate() {
   }
 }
 
+const DEDUP_KEY = 'anyun-dedup';
+
+/** 从 localStorage 恢复「同名不同词算重复」开关（缺省/非法值一律 true）；仅浏览器环境调用 */
+export function initDedup() {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(DEDUP_KEY);
+    if (raw === '0' || raw === 'false') player.dedupByName = false;
+    else if (raw === '1' || raw === 'true') player.dedupByName = true;
+  } catch {
+    /* 忽略读取失败 */
+  }
+}
+
+/** 切换「同名不同词算重复」：写 state + localStorage('anyun-dedup')；键基变了 → 清随机历史 */
+export function setDedupByName(v: boolean) {
+  player.dedupByName = v;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(DEDUP_KEY, v ? '1' : '0');
+    } catch {
+      /* 忽略存储失败 */
+    }
+  }
+  player.history = [];
+  player.playedTitles = player.track ? [trackKey(player.track)] : [];
+}
+
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
 function trackKey(t: Track): string {
-  return trackKeyOf(t.clip);
+  if (player.dedupByName) return trackKeyOf(t.clip);
+  return hasLyrics(t.clip) ? `L:${t.clip.title}#${lyricsFingerprint(t.clip)}` : trackKeyOf(t.clip);
 }
 
 /** 音频单例挂 globalThis：HMR 重载本模块也不会产生第二实例（防叠播） */
@@ -126,16 +160,28 @@ function playCurrent() {
 
 let mediaHandlersBound = false;
 
-function updateMediaSession(t: Track) {
-  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-  const ms = navigator.mediaSession;
+/** 系统媒体浮层的 metadata：有歌词时「歌名」处放当前歌词、「作者」处放歌名；无歌词保持原样 */
+function buildMetadata(t: Track, lyricText: string | null): MediaMetadata {
   const md = Number.isFinite(t.rec.start) ? dateCard(t.rec.start).md : '';
-  ms.metadata = new MediaMetadata({
-    title: t.clip.title || '（未识别）',
-    artist: '安允日记',
+  const name = t.clip.title || '（未识别）';
+  return new MediaMetadata({
+    title: lyricText ?? name,
+    artist: lyricText != null ? name : '安允日记',
     album: md ? `安允日记 · ${md}` : '安允日记',
     artwork: [{ src: '/brand/cover.jpg', sizes: 'any', type: 'image/jpeg' }],
   });
+}
+
+// 歌词 → 系统浮层的去重缓存：同一曲目同一行不重复构造 MediaMetadata
+let mdLineIdx = -1;
+let mdClipFile = '';
+
+function updateMediaSession(t: Track) {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  const ms = navigator.mediaSession;
+  mdLineIdx = -1;
+  mdClipFile = '';
+  ms.metadata = buildMetadata(t, null);
   if (!mediaHandlersBound) {
     mediaHandlersBound = true;
     ms.setActionHandler('play', () => getAudio().play().catch(() => {}));
@@ -151,6 +197,17 @@ function updateMediaSession(t: Track) {
       a.currentTime = Math.min(a.duration || 0, a.currentTime + (d?.seekOffset ?? 10));
     });
   }
+}
+
+/** 播放进度变化时把当前歌词行同步到系统媒体浮层（仅在有歌词的曲目上生效） */
+export function syncLyricMetadata(t: Track | null, pos: number) {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  if (!t || !hasLyrics(t.clip) || !Number.isFinite(pos)) return;
+  const idx = lyricIndexAt(t.clip.lyrics, pos);
+  if (idx === mdLineIdx && mdClipFile === t.clip.opus) return;
+  mdLineIdx = idx;
+  mdClipFile = t.clip.opus;
+  navigator.mediaSession.metadata = buildMetadata(t, idx < 0 ? null : t.clip.lyrics![idx].text);
 }
 
 /** 播放进度上报给系统浮层（timeupdate 里调用） */

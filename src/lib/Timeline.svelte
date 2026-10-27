@@ -121,12 +121,18 @@
     Math.min(100, Math.max(0, ((abs - dayStart) / DAY) * 100));
 
   // compress 模式：每簇（间隔 >= CLUSTER_GAP 分段）首歌起点一个 HH:MM 标签
-  function laneLabels(songs: SongBlock[], scale: LaneScale): { x: number; text: string; key: number }[] {
+  function laneLabels(
+    songs: SongBlock[],
+    scale: LaneScale,
+    rects: { left: number; width: number }[],
+  ): { x: number; text: string; key: number }[] {
     const out: { x: number; text: string; key: number }[] = [];
     let prevX = -Infinity;
     for (let i = 0; i < songs.length; i++) {
       if (i > 0 && songs[i].start - songs[i - 1].end < CLUSTER_GAP) continue;
-      const x = scale.xAt(songs[i].start);
+      const rect = rects[i];
+      if (!rect) continue;
+      const x = rect.left;
       if (x > laneWidth) continue; // 超出泳道右缘
       if (x - prevX < LABEL_MIN_GAP) continue; // 与上一个标签过近
       out.push({ x, text: clock(songs[i].start), key: i });
@@ -218,7 +224,6 @@
             {/each}
           </div>
         {:else if laneWidth > 0}
-          {@const labels = scale ? laneLabels(lane.songs, scale) : []}
           {@const rects = scale
             ? layoutSongs(
                 lane.songs.map((b) => ({ x0: scale.xAt(b.start), x1: scale.xAt(b.end) })),
@@ -226,6 +231,7 @@
                 BLOCK_GAP,
               )
             : []}
+          {@const labels = scale ? laneLabels(lane.songs, scale, rects) : []}
           <div class="relative mb-2 h-10">
             {#if scale}
               {#each scale.segs as s (s.t0)}

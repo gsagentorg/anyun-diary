@@ -7,6 +7,7 @@
   import { player, adopt } from '$lib/player.svelte';
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
+  import LyricsSheet from '$lib/components/LyricsSheet.svelte';
   import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
@@ -51,7 +52,7 @@
   });
 
   // 缺字段的录像（未导出切片/无时长）补空数组，避免组件里 undefined.length
-  const recordings: Recording[] = (data.recordings as Recording[]).map((r) => ({
+  const recordings: Recording[] = (data.recordings as unknown as Recording[]).map((r) => ({
     ...r,
     duration: r.duration ?? null,
     segments: r.segments ?? [],
@@ -215,6 +216,7 @@
   </div>
 
   <QueueOverlay />
+  <LyricsSheet />
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

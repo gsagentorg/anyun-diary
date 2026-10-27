@@ -5,8 +5,15 @@ export interface Clip {
   offsetEnd: number;
   seg: string | null;
   title: string;
+  /** 歌词行（lrc 解析产物，t=相对切片开头的秒） */
+  lyrics?: LyricLine[] | null;
 }
 
+/** 歌词行（lrc 解析产物，t=相对切片开头的秒） */
+export interface LyricLine {
+  t: number;
+  text: string;
+}
 export interface Segment {
   start: number;
   end: number;

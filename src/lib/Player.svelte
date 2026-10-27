@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, setDedupByName, syncLyricMetadata } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical } from 'lucide-svelte';
+  import { hasLyrics } from './lyrics';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat } from 'lucide-svelte';
 
   let progress = $state(0);
   let duration = $state(0);
@@ -12,10 +13,10 @@
   let menuOpen = $state(false);
   let menuPanelEl = $state<HTMLDivElement>();
 
-  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折睡眠，4=再折播放队列（全部进 ⋮）
+  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折同名去重，4=再折睡眠，5=再折队列（+全部进 ⋮）
   let foldCount = $state(0);
-  let widths = $state<{ rate?: number; shuffle?: number; sleep?: number; queue?: number }>({});
-  const FOLD_ORDER = ['rate', 'shuffle', 'sleep', 'queue'] as const;
+  let widths = $state<{ rate?: number; shuffle?: number; dedup?: number; sleep?: number; queue?: number }>({});
+  const FOLD_ORDER = ['rate', 'shuffle', 'dedup', 'sleep', 'queue'] as const;
   type FoldKey = (typeof FOLD_ORDER)[number];
   // 左区标题块 / 中区进度条 min-width：<640 收窄（与模板 min-w-[90px] sm:min-w-[110px] 等同步）
   let barEl = $state<HTMLDivElement>();
@@ -25,6 +26,7 @@
   let titleBoxEl = $state<HTMLDivElement>();
   let titleOverflow = $state(false);
   let rateBtnEl = $state<HTMLButtonElement>();
+  let dedupBtnEl = $state<HTMLButtonElement>();
   let sleepBtnEl = $state<HTMLButtonElement>();
   let dotsBtn = $state<HTMLButtonElement>();
   let queueBtnEl = $state<HTMLButtonElement>();
@@ -38,7 +40,7 @@
   const PRESETS = [15, 25, 40, 55, 70, 90];
   const RATE_PRESETS = [0.5, 1, 1.5, 2, 3];
 
-  onMount(() => initRate());
+  onMount(() => { initRate(); initDedup(); });
 
   $effect(() => {
     const a = getAudio();
@@ -49,6 +51,7 @@
     const onTime = () => {
       if (!dragging) progress = a.currentTime;
       reportPlaybackState(duration, a.currentTime); // 系统媒体浮层进度
+      syncLyricMetadata(player.track, a.currentTime); // 系统媒体浮层歌词
     };
     const onMeta = () => {
       duration = Number.isFinite(a.duration) ? a.duration : 0;
@@ -235,6 +238,7 @@
     if (!bar || !row || !res) return;
     setW('rate', rateBtnEl);
     setW('shuffle', shuffleEl);
+    setW('dedup', dedupBtnEl);
     setW('sleep', sleepBtnEl);
     setW('queue', queueBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
@@ -437,9 +441,17 @@
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
-              class="{titleOverflow ? 'opacity-0 select-none' : 'truncate'} text-sm font-medium"
+              class="{titleOverflow ? 'opacity-0 select-none' : 'truncate'} text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
               aria-live="polite"
-              title={t.clip.title || '（未识别）'}
+              role="button"
+              tabindex="0"
+              title={hasLyrics(t.clip) ? '点击看歌词 · ' + (t.clip.title || '（未识别）') : t.clip.title || '（未识别）'}
+              onclick={() => { if (hasLyrics(t.clip)) player.lyricsOpen = true; }}
+              onkeydown={(e) => {
+                if (e.key !== 'Enter' && e.key !== ' ') return;
+                e.preventDefault();
+                if (hasLyrics(t.clip)) player.lyricsOpen = true;
+              }}
             >{t.clip.title || '（未识别）'}</span>
             {#if sleep.until != null || sleep.afterTrack}
               <span class="shrink-0 text-2xs text-accent tabular-nums flex items-center gap-0.5"><MoonStar class="h-3 w-3" />{sleepLabel()}</span>
@@ -531,8 +543,22 @@
           </span>
         {/if}
 
-        <!-- 折叠级：睡眠定时器 -->
+        <!-- 折叠级：同名不同词算重复（随机去重开关） -->
         {#if foldCount < 3}
+          <button
+            bind:this={dedupBtnEl}
+            class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.dedupByName ? 'text-accent' : ''}"
+            onclick={() => setDedupByName(!player.dedupByName)}
+            aria-label="同名不同词算重复"
+            aria-pressed={player.dedupByName}
+            title="同名不同词算重复"
+          >
+            <Repeat class="h-4 w-4" />
+          </button>
+        {/if}
+
+        <!-- 折叠级：睡眠定时器 -->
+        {#if foldCount < 4}
           <div class="relative">
             <button
               bind:this={sleepBtnEl}
@@ -556,7 +582,7 @@
         {/if}
 
         <!-- 折叠级：播放队列（最后折；折进 ⋮ 菜单时由菜单项打开队列） -->
-        {#if foldCount < 4 && player.playlist.length > 0}
+        {#if foldCount < 5 && player.playlist.length > 0}
           <button
             bind:this={queueBtnEl}
             class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.queueOpen ? 'text-accent' : ''}"
@@ -590,8 +616,18 @@
               >
                 {#if foldCount >= 1}{@render rateRow()}{/if}
                 {#if foldCount >= 2}<div class="mt-1 border-t border-base-300 pt-1">{@render shuffleControl('row')}</div>{/if}
-                {#if foldCount >= 3}<div class="mt-1 border-t border-base-300 pt-1">{@render sleepPanel()}</div>{/if}
-                {#if foldCount >= 4 && player.playlist.length > 0}
+                {#if foldCount >= 3}
+                  <div class="mt-1 border-t border-base-300 pt-1">
+                    <button class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.dedupByName ? 'text-accent' : ''}"
+                      onclick={() => setDedupByName(!player.dedupByName)}
+                      aria-pressed={player.dedupByName} title="同名不同词算重复">
+                      <Repeat class="h-4 w-4" />
+                      <span>同名不同词算重复{player.dedupByName ? '：开' : '：关'}</span>
+                    </button>
+                  </div>
+                {/if}
+                {#if foldCount >= 4}<div class="mt-1 border-t border-base-300 pt-1">{@render sleepPanel()}</div>{/if}
+                {#if foldCount >= 5 && player.playlist.length > 0}
                   <div class="mt-1 border-t border-base-300 pt-1">
                     <button
                       class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.queueOpen ? 'text-accent' : ''}"

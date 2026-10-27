@@ -27,8 +27,55 @@ SEG_RE = re.compile(
     r"(?:-(seg\d+))?\.(m4a|ogg)$"
 )
 
+TS_RE = re.compile(r"\[(\d{1,2}):(\d{2})\.(\d{2,3})\]")
+META_RE = re.compile(r"^\[(ti|ar|by|al|kana):", re.IGNORECASE)
+OFFSET_RE = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]", re.IGNORECASE)
+
 def hms_ms(a, b, c, d):
     return int(a) * 3600 + int(b) * 60 + int(c) + int(d) / 1000.0
+
+def parse_lrc(path):
+    """解析标准 LRC，返回 [{"t": 秒, "text": 歌词}]，t 相对切片开头。
+    支持：一行多个时间戳、2~3 位小数秒、[offset:±ms]（正值=歌词提前 ⇒ t += -offset/1000，多次累加）。
+    失败返回 [] 并打 WARN，不抛异常。
+    """
+    try:
+        with open(path, encoding="utf-8-sig", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except Exception as e:
+        print(f"WARN: 读歌词失败 {os.path.basename(path)}: {e}", file=sys.stderr)
+        return []
+
+    offset_ms = 0
+    items = []
+    try:
+        for raw in lines:
+            line = raw.strip()
+            if not line:
+                continue
+            om = OFFSET_RE.match(line)
+            if om:
+                offset_ms += int(om.group(1))
+                continue
+            if META_RE.match(line):
+                continue
+            stamps = TS_RE.findall(line)
+            if not stamps:
+                continue
+            text = TS_RE.sub("", line).strip()
+            if not text:
+                continue
+            for mm, ss, frac in stamps:
+                t = int(mm) * 60 + int(ss) + int(frac) / (10 ** len(frac))
+                items.append({"t": t, "text": text})
+        shift = -offset_ms / 1000.0
+        for it in items:
+            it["t"] = round(it["t"] + shift, 3)
+        items.sort(key=lambda x: x["t"])
+    except Exception as e:
+        print(f"WARN: 解析歌词失败 {os.path.basename(path)}: {e}", file=sys.stderr)
+        return []
+    return items
 
 def read_tags(path):
     """读切片文件自带的 title/artist 标签，返回 (title, artist)。
@@ -89,6 +136,8 @@ def main():
     # 已打标签: 切片文件 → 归并进骨架（rec_name 无录像时补建）
     tagged_dir = os.path.join(BASE, "已打标签")
     for f in sorted(os.listdir(tagged_dir)):
+        if f.endswith(".lrc"):
+            continue
         m = SEG_RE.match(f)
         if not m:
             print(f"WARN: 无法解析切片名: {f}", file=sys.stderr)
@@ -102,14 +151,19 @@ def main():
         seg_no = m.group(10)
         tag_title, tag_artist = read_tags(os.path.join(tagged_dir, f))
         title = fmt_title(tag_title, tag_artist)
-        recs[rec_name].setdefault("clips", []).append({
+        lrc_path = os.path.join(tagged_dir, os.path.splitext(f)[0] + ".lrc")
+        lyrics = parse_lrc(lrc_path) if os.path.exists(lrc_path) else []
+        clip_obj = {
             "file": f,
             "opus": f"{os.path.splitext(f)[0]}.opus",
             "offsetStart": round(off_start, 3),
             "offsetEnd": round(off_end, 3),
             "seg": seg_no,
             "title": title,
-        })
+        }
+        if lyrics:
+            clip_obj["lyrics"] = lyrics
+        recs[rec_name].setdefault("clips", []).append(clip_obj)
 
     # llc: 切片段（按录像名直接匹配骨架 key）
     for f in sorted(os.listdir(BASE)):

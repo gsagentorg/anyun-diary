@@ -172,10 +172,10 @@
   {:else}
   <div class="flex">
     <div class="w-24 shrink-0">
-      <div class="mb-1 h-5"></div>
+      {#if laneMode === 'linear'}<div class="mb-1 h-5"></div>{/if}
       {#each lanes as lane (lane.dayStart)}
         {@const dc = dateCard(lane.dayStart)}
-        <div class="mb-2 flex h-10 flex-col justify-center">
+        <div class="mb-2 flex flex-col justify-center {laneMode === 'linear' ? 'h-10' : 'h-14'}">
           <div class="flex items-center gap-1">
             <span class="text-sm font-bold tabular-nums">{dc.md}</span>
             <span class="text-2xs opacity-60">{dc.wd}</span>
@@ -232,13 +232,13 @@
               )
             : []}
           {@const labels = scale ? laneLabels(lane.songs, scale, rects) : []}
-          <div class="relative mb-2 h-10">
+          <div class="relative mb-2 h-14">
             {#if scale}
               {#each scale.segs as s (s.t0)}
                 {#if s.kind === 'blank' && s.x1 - s.x0 >= 2}
                   {@const sw = s.x1 - s.x0}
                   <div
-                    class="absolute top-1/2 h-2.5 -translate-y-1/2 rounded-sm"
+                    class="absolute top-[42px] h-2.5 -translate-y-1/2 rounded-sm"
                     style:left={s.x0 + 'px'} style:width={sw + 'px'}
                     style:background={blankBg(s.c, sw)}
                     role="img"
@@ -249,7 +249,7 @@
                 {/if}
               {/each}
               {#each labels as l (l.key)}
-                <div class="absolute -top-3 text-2xs whitespace-nowrap opacity-55" style:left={l.x + 'px'}>
+                <div class="absolute top-0.5 text-2xs whitespace-nowrap opacity-55" style:left={l.x + 'px'}>
                   {l.text}
                 </div>
               {/each}
@@ -260,7 +260,7 @@
                 {@const hue = hueOf(b.clip.title)}
                 {@const active = player.track?.clip.file === b.clip.file}
                 <div
-                  class="absolute top-0 h-10 cursor-pointer"
+                  class="absolute top-0 h-14 cursor-pointer"
                   style:left={visLeft - HIT_PAD + 'px'} style:width={visW + HIT_PAD * 2 + 'px'}
                   role="button" tabindex="0"
                   onclick={() => playSong(b)}
@@ -269,7 +269,7 @@
                   onmouseleave={() => (tip = null)}
                 >
                   <div
-                    class="absolute top-2.5 h-5 rounded-sm transition hover:brightness-110"
+                    class="absolute top-8 h-5 rounded-sm transition hover:brightness-110"
                     class:ring-2={active}
                     class:ring-accent={active}
                     style:left={HIT_PAD + 'px'} style:width={visW + 'px'}
@@ -288,7 +288,7 @@
             {/if}
           </div>
         {:else}
-          <div class="relative mb-2 h-10"></div>
+          <div class="relative mb-2 h-14"></div>
         {/if}
       {/each}
     </div>

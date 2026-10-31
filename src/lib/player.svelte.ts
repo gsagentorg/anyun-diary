@@ -560,6 +560,11 @@ function snapshotRebuild(queue: string[]): Track[] {
   return tracks;
 }
 
+/** 测试专用：重置 initSession 的一次性守卫（生产代码勿调） */
+export function __resetSessionGuardForTest() {
+  gAudio.__anyunSessionInit = false;
+}
+
 /** 启动恢复：读快照 → 重建队列 → 预载当前曲到进度处（保持暂停）；仅浏览器调用一次 */
 export function initSession() {
   if (typeof window === 'undefined' || gAudio.__anyunSessionInit) return;

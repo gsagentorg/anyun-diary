@@ -120,6 +120,23 @@
   const xPct = (abs: number, dayStart: number) =>
     Math.min(100, Math.max(0, ((abs - dayStart) / DAY) * 100));
 
+  // 浏览器查找只应命中可见文本：truncate 截断的歌名把 DOM 文本裁到可视容量（CJK≈10px/字，拉丁≈0.6），
+  // 避免「搜得到却滚不到」（横向泳道容器内浏览器 find 无法滚动定位）
+  function visibleTitle(title: string, w: number): string {
+    const t = title || '（未识别）';
+    const cap = Math.max(2, Math.floor((w - 10) / 10));
+    if (t.length <= cap) return t;
+    let budget = cap;
+    let out = '';
+    for (const ch of t) {
+      const cost = /[\x00-\x7F]/.test(ch) ? 0.6 : 1;
+      if (cost > budget) break;
+      out += ch;
+      budget -= cost;
+    }
+    return out;
+  }
+
   // compress 模式：每簇（间隔 >= CLUSTER_GAP 分段）首歌起点一个 HH:MM 标签
   function laneLabels(
     songs: SongBlock[],
@@ -279,7 +296,7 @@
                       <span
                         class="pointer-events-none block truncate px-1 text-2xs leading-5 text-white"
                         style:text-shadow="0 1px 2px rgb(0 0 0 / 0.45)"
-                        >{b.clip.title || '（未识别）'}</span
+                        >{visibleTitle(b.clip.title, visW)}</span
                       >
                     {/if}
                   </div>

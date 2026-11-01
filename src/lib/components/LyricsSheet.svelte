@@ -98,11 +98,11 @@
   {#if player.track}
     {@const t = player.track}
     {#if hasLyrics(t.clip)}
-      <div class="relative h-full min-h-[45vh]">
+      <div class="relative h-full">
         <div
           bind:this={boxEl}
           bind:clientHeight={boxH}
-          class="h-full overflow-y-auto overscroll-contain px-3"
+          class="lyr-scroll h-full overflow-y-auto overscroll-contain px-3"
           role="region"
           aria-label="歌词"
           tabindex="-1"
@@ -149,6 +149,21 @@
 </Sheet>
 
 <style>
+  /* 滚动条视觉：细、圆角、半透明，贴面板右缘一根，不再出现系统宽条 */
+  .lyr-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-base-content) 22%, transparent) transparent;
+  }
+  .lyr-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .lyr-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .lyr-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-base-content) 22%, transparent);
+    border-radius: 999px;
+  }
   .lyr-line {
     display: flex;
     width: 100%;

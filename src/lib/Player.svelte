@@ -24,7 +24,6 @@
   let residentEl = $state<HTMLDivElement>();
   let titleEl = $state<HTMLSpanElement>();
   let titleBoxEl = $state<HTMLDivElement>();
-  let titleOverflow = $state(false);
   let rateBtnEl = $state<HTMLButtonElement>();
   let dedupBtnEl = $state<HTMLButtonElement>();
   let skipBtnEl = $state<HTMLButtonElement>();
@@ -247,7 +246,7 @@
     // 可用宽度 = bar - padding24 - 标题min - 进度min - 时间（<640 收窄 + 时间完全隐藏不计宽）
     // 标题 min 已随 flex-nowrap 改为可收缩（truncate 兜底），预算按 70/110 估
     const barW = bar.clientWidth;
-    const avail = barW - 24 - (barW < 640 ? 70 : 110) - (barW < 640 ? 44 : 80) - (barW < 640 ? 0 : 45);
+    const avail = barW - 24 - (barW < 640 ? 64 : 110) - (barW < 640 ? 44 : 80) - (barW < 640 ? 0 : 45);
     const residentW = res.offsetWidth;
     if (!avail || !residentW) return;
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
@@ -277,8 +276,6 @@
     void player.track?.clip.title;
     void player.loading;
     recalc();
-    // 标题溢出检测：放不下 → 视觉隐藏（opacity-0，文本仍在 DOM 供浏览器查找）
-    if (titleEl && titleBoxEl) titleOverflow = titleEl.scrollWidth > titleBoxEl.clientWidth + 1;
   });
 
   const clock = (epoch: number) =>
@@ -440,11 +437,11 @@
           {/if}
         </button>
 
-        <div class="min-w-0 flex-1 sm:min-w-[110px]" bind:this={titleBoxEl}>
+        <div class="min-w-[64px] flex-1 sm:min-w-[110px]" bind:this={titleBoxEl}>
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
-              class="{titleOverflow ? 'opacity-0 select-none' : 'truncate'} text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
+              class="truncate text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
               aria-live="polite"
               role="button"
               tabindex="0"
@@ -501,7 +498,7 @@
             onclick={() => step(-1)} disabled={pos <= 0} aria-label="上一首">
             <SkipBack class="h-4 w-4" />
           </button>
-          <span class="text-2xs tabular-nums opacity-60">{pos + 1}/{total}</span>
+          <span class="shrink-0 text-2xs tabular-nums opacity-60">{pos + 1}/{total}</span>
           <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
             onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
             <SkipForward class="h-4 w-4" />

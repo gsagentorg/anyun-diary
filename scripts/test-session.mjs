@@ -21,7 +21,7 @@ globalThis.Audio = class {
   pause() { this.paused = true; }
 };
 
-const { player, initSession, toggleShuffle, step, setRate, getAudio, __resetSessionGuardForTest } = await import('../src/lib/player.svelte.ts');
+const { player, initSession, toggleShuffle, step, setRate, getAudio, prependAt, __resetSessionGuardForTest } = await import('../src/lib/player.svelte.ts');
 const { buildRecTracks } = await import('../src/lib/types.ts');
 const data = (await import('../src/lib/data.json')).default;
 const recs = data.recordings;
@@ -86,6 +86,19 @@ ok(hitSame, 'skipSameTitle=false can re-pick same title');
 // T6 setRate 写 localStorage
 setRate(2);
 ok(ls.getItem('anyun-rate') === '2', 'rate persisted');
+
+// T7 prependAt：插到最前 + 切到目标曲 + 原当前曲后移入历史；空队列也能插
+player.playlist = allTracks.filter((t) => C.includes(t.clip.file));
+player.pos = 0; player.track = player.playlist[0];
+player.history = []; player.playedTitles = []; player.shuffleRedo = [];
+const extra = allTracks.find((t) => !C.includes(t.clip.file));
+prependAt([extra], 0);
+ok(player.pos === 0 && player.track?.clip.file === extra.clip.file, 'prependAt jumps to target');
+ok(player.playlist.length === 4 && player.playlist[2].clip.file === C[0], 'old queue shifted to back');
+ok(player.history.includes(2), 'old current recorded in history');
+player.playlist = []; player.pos = -1; player.track = null;
+prependAt([extra], 0);
+ok(player.pos === 0 && player.playlist.length === 1, 'prepend to empty queue');
 
 console.log('SESSION-TESTS pass=' + pass + ' fail=' + fail);
 process.exit(fail ? 1 : 0);

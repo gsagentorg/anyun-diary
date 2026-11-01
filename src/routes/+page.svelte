@@ -4,7 +4,7 @@
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
-  import { player, adopt, stopCurrent } from '$lib/player.svelte';
+  import { player, prependAt } from '$lib/player.svelte';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
@@ -93,7 +93,7 @@
     (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
   );
 
-  // URL 日期范围显式给出时永远胜过本地快照队列；恢复的当前曲若不在范围内则停掉清空
+  // URL 日期范围与列表/生成按钮同语义：插到队列最前并切到范围内当前曲（或第一首）；刷新幂等
   $effect(() => {
     if (!qValid) return;
     const lo = dayStartOf(qFrom)!;
@@ -101,10 +101,15 @@
     const tracks = tracksInRange(recordings, lo, hi);
     if (tracks.length === 0) return;
     plOpen = true;
+    const sig = tracks.map((t) => t.clip.file).join('|');
+    const front = player.playlist
+      .slice(0, tracks.length)
+      .map((t) => t.clip.file)
+      .join('|');
+    if (front === sig && player.playlist.length >= tracks.length) return;
     const curFile = player.track?.clip.file;
-    player.playlist = tracks;
-    player.pos = curFile ? tracks.findIndex((t) => t.clip.file === curFile) : -1;
-    if (player.pos < 0 && player.track) stopCurrent();
+    const at = curFile ? Math.max(0, tracks.findIndex((t) => t.clip.file === curFile)) : 0;
+    prependAt(tracks, at);
   });
 </script>
 

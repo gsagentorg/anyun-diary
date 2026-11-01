@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Recording, Track } from './types';
-  import { player, insertRange } from './player.svelte';
+  import { prependAt } from './player.svelte';
   import { tracksInRange, dayStartOf, validRange } from './playlist-core';
   import { onMount } from 'svelte';
   import { fmtDur } from './types';
@@ -52,12 +52,15 @@
     }
     error = '';
     syncUrl();
-    const n = insertRange(preview.tracks);
-    if (n === 0) error = '范围内没有切片';
+    if (preview.tracks.length === 0) {
+      error = '范围内没有切片';
+      return;
+    }
+    prependAt(preview.tracks);
   }
 
   function addToQueue(i: number) {
-    insertRange([preview.tracks[i]]);
+    prependAt([preview.tracks[i]]);
     addedIdx = i;
     clearTimeout(addTimer);
     addTimer = setTimeout(() => (addedIdx = null), 1200);

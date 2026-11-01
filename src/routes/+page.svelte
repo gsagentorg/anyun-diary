@@ -4,12 +4,12 @@
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
-  import { player, prependAt } from '$lib/player.svelte';
+  import { player } from '$lib/player.svelte';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
   import LyricsSheet from '$lib/components/LyricsSheet.svelte';
-  import { tracksInRange, dayStartOf, validRange } from '$lib/playlist-core';
+  import { validRange } from '$lib/playlist-core';
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
@@ -21,24 +21,32 @@
   let current = $state(0);
   let searchOpen = $state(false);
 
-  // 视图 / 播放列表面板开合的记忆（刷新保留；坏数据忽略）
+  // 状态记忆：视图 / 面板开合 / 生成日期（刷新保留；分享链接显式带范围时以 URL 为准）
   const VIEW_KEY = 'anyun-view-v1';
   $effect(() => {
     if (!browser) return;
+    let v: { view?: unknown; plOpen?: unknown; rangeFrom?: unknown; rangeTo?: unknown } = {};
     try {
       const raw = localStorage.getItem(VIEW_KEY);
-      if (!raw) return;
-      const v = JSON.parse(raw) as { view?: unknown; plOpen?: unknown };
-      if (typeof v.view === 'number' && v.view >= 0 && v.view < variants.length) current = v.view;
-      if (typeof v.plOpen === 'boolean') plOpen = v.plOpen;
+      if (raw) v = JSON.parse(raw) as typeof v;
     } catch {
       /* 忽略 */
+    }
+    if (typeof v.view === 'number' && v.view >= 0 && v.view < variants.length) current = v.view;
+    if (typeof v.plOpen === 'boolean') plOpen = v.plOpen;
+    if (typeof v.rangeFrom === 'string') rangeFrom = v.rangeFrom;
+    if (typeof v.rangeTo === 'string') rangeTo = v.rangeTo;
+    const uFrom = page.url.searchParams.get('from') ?? '';
+    const uTo = page.url.searchParams.get('to') ?? '';
+    if (uFrom && uTo && validRange(uFrom, uTo)) {
+      rangeFrom = uFrom;
+      rangeTo = uTo;
     }
   });
   $effect(() => {
     if (!browser) return;
     try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ view: current, plOpen }));
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ view: current, plOpen, rangeFrom, rangeTo }));
     } catch {
       /* 配额/隐私模式静默 */
     }
@@ -84,33 +92,13 @@
     clips: r.clips ?? [],
   }));
 
-  // URL 查询参数 ?from=YYYY-MM-DD&to=YYYY-MM-DD → 自动生成播放列表（不自动开播，只装载）
+  // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
   let plOpen = $state(true);
-  const qFrom = $derived(browser ? (page.url.searchParams.get('from') ?? '') : '');
-  const qTo = $derived(browser ? (page.url.searchParams.get('to') ?? '') : '');
-  const qValid = $derived(!!(qFrom && qTo && validRange(qFrom, qTo)));
+  let rangeFrom = $state('');
+  let rangeTo = $state('');
   const laneMode = $derived(
     (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
   );
-
-  // URL 日期范围与列表/生成按钮同语义：插到队列最前并切到范围内当前曲（或第一首）；刷新幂等
-  $effect(() => {
-    if (!qValid) return;
-    const lo = dayStartOf(qFrom)!;
-    const hi = dayStartOf(qTo)! + 86400;
-    const tracks = tracksInRange(recordings, lo, hi);
-    if (tracks.length === 0) return;
-    plOpen = true;
-    const sig = tracks.map((t) => t.clip.file).join('|');
-    const front = player.playlist
-      .slice(0, tracks.length)
-      .map((t) => t.clip.file)
-      .join('|');
-    if (front === sig && player.playlist.length >= tracks.length) return;
-    const curFile = player.track?.clip.file;
-    const at = curFile ? Math.max(0, tracks.findIndex((t) => t.clip.file === curFile)) : 0;
-    prependAt(tracks, at);
-  });
 </script>
 
 <div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 {player.track ? 'pb-32' : ''}">
@@ -240,7 +228,7 @@
   <div class="lg:flex-1">
     {#if plOpen}
       <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
-        <Playlist {recordings} bind:open={plOpen} />
+        <Playlist {recordings} bind:open={plOpen} bind:from={rangeFrom} bind:to={rangeTo} />
       </div>
     {:else}
       <button
@@ -257,7 +245,7 @@
 
   <QueueOverlay />
   <LyricsSheet />
-  <SearchPanel bind:open={searchOpen} {recordings} rangeFrom={qValid ? qFrom : ''} rangeTo={qValid ? qTo : ''} />
+  <SearchPanel bind:open={searchOpen} {recordings} rangeFrom={rangeFrom} rangeTo={rangeTo} />
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

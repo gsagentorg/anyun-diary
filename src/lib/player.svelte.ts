@@ -219,11 +219,11 @@ let mediaHandlersBound = false;
 function buildMetadata(t: Track, lyricText: string | null): MediaMetadata {
   const md = Number.isFinite(t.rec.start) ? dateCard(t.rec.start).md : '';
   const name = t.clip.title || '（未识别）';
+  // owner 2026-11-01：iOS 对每次元数据更新都会重取 artwork 造成封面闪烁 → 不再提供专辑图
   return new MediaMetadata({
     title: lyricText ?? name,
     artist: lyricText != null ? name : '安允日记',
     album: md ? `安允日记 · ${md}` : '安允日记',
-    artwork: [{ src: '/brand/cover.jpg', sizes: 'any', type: 'image/jpeg' }],
   });
 }
 
@@ -320,6 +320,23 @@ export function insertRange(tracks: Track[]): number {
   player.playlist = [...player.playlist, ...tracks];
   scheduleSessionSave();
   return tracks.length;
+}
+
+/** 把一组曲目插到队列最前面并切到 list[i]（默认第一首）；既有队列整体后移保留，随机回退栈同步平移 */
+export function prependAt(list: Track[], i = 0) {
+  if (!list[i]) return;
+  const n = list.length;
+  player.history = player.history.map((h) => h + n);
+  player.shuffleRedo = player.shuffleRedo.map((h) => h + n);
+  const hadCur = player.pos >= 0;
+  const curPos = player.pos;
+  player.playlist = [...list, ...player.playlist];
+  if (hadCur) {
+    player.pos = curPos + n;
+    recordVisit(); // 原当前曲以新下标入历史，上一曲可回
+  }
+  player.pos = i;
+  playCurrent();
 }
 
 /** 定位播放队列中第 i 项（记录历史与已播曲目，供随机模式去重/回退） */

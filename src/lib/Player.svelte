@@ -245,8 +245,9 @@
     setW('queue', queueBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
     // 可用宽度 = bar - padding24 - 标题min - 进度min - 时间（<640 收窄 + 时间完全隐藏不计宽）
+    // 标题 min 已随 flex-nowrap 改为可收缩（truncate 兜底），预算按 70/110 估
     const barW = bar.clientWidth;
-    const avail = barW - 24 - (barW < 640 ? 90 : 110) - (barW < 640 ? 60 : 80) - (barW < 640 ? 0 : 45);
+    const avail = barW - 24 - (barW < 640 ? 70 : 110) - (barW < 640 ? 44 : 80) - (barW < 640 ? 0 : 45);
     const residentW = res.offsetWidth;
     if (!avail || !residentW) return;
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
@@ -422,7 +423,7 @@
 {#if player.track}
   {@const t = player.track}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
-    <div class="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center gap-2 px-3 py-1 sm:gap-3 sm:px-4" bind:this={barEl}>
+    <div class="mx-auto flex min-h-14 max-w-6xl flex-nowrap items-center gap-2 px-3 py-1 sm:gap-3 sm:px-4" bind:this={barEl}>
       <!-- 左区：播放/暂停 + 曲目信息 -->
       <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button
@@ -439,7 +440,7 @@
           {/if}
         </button>
 
-        <div class="min-w-[90px] flex-1 sm:min-w-[110px]" bind:this={titleBoxEl}>
+        <div class="min-w-0 flex-1 sm:min-w-[110px]" bind:this={titleBoxEl}>
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
@@ -472,7 +473,7 @@
       </div>
 
       <!-- 中区：进度条 + 时间（<sm 时间完全隐藏，仅留进度条） -->
-      <div class="flex min-w-[60px] flex-1 items-center gap-2 sm:min-w-[80px]">
+      <div class="flex min-w-[44px] flex-1 items-center gap-2 sm:min-w-[80px]">
         <div
           class="relative h-1.5 min-w-0 flex-1 cursor-pointer touch-none rounded-full bg-base-200"
           role="slider" tabindex="0"

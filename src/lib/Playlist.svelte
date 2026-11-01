@@ -6,18 +6,20 @@
   import { fmtDur } from './types';
   import { ListMusic, Plus, Check, Search, X } from 'lucide-svelte';
 
-  let { recordings, open = $bindable(false) }: { recordings: Recording[]; open?: boolean } = $props();
+  let {
+    recordings,
+    open = $bindable(false),
+    // 日期范围归 +page 的持久化状态所有（anyun-view-v1），此处双向绑定
+    from = $bindable(''),
+    to = $bindable(''),
+  }: {
+    recordings: Recording[];
+    open?: boolean;
+    from?: string;
+    to?: string;
+  } = $props();
 
-  let from = $state('');
-  let to = $state('');
   let error = $state('');
-
-  // 从 URL 查询参数预填，保证链接带上同一范围
-  onMount(() => {
-    const sp = new URLSearchParams(location.search);
-    if (!from) from = sp.get('from') ?? '';
-    if (!to) to = sp.get('to') ?? '';
-  });
 
   // 应用时把范围写回 URL（可分享/刷新保持）
   function syncUrl() {

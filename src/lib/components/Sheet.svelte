@@ -23,6 +23,31 @@
     if (e.key === 'Escape') onClose();
   }
 
+  // 打开时锁页面滚动：除了一致的手势语义，更重要的是经典（非悬浮）滚动条平台（Windows）
+  // 页面滚动条会盖在 right:0 面板之上，出现两根并排滚动条。计数管理支持多面板叠开。
+  const gLock = globalThis as typeof globalThis & { __anyunSheetLock?: number };
+  $effect(() => {
+    if (typeof document === 'undefined' || !open) return;
+    gLock.__anyunSheetLock = (gLock.__anyunSheetLock ?? 0) + 1;
+    const docEl = document.documentElement;
+    if (gLock.__anyunSheetLock === 1) {
+      const gap = window.innerWidth - docEl.clientWidth; // 页面滚动条宽度（无则 0）
+      docEl.dataset.prevOverflow = docEl.style.overflow;
+      docEl.dataset.prevPad = docEl.style.paddingRight;
+      docEl.style.overflow = 'hidden';
+      if (gap > 0) docEl.style.paddingRight = gap + 'px'; // 补偿防布局跳动
+    }
+    return () => {
+      gLock.__anyunSheetLock = Math.max(0, (gLock.__anyunSheetLock ?? 1) - 1);
+      if (gLock.__anyunSheetLock === 0) {
+        docEl.style.overflow = docEl.dataset.prevOverflow ?? '';
+        docEl.style.paddingRight = docEl.dataset.prevPad ?? '';
+        delete docEl.dataset.prevOverflow;
+        delete docEl.dataset.prevPad;
+      }
+    };
+  });
+
   // Esc 只在打开时监听
   $effect(() => {
     if (!open) return;

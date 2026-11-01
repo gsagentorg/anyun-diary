@@ -8,12 +8,15 @@
     side = 'right',
     title,
     children,
+    scroll = true,
   }: {
     open: boolean;
     onClose: () => void;
     side?: 'right' | 'bottom';
     title?: string;
     children?: Snippet;
+    /** false：正文自带滚动容器（panel 内不出现第二个滚动条）；默认 true */
+    scroll?: boolean;
   } = $props();
 
   function onKeydown(e: KeyboardEvent) {
@@ -58,7 +61,7 @@
       <X class="h-4 w-4" />
     </button>
   </div>
-  <div class="min-h-0 flex-1 overflow-y-auto p-4">
+  <div class="min-h-0 flex-1 {scroll ? 'overflow-y-auto p-4' : 'overflow-hidden'}">
     {@render children?.()}
   </div>
 </div>

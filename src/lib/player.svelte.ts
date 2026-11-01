@@ -562,7 +562,7 @@ export function saveSessionProgress() {
 
 /** 快照队列 → Track 列表：按 clip.file 反查，已删/改名的条目静默剔除 */
 function snapshotRebuild(queue: string[]): Track[] {
-  const recs = (diaryData as { recordings: Recording[] }).recordings;
+  const recs = (diaryData as unknown as { recordings: Recording[] }).recordings;
   const byFile = new Map<string, Track>();
   for (const r of recs) {
     (r.clips ?? []).forEach((c, i) => {

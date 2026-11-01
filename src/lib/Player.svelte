@@ -252,6 +252,9 @@
     const gap = parseFloat(getComputedStyle(row).columnGap || '0') || 0;
     let fold = 0;
     while (fold < FOLD_ORDER.length && needFor(fold, residentW, gap) > avail) fold++;
+    // 窄屏保底：移动端首帧测量可能失真（实测 iOS 卡在 1 档），按视口宽度强制至少折到该档
+    const minFold = barW < 400 ? FOLD_ORDER.length : barW < 480 ? 5 : barW < 640 ? 3 : 0;
+    if (fold < minFold) fold = minFold;
     if (fold !== foldCount) foldCount = fold;
     if (foldCount === 0 && menuOpen) menuOpen = false;
   }
@@ -441,7 +444,7 @@
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
-              class="truncate text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
+              class="truncate leading-5 text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
               aria-live="polite"
               role="button"
               tabindex="0"

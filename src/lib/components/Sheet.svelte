@@ -70,6 +70,7 @@
   class="sheet-panel"
   data-side={side}
   data-open={open}
+  data-noscroll={!scroll}
   role="dialog"
   aria-modal="true"
   aria-label={title}
@@ -131,6 +132,10 @@
   .sheet-panel[data-side='bottom'][data-open='true'] {
     transform: translateY(0);
   }
+  /* 正文自带滚动（scroll=false）时抽屉必须有确定高度，否则内容 h-full 塌缩成空白 */
+  .sheet-panel[data-noscroll='true'][data-side='bottom'] {
+    height: 70vh;
+  }
 
   /* <768px：right 自动变为底部抽屉（外部用法不变） */
   @media (max-width: 767px) {
@@ -150,6 +155,9 @@
     }
     .sheet-panel[data-side='right'][data-open='true'] {
       transform: translateY(0);
+    }
+    .sheet-panel[data-noscroll='true'][data-side='right'] {
+      height: 70vh;
     }
   }
 </style>

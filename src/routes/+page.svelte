@@ -4,7 +4,8 @@
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
-  import { player, adopt } from '$lib/player.svelte';
+  import { player, adopt, stopCurrent } from '$lib/player.svelte';
+  import SearchPanel from '$lib/components/SearchPanel.svelte';
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
   import LyricsSheet from '$lib/components/LyricsSheet.svelte';
@@ -12,12 +13,36 @@
   import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
-  import { ListMusic, Sun, Moon, Monitor } from 'lucide-svelte';
+  import { ListMusic, Sun, Moon, Monitor, Search } from 'lucide-svelte';
   import Chip from '$lib/components/Chip.svelte';
   import * as publicEnv from '$env/static/public';
 
   const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
   let current = $state(0);
+  let searchOpen = $state(false);
+
+  // 视图 / 播放列表面板开合的记忆（刷新保留；坏数据忽略）
+  const VIEW_KEY = 'anyun-view-v1';
+  $effect(() => {
+    if (!browser) return;
+    try {
+      const raw = localStorage.getItem(VIEW_KEY);
+      if (!raw) return;
+      const v = JSON.parse(raw) as { view?: unknown; plOpen?: unknown };
+      if (typeof v.view === 'number' && v.view >= 0 && v.view < variants.length) current = v.view;
+      if (typeof v.plOpen === 'boolean') plOpen = v.plOpen;
+    } catch {
+      /* 忽略 */
+    }
+  });
+  $effect(() => {
+    if (!browser) return;
+    try {
+      localStorage.setItem(VIEW_KEY, JSON.stringify({ view: current, plOpen }));
+    } catch {
+      /* 配额/隐私模式静默 */
+    }
+  });
 
   // 直播间状态
   type LiveInfo = {
@@ -68,16 +93,18 @@
     (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
   );
 
+  // URL 日期范围显式给出时永远胜过本地快照队列；恢复的当前曲若不在范围内则停掉清空
   $effect(() => {
-    if (!qValid || player.playlist.length > 0) return;
+    if (!qValid) return;
     const lo = dayStartOf(qFrom)!;
     const hi = dayStartOf(qTo)! + 86400;
     const tracks = tracksInRange(recordings, lo, hi);
-    if (tracks.length > 0) {
-      plOpen = true;
-      player.playlist = tracks;
-      player.pos = -1;
-    }
+    if (tracks.length === 0) return;
+    plOpen = true;
+    const curFile = player.track?.clip.file;
+    player.playlist = tracks;
+    player.pos = curFile ? tracks.findIndex((t) => t.clip.file === curFile) : -1;
+    if (player.pos < 0 && player.track) stopCurrent();
   });
 </script>
 
@@ -115,6 +142,14 @@
             </button>
           {/each}
         </div>
+        <button
+          class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
+          onclick={() => (searchOpen = true)}
+          aria-label="搜索"
+          title="搜索"
+        >
+          <Search class="h-4 w-4" />
+        </button>
         <button
           class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
           onclick={toggleTheme}
@@ -217,6 +252,7 @@
 
   <QueueOverlay />
   <LyricsSheet />
+  <SearchPanel bind:open={searchOpen} {recordings} rangeFrom={qValid ? qFrom : ''} rangeTo={qValid ? qTo : ''} />
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

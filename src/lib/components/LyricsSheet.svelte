@@ -47,12 +47,23 @@
     return () => clearInterval(iv);
   });
 
-  // 跟随：当前行变化 / 恢复跟随 / 容器尺寸变化 → 平滑滚动把当前行摆在中央
+  // 打开面板 = 回到跟随（每次打开都先看当前行）
+  $effect(() => {
+    if (player.lyricsOpen) follow = true;
+  });
+
+  // 跟随：当前行变化 / 恢复跟随 / 容器尺寸变化 → 滚动把当前行摆在中央。
+  // 顶部占位已是半个视口高，因此 scrollTop = idx*LINE_H 即居中；开面板/切歌瞬移，行进平滑。
+  let lastCenterKey = '';
   $effect(() => {
     if (!follow || boxH <= 0 || !player.track || !boxEl) return;
-    const target = activeIdx * LINE_H - Math.max(0, boxH - LINE_H) / 2;
-    suppressUntil = Date.now() + 450;
-    boxEl.scrollTo({ top: Math.max(0, target), behavior: 'smooth' });
+    const key = (clip?.file ?? '') + ':' + String(player.lyricsOpen);
+    const instant = key !== lastCenterKey;
+    lastCenterKey = key;
+    const max = boxEl.scrollHeight - boxEl.clientHeight;
+    const target = Math.max(0, Math.min(max, activeIdx * LINE_H));
+    suppressUntil = Date.now() + (instant ? 200 : 600);
+    boxEl.scrollTo({ top: target, behavior: instant ? 'auto' : 'smooth' });
   });
 
   function armAutoResume() {

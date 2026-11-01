@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, setDedupByName, syncLyricMetadata } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat } from 'lucide-svelte';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
   let progress = $state(0);
   let duration = $state(0);
@@ -13,10 +13,10 @@
   let menuOpen = $state(false);
   let menuPanelEl = $state<HTMLDivElement>();
 
-  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折同名去重，4=再折睡眠，5=再折队列（+全部进 ⋮）
+  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折同名去重，4=再折避开同名，5=再折睡眠，6=再折队列（+全部进 ⋮）
   let foldCount = $state(0);
-  let widths = $state<{ rate?: number; shuffle?: number; dedup?: number; sleep?: number; queue?: number }>({});
-  const FOLD_ORDER = ['rate', 'shuffle', 'dedup', 'sleep', 'queue'] as const;
+  let widths = $state<{ rate?: number; shuffle?: number; dedup?: number; skip?: number; sleep?: number; queue?: number }>({});
+  const FOLD_ORDER = ['rate', 'shuffle', 'dedup', 'skip', 'sleep', 'queue'] as const;
   type FoldKey = (typeof FOLD_ORDER)[number];
   // 左区标题块 / 中区进度条 min-width：<640 收窄（与模板 min-w-[90px] sm:min-w-[110px] 等同步）
   let barEl = $state<HTMLDivElement>();
@@ -27,6 +27,7 @@
   let titleOverflow = $state(false);
   let rateBtnEl = $state<HTMLButtonElement>();
   let dedupBtnEl = $state<HTMLButtonElement>();
+  let skipBtnEl = $state<HTMLButtonElement>();
   let sleepBtnEl = $state<HTMLButtonElement>();
   let dotsBtn = $state<HTMLButtonElement>();
   let queueBtnEl = $state<HTMLButtonElement>();
@@ -40,7 +41,7 @@
   const PRESETS = [15, 25, 40, 55, 70, 90];
   const RATE_PRESETS = [0.5, 1, 1.5, 2, 3];
 
-  onMount(() => { initRate(); initDedup(); });
+  onMount(() => { initRate(); initDedup(); initSession(); });
 
   $effect(() => {
     const a = getAudio();
@@ -239,6 +240,7 @@
     setW('rate', rateBtnEl);
     setW('shuffle', shuffleEl);
     setW('dedup', dedupBtnEl);
+    setW('skip', skipBtnEl);
     setW('sleep', sleepBtnEl);
     setW('queue', queueBtnEl);
     if (dotsBtn?.offsetWidth) dotsW = dotsBtn.offsetWidth;
@@ -557,8 +559,22 @@
           </button>
         {/if}
 
-        <!-- 折叠级：睡眠定时器 -->
+        <!-- 折叠级：随机避开同名（随机池是否回避已播同名歌） -->
         {#if foldCount < 4}
+          <button
+            bind:this={skipBtnEl}
+            class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.shuffleSkipSameTitle ? 'text-accent' : ''}"
+            onclick={() => setShuffleSkipSameTitle(!player.shuffleSkipSameTitle)}
+            aria-label="随机避开同名"
+            aria-pressed={player.shuffleSkipSameTitle}
+            title="随机避开同名"
+          >
+            <Filter class="h-4 w-4" />
+          </button>
+        {/if}
+
+        <!-- 折叠级：睡眠定时器 -->
+        {#if foldCount < 5}
           <div class="relative">
             <button
               bind:this={sleepBtnEl}
@@ -582,7 +598,7 @@
         {/if}
 
         <!-- 折叠级：播放队列（最后折；折进 ⋮ 菜单时由菜单项打开队列） -->
-        {#if foldCount < 5 && player.playlist.length > 0}
+        {#if foldCount < 6 && player.playlist.length > 0}
           <button
             bind:this={queueBtnEl}
             class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 {player.queueOpen ? 'text-accent' : ''}"
@@ -626,8 +642,18 @@
                     </button>
                   </div>
                 {/if}
-                {#if foldCount >= 4}<div class="mt-1 border-t border-base-300 pt-1">{@render sleepPanel()}</div>{/if}
-                {#if foldCount >= 5 && player.playlist.length > 0}
+                {#if foldCount >= 4}
+                  <div class="mt-1 border-t border-base-300 pt-1">
+                    <button class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.shuffleSkipSameTitle ? 'text-accent' : ''}"
+                      onclick={() => setShuffleSkipSameTitle(!player.shuffleSkipSameTitle)}
+                      aria-pressed={player.shuffleSkipSameTitle} title="随机避开同名">
+                      <Filter class="h-4 w-4" />
+                      <span>随机避开同名{player.shuffleSkipSameTitle ? '：开' : '：关'}</span>
+                    </button>
+                  </div>
+                {/if}
+                {#if foldCount >= 5}<div class="mt-1 border-t border-base-300 pt-1">{@render sleepPanel()}</div>{/if}
+                {#if foldCount >= 6 && player.playlist.length > 0}
                   <div class="mt-1 border-t border-base-300 pt-1">
                     <button
                       class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.queueOpen ? 'text-accent' : ''}"

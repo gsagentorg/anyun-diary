@@ -1,5 +1,6 @@
 import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
+import diaryData from '$lib/data.json';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
 
@@ -19,6 +20,9 @@ export const player = $state<{
   queueOpen: boolean; // 播放队列叠层开关
   playbackRate: number; // 播放倍速（clamp 到 [0.01, 8]）
   dedupByName: boolean; // 随机去重：同名不同词是否算重复（true=同名即同曲，不重抽）
+  shuffleSkipSameTitle: boolean; // 随机抽歌时是否回避与已播曲目同名的歌（独立于上面的身份判定）
+  shuffleRedo: number[]; // 随机模式「下一曲」回退栈：上一曲压入当前曲，下一曲优先弹回（先入后出）
+  sessionRestored: boolean; // 本次加载是否从本地快照恢复了播放队列
   lyricsOpen: boolean; // 歌词面板开关
 }>({
   track: null,
@@ -32,6 +36,9 @@ export const player = $state<{
   queueOpen: false,
   playbackRate: 1,
   dedupByName: true,
+  shuffleSkipSameTitle: true,
+  shuffleRedo: [],
+  sessionRestored: false,
   lyricsOpen: false,
 });
 
@@ -55,6 +62,7 @@ export function setRate(r: number) {
       /* 忽略存储失败 */
     }
   }
+  scheduleSessionSave();
 }
 
 /** 从 localStorage 恢复倍速（非法值回退 1）；仅浏览器环境调用 */
@@ -77,6 +85,9 @@ export function initDedup() {
     const raw = window.localStorage.getItem(DEDUP_KEY);
     if (raw === '0' || raw === 'false') player.dedupByName = false;
     else if (raw === '1' || raw === 'true') player.dedupByName = true;
+    const rawSkip = window.localStorage.getItem(SKIP_SAME_KEY);
+    if (rawSkip === '0' || rawSkip === 'false') player.shuffleSkipSameTitle = false;
+    else if (rawSkip === '1' || rawSkip === 'true') player.shuffleSkipSameTitle = true;
   } catch {
     /* 忽略读取失败 */
   }
@@ -93,7 +104,24 @@ export function setDedupByName(v: boolean) {
     }
   }
   player.history = [];
+  player.shuffleRedo = [];
   player.playedTitles = player.track ? [trackKey(player.track)] : [];
+  scheduleSessionSave();
+}
+
+const SKIP_SAME_KEY = 'anyun-shuffle-skip-same';
+
+/** 切换「随机避开同名」：写 state + localStorage；不影响「同名不同词算重复」的身份判定 */
+export function setShuffleSkipSameTitle(v: boolean) {
+  player.shuffleSkipSameTitle = v;
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(SKIP_SAME_KEY, v ? '1' : '0');
+    } catch {
+      /* 忽略存储失败 */
+    }
+  }
+  scheduleSessionSave();
 }
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
@@ -108,6 +136,7 @@ const gAudio = globalThis as typeof globalThis & {
   /** 看门狗去重 + 指向最新模块的纠偏函数（HMR 后仍纠正当前 state） */
   __anyunFixFake?: () => void;
   __anyunWatchdog?: boolean;
+  __anyunSessionInit?: boolean;
 };
 
 function ensureAudio(): HTMLAudioElement {
@@ -116,9 +145,19 @@ function ensureAudio(): HTMLAudioElement {
     a.preload = 'metadata';
     a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
-    a.addEventListener('play', () => (player.playing = true));
-    a.addEventListener('pause', () => (player.playing = false));
-    a.addEventListener('ended', () => (player.playing = false));
+    a.addEventListener('play', () => {
+      player.playing = true;
+      setMediaPlaybackState('playing');
+    });
+    a.addEventListener('pause', () => {
+      player.playing = false;
+      setMediaPlaybackState('paused');
+    });
+    a.addEventListener('ended', () => {
+      player.playing = false;
+      setMediaPlaybackState('paused');
+    });
+    a.addEventListener('timeupdate', () => saveSessionProgress());
     gAudio.__anyunAudio = a;
   }
   return gAudio.__anyunAudio;
@@ -134,10 +173,25 @@ gAudio.__anyunFixFake = fixFakePlaying;
 
 if (typeof window !== 'undefined' && !gAudio.__anyunWatchdog) {
   gAudio.__anyunWatchdog = true;
+  // 声明为媒体播放会话：支持的平台据此改善锁屏控件与混音处理（不支持则忽略）
+  try {
+    const as = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+    if (as) as.type = 'playback';
+  } catch {
+    /* 忽略 */
+  }
   // 看门狗：每秒对账一次；回前台立刻对账（OS 抢占无法阻止，只保证状态诚实）
   setInterval(() => gAudio.__anyunFixFake?.(), 1000);
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') gAudio.__anyunFixFake?.();
+    if (document.visibilityState === 'visible') {
+      gAudio.__anyunFixFake?.();
+      // 回前台时刷新系统浮层状态，避免卡片停留在过期状态
+      const a = gAudio.__anyunAudio;
+      if (!player.track) setMediaPlaybackState('none');
+      else setMediaPlaybackState(a && !a.paused ? 'playing' : 'paused');
+    } else {
+      writeSessionSnapshot(); // 切后台兜底保存
+    }
   });
 }
 
@@ -154,6 +208,7 @@ function playCurrent() {
   a.load();
   a.play().catch(() => {});
   updateMediaSession(t);
+  scheduleSessionSave();
 }
 
 /* ---------- Media Session：让系统媒体浮层（Windows/手机锁屏）显示歌名并可上/下一首 ---------- */
@@ -164,11 +219,11 @@ let mediaHandlersBound = false;
 function buildMetadata(t: Track, lyricText: string | null): MediaMetadata {
   const md = Number.isFinite(t.rec.start) ? dateCard(t.rec.start).md : '';
   const name = t.clip.title || '（未识别）';
+  // owner 2026-11-01：iOS 对每次元数据更新都会重取 artwork 造成封面闪烁 → 不再提供专辑图
   return new MediaMetadata({
     title: lyricText ?? name,
     artist: lyricText != null ? name : '安允日记',
     album: md ? `安允日记 · ${md}` : '安允日记',
-    artwork: [{ src: '/brand/cover.jpg', sizes: 'any', type: 'image/jpeg' }],
   });
 }
 
@@ -184,7 +239,11 @@ function updateMediaSession(t: Track) {
   ms.metadata = buildMetadata(t, null);
   if (!mediaHandlersBound) {
     mediaHandlersBound = true;
-    ms.setActionHandler('play', () => getAudio().play().catch(() => {}));
+    ms.setActionHandler('play', () => {
+      getAudio()
+        .play()
+        .catch((e) => console.warn('[media] 系统播放按钮被浏览器拒绝：', e));
+    });
     ms.setActionHandler('pause', () => getAudio().pause());
     ms.setActionHandler('previoustrack', () => step(-1));
     ms.setActionHandler('nexttrack', () => step(1));
@@ -210,7 +269,17 @@ export function syncLyricMetadata(t: Track | null, pos: number) {
   navigator.mediaSession.metadata = buildMetadata(t, idx < 0 ? null : t.clip.lyrics![idx].text);
 }
 
-/** 播放进度上报给系统浮层（timeupdate 里调用） */
+/** 同步系统浮层播放状态：不设的 UA 只能靠猜，iOS/macOS 锁屏控件可能因此卡在过期状态 */
+export function setMediaPlaybackState(s: 'none' | 'paused' | 'playing') {
+  if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
+  try {
+    navigator.mediaSession.playbackState = s;
+  } catch {
+    /* 忽略 */
+  }
+}
+
+/** 播放进度上报给系统浮层（timeupdate 里调用）；倍速跟实际值，防进度漂移 */
 export function reportPlaybackState(duration: number, position: number) {
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
   if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
@@ -218,7 +287,7 @@ export function reportPlaybackState(duration: number, position: number) {
     navigator.mediaSession.setPositionState({
       duration,
       position: Math.min(position, duration),
-      playbackRate: 1,
+      playbackRate: player.playbackRate > 0 ? player.playbackRate : 1,
     });
   } catch {
     /* 浏览器拒绝非法值时忽略 */
@@ -231,6 +300,7 @@ export function adopt(list: Track[], i: number) {
   player.playlist = list;
   player.pos = i;
   player.history = [];
+  player.shuffleRedo = [];
   player.playedTitles = [trackKey(list[i])];
   playCurrent();
 }
@@ -242,12 +312,31 @@ export function insertRange(tracks: Track[]): number {
     player.playlist = tracks;
     player.pos = 0;
     player.history = [];
+    player.shuffleRedo = [];
     player.playedTitles = [trackKey(tracks[0])];
     playCurrent();
     return tracks.length;
   }
   player.playlist = [...player.playlist, ...tracks];
+  scheduleSessionSave();
   return tracks.length;
+}
+
+/** 把一组曲目插到队列最前面并切到 list[i]（默认第一首）；既有队列整体后移保留，随机回退栈同步平移 */
+export function prependAt(list: Track[], i = 0) {
+  if (!list[i]) return;
+  const n = list.length;
+  player.history = player.history.map((h) => h + n);
+  player.shuffleRedo = player.shuffleRedo.map((h) => h + n);
+  const hadCur = player.pos >= 0;
+  const curPos = player.pos;
+  player.playlist = [...list, ...player.playlist];
+  if (hadCur) {
+    player.pos = curPos + n;
+    recordVisit(); // 原当前曲以新下标入历史，上一曲可回
+  }
+  player.pos = i;
+  playCurrent();
 }
 
 /** 定位播放队列中第 i 项（记录历史与已播曲目，供随机模式去重/回退） */
@@ -260,6 +349,10 @@ export function removeAt(index: number) {
   if (index < 0 || index >= player.playlist.length) return;
   player.playlist = player.playlist.filter((_, i) => i !== index);
   player.history = player.history.map((h) => (h > index ? h - 1 : h)).filter((h) => h !== index);
+  player.shuffleRedo = player.shuffleRedo
+    .map((h) => (h > index ? h - 1 : h))
+    .filter((h) => h !== index);
+  scheduleSessionSave();
   if (index < player.pos) {
     player.pos -= 1;
   } else if (index === player.pos) {
@@ -287,6 +380,8 @@ export function moveTrack(from: number, to: number) {
     player.pos += 1;
   }
   player.history = []; // 历史存的是下标，重排后已失效；清空避免随机回退错乱
+  player.shuffleRedo = []; // 回退栈同理作废
+  scheduleSessionSave();
 }
 
 /** 清空队列：移除除当前播放外的全部（无当前播放则全清） */
@@ -295,42 +390,65 @@ export function clearQueue() {
   if (!cur) {
     player.playlist = [];
     player.pos = -1;
+    player.shuffleRedo = [];
+    scheduleSessionSave();
     return;
   }
   player.playlist = [cur];
   player.pos = 0;
   player.history = [];
+  player.shuffleRedo = [];
   player.playedTitles = [trackKey(cur)];
+  scheduleSessionSave();
 }
 
 /** 切换随机播放 */
 export function toggleShuffle() {
   player.shuffle = !player.shuffle;
   player.history = [];
+  player.shuffleRedo = [];
   player.playedTitles = player.track ? [trackKey(player.track)] : [];
+  scheduleSessionSave();
 }
 
-/** 在当前列表里随机挑一首：已播过的「曲目」（含同名歌曲）优先不抽；全播过则重置池 */
+/** 把当前曲记入随机历史与已播（切走前调用） */
+function recordVisit() {
+  if (player.pos < 0) return;
+  player.history.push(player.pos);
+  const cur = player.playlist[player.pos];
+  if (cur) {
+    const k = trackKey(cur);
+    if (!player.playedTitles.includes(k)) player.playedTitles.push(k);
+  }
+}
+
+/** 在当前列表里随机挑一首：已播过的「曲目」不抽；开「随机避开同名」时同名已播歌一并回避；全播过则重置池 */
 export function playRandom() {
   if (player.playlist.length === 0) return;
   const keys = player.playlist.map(trackKey);
-  const pick = pickShuffleIndex(keys, player.playedTitles, player.pos);
+  let avoid: Set<number> | undefined;
+  if (player.shuffleSkipSameTitle) {
+    const played = new Set(player.playedTitles);
+    const avoidTitles = new Set(
+      player.playlist.filter((_, i) => played.has(keys[i])).map((t) => t.clip.title),
+    );
+    avoid = new Set(
+      player.playlist.map((_, i) => i).filter((i) => avoidTitles.has(player.playlist[i].clip.title)),
+    );
+    if (avoid.size === 0) avoid = undefined;
+  }
+  const pick = pickShuffleIndex(keys, player.playedTitles, player.pos, avoid);
   if (!pick) return;
   if (pick.reset) player.playedTitles = [];
+  player.shuffleRedo = []; // 主动随机开新曲：旧的「下一曲回退栈」作废
   stepTo(pick.index);
 }
 
 /** 跳到列表内第 i 项（记录历史与已播曲目，供随机模式去重/回退） */
 function stepTo(i: number) {
   if (i < 0 || i >= player.playlist.length || i === player.pos) return;
-  if (player.pos >= 0) {
-    player.history.push(player.pos);
-    const cur = player.playlist[player.pos];
-    if (cur) {
-      const k = trackKey(cur);
-      if (!player.playedTitles.includes(k)) player.playedTitles.push(k);
-    }
-  }
+  recordVisit();
+  player.shuffleRedo = []; // 手动定位 = 新方向，回退栈作废
   player.pos = i;
   playCurrent();
 }
@@ -348,25 +466,27 @@ export function playClip(rec: Recording, i: number) {
   const track = buildRecTracks(rec)[i];
   if (!track) return;
   const at = player.pos < 0 ? 0 : player.pos + 1;
-  if (player.pos >= 0) {
-    player.history.push(player.pos);
-    const cur = player.playlist[player.pos];
-    if (cur) {
-      const k = trackKey(cur);
-      if (!player.playedTitles.includes(k)) player.playedTitles.push(k);
-    }
-  }
+  recordVisit();
+  player.shuffleRedo = [];
   player.playlist = [...player.playlist.slice(0, at), track, ...player.playlist.slice(at)];
   player.pos = at;
   playCurrent();
 }
 
-/** 在当前播放列表中上/下一首（随机模式下走乱序） */
+/** 在当前播放列表中上/下一首；随机模式：上一曲压栈当前曲并弹历史，下一曲优先按栈弹回（先入后出），栈空才随机 */
 export function step(delta: number) {
   if (player.shuffle) {
     if (delta > 0) {
+      const nxt = player.shuffleRedo.pop();
+      if (nxt != null && nxt >= 0 && nxt < player.playlist.length && nxt !== player.pos) {
+        recordVisit(); // 跳回的曲也记历史：再按上一曲仍可返回
+        player.pos = nxt;
+        playCurrent();
+        return;
+      }
       playRandom();
     } else {
+      if (player.pos >= 0) player.shuffleRedo.push(player.pos);
       const prev = player.history.pop();
       if (prev != null) {
         player.pos = prev;
@@ -380,6 +500,169 @@ export function step(delta: number) {
     player.pos = pos;
     playCurrent();
   }
+}
+
+/* ---------- 会话快照：刷新后恢复队列/进度（保持暂停，绝不自动出声） ---------- */
+
+const SESSION_KEY = 'anyun-session-v1';
+let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
+let lastProgressSave = 0;
+
+type SessionSnapshot = {
+  v: 1;
+  queue: string[]; // clip.file 有序列表（含重复项）
+  cur: number; // 当前项下标（-1 = 无当前项）
+  t: number; // 当前曲目进度（秒）
+  shuffle: boolean;
+  skipSame: boolean;
+  dedup: boolean;
+  rate: number;
+};
+
+function collectSnapshot(): SessionSnapshot | null {
+  if (player.playlist.length === 0) return null;
+  const a = gAudio.__anyunAudio;
+  return {
+    v: 1,
+    queue: player.playlist.map((t) => t.clip.file),
+    cur: player.pos,
+    t: a && Number.isFinite(a.currentTime) ? a.currentTime : 0,
+    shuffle: player.shuffle,
+    skipSame: player.shuffleSkipSameTitle,
+    dedup: player.dedupByName,
+    rate: player.playbackRate,
+  };
+}
+
+function writeSessionSnapshot() {
+  if (typeof window === 'undefined') return;
+  const snap = collectSnapshot();
+  try {
+    if (snap) window.localStorage.setItem(SESSION_KEY, JSON.stringify(snap));
+    else window.localStorage.removeItem(SESSION_KEY);
+  } catch {
+    /* 配额/隐私模式：静默 */
+  }
+}
+
+/** 变更后去抖保存（队列/开关类变更调用） */
+export function scheduleSessionSave() {
+  if (typeof window === 'undefined') return;
+  if (sessionSaveTimer) clearTimeout(sessionSaveTimer);
+  sessionSaveTimer = setTimeout(writeSessionSnapshot, 300);
+}
+
+/** 进度节流保存：≥5s 一次；切后台/关页由监听兜底 */
+export function saveSessionProgress() {
+  const now = Date.now();
+  if (now - lastProgressSave < 5000) return;
+  lastProgressSave = now;
+  writeSessionSnapshot();
+}
+
+/** 快照队列 → Track 列表：按 clip.file 反查，已删/改名的条目静默剔除 */
+function snapshotRebuild(queue: string[]): Track[] {
+  const recs = (diaryData as { recordings: Recording[] }).recordings;
+  const byFile = new Map<string, Track>();
+  for (const r of recs) {
+    (r.clips ?? []).forEach((c, i) => {
+      if (!byFile.has(c.file)) byFile.set(c.file, { clip: c, rec: r, index: i });
+    });
+  }
+  const tracks: Track[] = [];
+  for (const f of queue) {
+    const t = byFile.get(f);
+    if (t) tracks.push(t);
+  }
+  return tracks;
+}
+
+/** 测试专用：重置 initSession 的一次性守卫（生产代码勿调） */
+export function __resetSessionGuardForTest() {
+  gAudio.__anyunSessionInit = false;
+}
+
+/** 启动恢复：读快照 → 重建队列 → 预载当前曲到进度处（保持暂停）；仅浏览器调用一次 */
+export function initSession() {
+  if (typeof window === 'undefined' || gAudio.__anyunSessionInit) return;
+  gAudio.__anyunSessionInit = true;
+
+  let snap: SessionSnapshot | null = null;
+  try {
+    const raw = window.localStorage.getItem(SESSION_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as SessionSnapshot;
+      if (
+        p &&
+        p.v === 1 &&
+        Array.isArray(p.queue) &&
+        p.queue.every((x) => typeof x === 'string') &&
+        typeof p.cur === 'number'
+      ) {
+        snap = p;
+      }
+    }
+  } catch {
+    snap = null; // 坏数据整条丢弃
+  }
+
+  if (snap) {
+    const tracks = snapshotRebuild(snap.queue);
+    if (tracks.length > 0) {
+      const origFile =
+        snap.cur >= 0 && snap.cur < snap.queue.length ? snap.queue[snap.cur] : null;
+      const cur = origFile ? tracks.findIndex((t) => t.clip.file === origFile) : -1;
+      player.playlist = tracks;
+      player.pos = cur;
+      player.shuffle = !!snap.shuffle;
+      player.shuffleSkipSameTitle = snap.skipSame !== false;
+      player.dedupByName = snap.dedup !== false;
+      if (Number.isFinite(snap.rate) && snap.rate > 0) player.playbackRate = clampRate(snap.rate);
+      player.sessionRestored = true;
+      if (cur >= 0) {
+        player.track = tracks[cur];
+        const a = ensureAudio();
+        a.src = audioUrl(tracks[cur].clip.opus);
+        const t0 = Number.isFinite(snap.t) && snap.t > 0 ? snap.t : 0;
+        const onMeta = () => {
+          a.removeEventListener('loadedmetadata', onMeta);
+          try {
+            const d = Number.isFinite(a.duration) ? a.duration : 0;
+            a.currentTime = d > 0 ? Math.min(t0, Math.max(0, d - 0.5)) : t0;
+          } catch {
+            /* 忽略 */
+          }
+          setMediaPlaybackState('paused');
+        };
+        a.addEventListener('loadedmetadata', onMeta);
+        a.load();
+        // 不调用 play()：刷新后保持暂停，等用户点播放
+      }
+      writeSessionSnapshot(); // 回写，清理已失效条目
+    } else {
+      try {
+        window.localStorage.removeItem(SESSION_KEY);
+      } catch {
+        /* 忽略 */
+      }
+    }
+  }
+
+  // 关页兜底（pagehide 是移动端唯一可靠的卸载点；visibilitychange 在看门狗块里）
+  window.addEventListener('pagehide', () => writeSessionSnapshot());
+}
+
+/** 停掉当前曲并清空当前项（不清队列）：URL 范围接管等场景用 */
+export function stopCurrent() {
+  const a = getAudio();
+  a.pause();
+  a.removeAttribute('src');
+  a.load();
+  player.track = null;
+  player.pos = -1;
+  player.loading = false;
+  setMediaPlaybackState('none');
+  scheduleSessionSave();
 }
 
 export function getAudio(): HTMLAudioElement {

@@ -120,12 +120,14 @@ export function shDayStart(epoch: number): number {
  * @param keys 播放列表每项的 trackKey
  * @param playedKeys 已播曲目 key 集合（数组）
  * @param currentPos 当前项下标
+ * @param avoidIdx 额外回避的下标集合（如「随机避开同名」命中的项）；池重置时不生效
  * @returns { index, reset } 或 null（列表为空/只有当前一项）
  */
 export function pickShuffleIndex(
   keys: string[],
   playedKeys: string[],
   currentPos: number,
+  avoidIdx?: Set<number>,
 ): { index: number; reset: boolean } | null {
   const n = keys.length;
   if (n === 0) return null;
@@ -136,7 +138,7 @@ export function pickShuffleIndex(
   let reset = false;
 
   for (let i = 0; i < n; i++) {
-    if (i !== currentPos && !played.has(keys[i])) candidates.push(i);
+    if (i !== currentPos && !played.has(keys[i]) && !avoidIdx?.has(i)) candidates.push(i);
   }
   if (candidates.length === 0) {
     reset = true;

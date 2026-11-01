@@ -3,12 +3,21 @@
   import { player, getAudio } from '$lib/player.svelte';
   import { hasLyrics, lyricIndexAt } from '$lib/lyrics';
   import { dateCard } from '$lib/types';
+  import { LocateFixed } from 'lucide-svelte';
 
   /** 统一行高（px）：偏移量按它算，避免测量每行 */
   const LINE_H = 44;
+  /** 手动滚动停止后自动恢复跟随的等待（ms；owner 选定 3 秒） */
+  const RESUME_MS = 3000;
 
-  let posAudio = $state(0);
+  let boxEl = $state<HTMLDivElement>();
   let boxH = $state(0);
+  let posAudio = $state(0);
+  let follow = $state(true);
+
+  /** 程序平滑滚动期间，屏蔽 scroll 事件里的「用户滚动」判定 */
+  let suppressUntil = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
 
   const clock = (epoch: number) =>
     new Date(epoch * 1000).toLocaleTimeString('zh-CN', {
@@ -18,9 +27,14 @@
   const clip = $derived(player.track?.clip ?? null);
   const lines = $derived(clip?.lyrics ?? []);
   const idx = $derived(lyricIndexAt(clip?.lyrics, posAudio));
-  // 未到第一行时也把第一行摆在中央（idx=-1 → 用 0 算偏移）
   const activeIdx = $derived(idx < 0 ? 0 : idx);
-  const offset = $derived(boxH > 0 ? boxH / 2 - (activeIdx + 0.5) * LINE_H : 0);
+
+  // 切歌：进度清零（修旧进度残影）+ 回到跟随
+  $effect(() => {
+    void clip?.file;
+    posAudio = 0;
+    follow = true;
+  });
 
   // 打开时按 250ms 读一次本地音频进度（页面别处已有全局监听，不重复挂）
   $effect(() => {
@@ -33,10 +47,55 @@
     return () => clearInterval(iv);
   });
 
+  // 打开面板 = 回到跟随（每次打开都先看当前行）
+  $effect(() => {
+    if (player.lyricsOpen) follow = true;
+  });
+
+  // 跟随：当前行变化 / 恢复跟随 / 容器尺寸变化 → 滚动把当前行摆在中央。
+  // 顶部占位已是半个视口高，因此 scrollTop = idx*LINE_H 即居中；开面板/切歌瞬移，行进平滑。
+  let lastCenterKey = '';
+  $effect(() => {
+    if (!follow || boxH <= 0 || !player.track || !boxEl) return;
+    const key = (clip?.file ?? '') + ':' + String(player.lyricsOpen);
+    const instant = key !== lastCenterKey;
+    lastCenterKey = key;
+    const max = boxEl.scrollHeight - boxEl.clientHeight;
+    const target = Math.max(0, Math.min(max, activeIdx * LINE_H));
+    suppressUntil = Date.now() + (instant ? 200 : 600);
+    boxEl.scrollTo({ top: target, behavior: instant ? 'auto' : 'smooth' });
+  });
+
+  function armAutoResume() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => (follow = true), RESUME_MS);
+  }
+
+  function markUserScroll() {
+    if (Date.now() < suppressUntil) return;
+    if (follow) follow = false; // 当前行仍高亮，只是不再自动居中
+    armAutoResume();
+  }
+
+  function onWheel(e: WheelEvent) {
+    if (!e.deltaY) return;
+    markUserScroll();
+  }
+
+  function onTouchStart() {
+    markUserScroll();
+  }
+
+  function onPointerDown(e: PointerEvent) {
+    // 鼠标拖滚动条；行点击会在 click 里立即恢复跟随，不受影响
+    if (e.pointerType === 'mouse') markUserScroll();
+  }
+
   function seekLine(i: number) {
     const a = getAudio();
     a.currentTime = lines[i]?.t ?? 0;
     posAudio = a.currentTime;
+    follow = true; // 点行 = 跳这句并立即回跟
   }
 </script>
 
@@ -45,13 +104,27 @@
   onClose={() => (player.lyricsOpen = false)}
   side="right"
   title={player.track?.clip.title || '（未识别）'}
+  scroll={false}
 >
   {#if player.track}
     {@const t = player.track}
     {#if hasLyrics(t.clip)}
-      <div class="flex h-full min-h-[45vh] flex-col">
-        <div class="relative min-h-0 flex-1 overflow-hidden" bind:clientHeight={boxH}>
-          <div class="lyr-track" style:transform="translateY({offset}px)">
+      <div class="relative h-full">
+        <div
+          bind:this={boxEl}
+          bind:clientHeight={boxH}
+          class="lyr-scroll h-full overflow-y-auto overscroll-contain px-3"
+          role="region"
+          aria-label="歌词"
+          tabindex="-1"
+          onwheel={onWheel}
+          ontouchstart={onTouchStart}
+          onpointerdown={onPointerDown}
+        >
+          <div
+            style:padding-top="{Math.max(0, (boxH - LINE_H) / 2)}px"
+            style:padding-bottom="{Math.max(0, (boxH - LINE_H) / 2)}px"
+          >
             {#each lines as l, i (i)}
               <button
                 class="lyr-line {i === idx ? 'text-accent font-semibold' : 'opacity-55'}"
@@ -64,6 +137,14 @@
             {/each}
           </div>
         </div>
+        {#if !follow}
+          <button
+            class="absolute right-4 bottom-4 flex items-center gap-1 rounded-full border border-base-300 bg-base-100/90 px-3 py-1.5 text-xs shadow-md transition hover:border-accent"
+            onclick={() => (follow = true)}
+          >
+            <LocateFixed class="h-3.5 w-3.5" /> 回到当前
+          </button>
+        {/if}
       </div>
     {:else}
       <div class="flex h-full min-h-0 flex-col items-center justify-center gap-1">
@@ -79,13 +160,20 @@
 </Sheet>
 
 <style>
-  .lyr-track {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    transition: transform 300ms ease;
-    will-change: transform;
+  /* 滚动条视觉：细、圆角、半透明，贴面板右缘一根，不再出现系统宽条 */
+  .lyr-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--color-base-content) 22%, transparent) transparent;
+  }
+  .lyr-scroll::-webkit-scrollbar {
+    width: 6px;
+  }
+  .lyr-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .lyr-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklab, var(--color-base-content) 22%, transparent);
+    border-radius: 999px;
   }
   .lyr-line {
     display: flex;

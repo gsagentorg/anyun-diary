@@ -3,6 +3,8 @@ import { audioUrl, buildRecTracks, dateCard } from './types';
 import diaryData from '$lib/data.json';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
+import { SleepAudio } from './sleep-audio';
+import { isSleepMode, type SleepMode } from './sleep-curves';
 
 export type { Track };
 export { buildRecTracks };
@@ -137,6 +139,8 @@ const gAudio = globalThis as typeof globalThis & {
   __anyunFixFake?: () => void;
   __anyunWatchdog?: boolean;
   __anyunSessionInit?: boolean;
+  __anyunSleepAudio?: SleepAudio;
+  __anyunSyncSleep?: () => void;
 };
 
 function ensureAudio(): HTMLAudioElement {
@@ -146,6 +150,9 @@ function ensureAudio(): HTMLAudioElement {
     a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
     a.addEventListener('play', () => {
+      gAudio.__anyunSyncSleep?.();
+      void gAudio.__anyunSleepAudio?.resume();
+      if (a.paused) return;
       player.playing = true;
       setMediaPlaybackState('playing');
     });
@@ -185,6 +192,8 @@ if (typeof window !== 'undefined' && !gAudio.__anyunWatchdog) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') {
       gAudio.__anyunFixFake?.();
+      gAudio.__anyunSyncSleep?.();
+      void gAudio.__anyunSleepAudio?.resume();
       // 回前台时刷新系统浮层状态，避免卡片停留在过期状态
       const a = gAudio.__anyunAudio;
       if (!player.track) setMediaPlaybackState('none');
@@ -203,7 +212,7 @@ function playCurrent() {
   }
   player.track = t;
   player.loading = true;
-  const a = ensureAudio();
+  const a = getAudio(); // Resume a suspended gain graph within the track-selection gesture.
   a.src = audioUrl(t.clip.opus);
   a.load();
   a.play().catch(() => {});
@@ -666,18 +675,55 @@ export function stopCurrent() {
 }
 
 export function getAudio(): HTMLAudioElement {
+  // UI/MediaSession callers reach this within a play gesture, before audio.play().
+  void gAudio.__anyunSleepAudio?.resume();
   return ensureAudio();
 }
 
-/** 睡眠定时器：定时停止 / 播完当前曲目停 */
+/** 睡眠定时器：墙钟截止时间跨切歌/暂停不重置；只记忆预设，不恢复倒计时。 */
 export const sleep = $state<{
-  until: number | null; // 到期时间戳（ms）
-  afterTrack: boolean; // 播完当前曲目就停
-  remaining: number; // 剩余秒
-  fired: boolean; // 刚触发（供 UI 提示）
-}>({ until: null, afterTrack: false, remaining: 0, fired: false });
+  until: number | null;
+  started: number | null;
+  afterTrack: boolean;
+  remaining: number;
+  fired: boolean;
+  preset: SleepMode;
+  mode: SleepMode; // 本次已启动的方式，和下一次选择分开
+  notice: string | null;
+}>({ until: null, started: null, afterTrack: false, remaining: 0, fired: false,
+  preset: 'gentle', mode: 'gentle', notice: null });
+
+const SLEEP_PRESET_KEY = 'anyun-sleep-preset-v1';
+export function initSleep() {
+  if (typeof window === 'undefined') return;
+  try {
+    const value = window.localStorage.getItem(SLEEP_PRESET_KEY);
+    if (isSleepMode(value)) sleep.preset = value;
+  } catch { /* Storage is optional. */ }
+}
+export function setSleepPreset(mode: SleepMode) {
+  if (!isSleepMode(mode)) return;
+  sleep.preset = mode;
+  try { window.localStorage.setItem(SLEEP_PRESET_KEY, mode); } catch { /* SSR/storage denied */ }
+}
+function sleepAudio() {
+  return gAudio.__anyunSleepAudio ??= new SleepAudio(ensureAudio());
+}
+
+/** Public for deterministic clock tests and foreground recovery. */
+export function syncSleep(now = Date.now(), reschedule = true) {
+  if (sleep.until == null || sleep.started == null) return;
+  sleep.remaining = Math.max(0, Math.ceil((sleep.until - now) / 1000));
+  if (now >= sleep.until) { stopForSleep(); return; }
+  if (sleep.mode !== 'off') {
+    sleepAudio().tick(sleep.mode, (now - sleep.started) / (sleep.until - sleep.started));
+    if (reschedule) sleepAudio().schedule(sleep.mode, sleep.started, sleep.until, now);
+  }
+}
+gAudio.__anyunSyncSleep = () => syncSleep();
 
 let sleepTimer: ReturnType<typeof setInterval> | null = null;
+let sleepRun = 0;
 
 function clearSleepTimer() {
   if (sleepTimer) {
@@ -686,45 +732,66 @@ function clearSleepTimer() {
   }
 }
 
-/** 启动睡眠定时：minutes 为分钟后停止；afterTrack=true 表示播完当前曲目即停 */
+/** Click handler calls prepare before yielding, preserving the audio user gesture. */
 export function startSleep(minutes: number | null, afterTrack = false) {
+  if (!afterTrack && (minutes == null || !Number.isFinite(minutes) || minutes <= 0 || minutes > 600)) return;
   cancelSleep();
   sleep.fired = false;
+  sleep.notice = null;
   if (afterTrack) {
     sleep.afterTrack = true;
     return;
   }
-  if (minutes == null || minutes <= 0) return;
-  sleep.until = Date.now() + minutes * 60000;
-  sleep.remaining = Math.round(minutes * 60);
-  sleepTimer = setInterval(() => {
-    if (sleep.until == null) return;
-    const r = Math.max(0, Math.round((sleep.until - Date.now()) / 1000));
-    sleep.remaining = r;
-    if (r <= 0) stopForSleep();
-  }, 1000);
+  sleep.mode = sleep.preset;
+  sleep.started = Date.now();
+  sleep.until = sleep.started + minutes! * 60000;
+  sleep.remaining = Math.ceil(minutes! * 60);
+  const run = sleepRun;
+  if (sleep.mode !== 'off') {
+    sleep.notice = '正在启用渐弱音频引擎…';
+    void sleepAudio().prepare().then((notice) => {
+      if (sleepRun !== run || sleep.until == null) return;
+      sleep.notice = notice;
+      syncSleep();
+    });
+  }
+  sleepTimer = setInterval(() => syncSleep(Date.now(), false), 100);
 }
 
 /** 取消睡眠定时 */
 export function cancelSleep() {
+  ++sleepRun;
   clearSleepTimer();
+  gAudio.__anyunSleepAudio?.restore();
   sleep.until = null;
+  sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
+  sleep.notice = null;
 }
 
 function stopForSleep() {
+  ++sleepRun;
   const a = ensureAudio();
-  a.pause();
+  a.pause(); // Pause BEFORE restoring gain, so expiry never emits a loud fragment.
   clearSleepTimer();
+  gAudio.__anyunSleepAudio?.restore(true);
   sleep.until = null;
+  sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
   sleep.fired = true;
+  setMediaPlaybackState('paused');
 }
+
+if (import.meta.hot) import.meta.hot.dispose(() => cancelSleep());
 
 /** 曲目自然结束时调用：睡眠定时（播完即停）优先于自动下一首 */
 export function onTrackEnded() {
+  if (sleep.until != null && Date.now() >= sleep.until) {
+    stopForSleep();
+    return;
+  }
   if (sleep.afterTrack) {
     stopForSleep();
     return;

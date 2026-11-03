@@ -1,9 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
+  import { SLEEP_MODES, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage } from './sleep-curves';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
   let progress = $state(0);
@@ -39,12 +40,23 @@
 
   const PRESETS = [15, 25, 40, 55, 70, 90];
   const RATE_PRESETS = [0.5, 1, 1.5, 2, 3];
+  const selectedSleepMode = $derived(SLEEP_MODES.find((mode) => mode.id === sleep.preset)!);
+  const activeSleepMode = $derived(SLEEP_MODES.find((mode) => mode.id === sleep.mode)!);
+  const sleepRunning = $derived(sleep.until != null && sleep.started != null);
+  const shownSleepMode = $derived(sleepRunning ? activeSleepMode : selectedSleepMode);
+  const sleepTotalMs = $derived(sleepRunning ? sleep.until! - sleep.started! : 0);
+  const sleepPosition = $derived(sleepProgress(sleepTotalMs, sleep.remaining));
+  const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition));
+  const sleepPercent = $derived(Math.floor(sleepPosition * 100 + 1e-9));
+  const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition));
+  const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleep.remaining)));
 
-  onMount(() => { initRate(); initDedup(); initSession(); });
+  onMount(() => { initRate(); initDedup(); initSession(); initSleep(); });
 
   $effect(() => {
     const a = getAudio();
     const onPlay = () => {
+      if (a.paused) return; // An overdue sleep timer may have stopped this play event.
       player.loading = false;
       sleep.fired = false;
     };
@@ -77,7 +89,7 @@
     a.addEventListener('playing', onPlaying);
     a.addEventListener('ended', onEnded);
     a.addEventListener('error', onErr);
-    const onPlaySt = () => (playing = true);
+    const onPlaySt = () => (playing = !a.paused);
     const onPauseSt = () => (playing = false);
     a.addEventListener('play', onPlaySt);
     a.addEventListener('pause', onPauseSt);
@@ -184,7 +196,7 @@
 
   function pick(minutes: number | null, afterTrack = false) {
     startSleep(minutes, afterTrack);
-    sleepOpen = false;
+    // Keep status/capability feedback visible after arming; close explicitly as usual.
   }
 
   // 倍速按钮角标：整数省小数，否则两位小数
@@ -319,6 +331,34 @@
 
 {#snippet sleepPanel()}
   <div class="px-1 pb-1 text-2xs uppercase tracking-wide opacity-50">睡眠定时器</div>
+  <label class="mb-1 block px-1 text-xs" >
+    {sleepRunning ? '下次启动方式' : '渐弱方式'}
+    <select
+      class="mt-1 w-full rounded-md border border-base-300 bg-base-100 px-1.5 py-1.5 text-xs"
+      value={sleep.preset}
+      onchange={(event) => { const value = event.currentTarget.value; if (isSleepMode(value)) setSleepPreset(value); }}
+    >
+      {#each SLEEP_MODES as mode (mode.id)}
+        <option value={mode.id}>{mode.label}{mode.id === 'gentle' ? '（推荐）' : ''}</option>
+      {/each}
+    </select>
+  </label>
+  {#if sleepRunning}<p class="mt-1 px-1 text-2xs font-medium">当前运行：{shownSleepMode.label}</p>{/if}
+  <p class="px-1 text-2xs leading-relaxed opacity-70">{shownSleepMode.description}</p>
+  <svg class="my-1 h-12 w-full text-accent" viewBox="-4 0 188 44" role="img" aria-label={`${shownSleepMode.label}音量变化示意，横轴为时间，纵轴为相对分贝${sleepRunning ? `；当前位置：已过${sleepPercent}%，${currentSleepStage}` : ''}`}>
+    <path d="M0,38 H180" fill="none" stroke="currentColor" opacity="0.2" />
+    <path d={sleepCurvePath(shownSleepMode.id)} fill="none" stroke="currentColor" stroke-width="2" />
+    {#if sleepRunning}
+      <line x1={sleepPoint.x} x2={sleepPoint.x} y1="1" y2="40" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
+      <circle data-sleep-position cx={sleepPoint.x} cy={sleepPoint.y} r="3.5" fill="currentColor" stroke="var(--color-base-100)" stroke-width="1.5" />
+    {/if}
+  </svg>
+  <div class="mb-1 flex justify-between px-1 text-2xs opacity-50"><span>开始</span><span>停止</span></div>
+  {#if sleepRunning}
+    <div class="mb-2 flex flex-wrap justify-between gap-x-2 px-1 text-2xs tabular-nums" data-sleep-stage>
+      <span>已过 {fmtClockShort(sleepElapsed)} · {sleepPercent}%</span><span class="text-accent">{currentSleepStage}</span>
+    </div>
+  {/if}
   <div class="grid grid-cols-3 gap-1">
     {#each PRESETS as m (m)}
       <button class="rounded-md px-2 py-1 text-xs tabular-nums transition hover:bg-base-200" onclick={() => pick(m)}>
@@ -330,7 +370,7 @@
     class="mt-1 w-full rounded-md px-2 py-1 text-left text-xs transition hover:bg-base-200"
     onclick={() => pick(null, true)}
   >
-    播完当前曲目后就停
+    播完当前曲目后就停（不渐弱）
   </button>
   <div class="mt-1 flex items-center gap-1 border-t border-base-300 pt-1.5">
     <input
@@ -349,6 +389,14 @@
       开始
     </button>
   </div>
+  {#if sleep.until != null}
+    <p class="mt-2 px-1 text-2xs leading-relaxed" role="status">
+      进行中：{activeSleepMode.label} · 剩余 {fmtClockShort(sleep.remaining)}
+      {#if sleep.preset !== sleep.mode}<br />新方式在重新开始后生效。{/if}
+    </p>
+  {/if}
+  {#if sleep.notice}<p class="mt-1 px-1 text-2xs leading-relaxed text-warning" role="status">{sleep.notice}</p>{/if}
+  <p class="mt-1 px-1 text-2xs leading-relaxed opacity-50">仅调整本播放器音量；取消或结束后恢复。锁屏、后台执行受浏览器和系统限制。</p>
   {#if sleep.until != null || sleep.afterTrack}
     <button
       class="mt-1 w-full rounded-md px-2 py-1 text-left text-xs text-warning transition hover:bg-base-200"
@@ -591,7 +639,7 @@
               {/if}
             </button>
             {#if sleepOpen}
-              <div class="absolute bottom-full right-0 mb-2 w-48 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
+              <div class="absolute bottom-full right-0 mb-2 max-h-[70dvh] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg">
                 {@render sleepPanel()}
               </div>
             {/if}
@@ -629,7 +677,7 @@
               <div
                 bind:this={menuPanelEl}
                 transition:fly={{ y: -8, duration: 160 }}
-                class="absolute bottom-full right-0 mb-2 w-56 rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg"
+                class="absolute bottom-full right-0 mb-2 max-h-[70dvh] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg"
               >
                 {#if foldCount >= 1}{@render rateRow()}{/if}
                 {#if foldCount >= 2}<div class="mt-1 border-t border-base-300 pt-1">{@render shuffleControl('row')}</div>{/if}

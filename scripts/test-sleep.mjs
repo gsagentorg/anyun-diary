@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sleepGain, sleepCurvePath, SLEEP_MODES, isSleepMode } from '../src/lib/sleep-curves.ts';
+import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, SLEEP_MODES, isSleepMode } from '../src/lib/sleep-curves.ts';
 import { SleepAudio } from '../src/lib/sleep-audio.ts';
 let checks = 0;
 function ok(value, message) { assert.ok(value, message); checks++; }
@@ -20,6 +20,27 @@ ok(sleepGain('companion', 0.25) < sleepGain('gentle', 0.25), 'companion quieter 
 ok(Math.abs(sleepGain('steady', 0.5) - 10 ** (-30 / 20)) < 1e-10, 'steady is linear dB');
 ok(sleepGain('gentle', -1) === 1 && sleepGain('gentle', 2) === 0, 'clamped progress');
 ok(sleepGain('gentle', NaN) === 1 && !isSleepMode('oops'), 'invalid input safe');
+
+// Position and stage indicators share the exact geometry of the preview curve.
+for (const { id } of SLEEP_MODES) {
+  const point = sleepCurvePoint(id, 0.5);
+  ok(point.x === 90 && point.y >= 4 && point.y <= 38, `${id}: halfway marker bounded`);
+  ok(sleepCurvePath(id).includes(`L${point.x},${point.y}`), `${id}: marker lies on plotted curve`);
+}
+ok(sleepCurvePoint('gentle', -1).x === 0 && sleepCurvePoint('gentle', 2).x === 180, 'marker position clamped');
+ok(sleepCurvePoint('gentle', NaN).y === 4, 'invalid marker position starts safely');
+ok(sleepProgress(1800000, 1800) === 0, 'countdown start position');
+ok(sleepProgress(1800000, 900) === 0.5, 'countdown half position');
+ok(sleepProgress(1800000, 1620) === 0.1, 'ten-percent position avoids cancellation rounding');
+ok(sleepProgress(1800000, 0) === 1 && sleepProgress(1800000, -10) === 1, 'countdown end clamped');
+ok(sleepProgress(1800000, 1900) === 0, 'countdown early value clamped');
+ok(sleepProgress(0, 0) === 0 && sleepProgress(NaN, 2) === 0 && sleepProgress(1000, NaN) === 0, 'invalid or inactive duration safe');
+ok(sleepStage('late', 0.65) === '保持音量' && sleepStage('late', 2 / 3) === '渐弱中', 'late hold-to-fade boundary');
+ok(sleepStage('companion', 0.249) === '降至轻声' && sleepStage('companion', 0.25) === '轻声尾段', 'companion early-to-tail boundary');
+ok(sleepStage('gentle', 0.1) === '缓慢起步' && sleepStage('gentle', 0.5) === '渐弱中', 'gentle start and middle stages');
+ok(sleepStage('steady', 0.5) === '匀速渐弱' && sleepStage('steady', 0.85) === '轻声尾段', 'steady middle and tail stages');
+ok(sleepStage('gentle', 0.99) === '即将停止' && sleepStage('gentle', 1) === '已结束', 'closing and finished stages');
+ok(sleepStage('off', 0.99) === '保持音量', 'hard stop never claims fading');
 
 let now = 100000;
 Date.now = () => now;

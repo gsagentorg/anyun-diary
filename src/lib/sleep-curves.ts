@@ -26,11 +26,33 @@ export function sleepGain(mode: SleepMode, progress: number): number {
   // The last 2% closes the -60 dB tail to true zero, not an abrupt tiny step.
   return gain * (t > 0.98 ? 1 - smooth((t - 0.98) / 0.02) : 1);
 }
+/** Shared coordinates keep the moving marker exactly on the plotted dB curve. */
+export function sleepCurvePoint(mode: SleepMode, progress: number) {
+  const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
+  const gain = sleepGain(mode, t);
+  const height = gain <= 0 ? 0 : Math.max(0, 1 + 20 * Math.log10(gain) / 60);
+  return { x: 180 * t, y: Number((38 - 34 * height).toFixed(2)) };
+}
 export function sleepCurvePath(mode: SleepMode): string {
   return Array.from({ length: 61 }, (_, i) => {
-    const gain = sleepGain(mode, i / 60);
-    // Plot dB depth rather than amplitude so the quiet tail is legible.
-    const height = gain <= 0 ? 0 : Math.max(0, 1 + 20 * Math.log10(gain) / 60);
-    return `${i ? 'L' : 'M'}${i * 3},${(38 - 34 * height).toFixed(2)}`;
+    const point = sleepCurvePoint(mode, i / 60);
+    return `${i ? 'L' : 'M'}${point.x},${point.y}`;
   }).join(' ');
+}
+
+/** Uses the existing countdown tick; no second clock or timer to drift. */
+export function sleepProgress(totalMs: number, remainingSeconds: number): number {
+  if (!Number.isFinite(totalMs) || totalMs <= 0 || !Number.isFinite(remainingSeconds)) return 0;
+  return Math.max(0, Math.min(1, (totalMs - remainingSeconds * 1000) / totalMs));
+}
+export function sleepStage(mode: SleepMode, progress: number): string {
+  const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
+  if (t >= 1) return '已结束';
+  if (mode === 'off') return '保持音量';
+  if (mode === 'late' && t < 2 / 3) return '保持音量';
+  if (t >= 0.98) return '即将停止';
+  if (mode === 'companion') return t < 0.25 ? '降至轻声' : '轻声尾段';
+  if (t >= 0.8) return '轻声尾段';
+  if (mode === 'gentle' && t < 0.15) return '缓慢起步';
+  return mode === 'steady' ? '匀速渐弱' : '渐弱中';
 }

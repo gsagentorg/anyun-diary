@@ -33,6 +33,27 @@ npm run check      # svelte-kit sync + svelte-check
 npm run build      # 用 adapter-vercel 构建到 .vercel/output
 ```
 
+### 测试（仅本地，不部署）
+
+使用 Node.js `^20.19.0 || >=22.12.0`（与 Vite 7 一致），先执行 `npm ci`。
+测试执行器固定为开发依赖 `vite-node@3.2.4`，支持 Vite 7，
+与锁文件中的 Vite 7.3.7 共用同一版本；不要用临时下载最新版的 `npx vite-node` 代替锁文件。
+
+```bash
+npm test                # 依次运行以下五套；任何断言/套件失败即非零退出
+npm run test:playlist   # 合成夹具：范围、排序、日期、M3U URL 精确编码
+npm run test:shuffle    # 固定种子、40 次抽取及非空覆盖检查
+npm run test:lane-scale # 泳道布局/映射
+npm run test:session    # 会话恢复、队列、LIFO、倍速
+npm run test:sleep      # 睡眠曲线、音频增益、定时器及取消
+```
+
+每套使用独立进程，避免会话/睡眠测试的全局浏览器桩、假时钟和 `process.exit`
+影响其他套件。播放列表使用合成数据，不依赖 NAS、真实音频或不断增加的录制日期；
+会话套件仍读取仓库内 `src/lib/data.json`（只读）。
+`npm test` 不运行数据生成、音频转换、构建、部署或服务重启。
+睡眠测试是模拟环境下的逻辑验证，不代表 iPhone 锁屏/后台真机验收。
+
 ### 生成数据（可选，需先有 NAS/素材）
 
 ```bash

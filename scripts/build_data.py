@@ -1,205 +1,151 @@
 #!/usr/bin/env python3
-"""build_data.py — 从素材目录自动生成前端数据。
-输入: <AUDIO_ROOT>/{主录像, *-proj.llc, 已打标签/}
-输出: ../../static/data.json （时间轴 + 切片 + 歌名 + opus 引用）
+"""Update only lyrics for clips already present in data.json.
 
-文件名约定（自动推导，不手填）:
-  主录像:  "YYYY-MM-DD HH-MM-SS.mp4|.mkv" → 开播本地时间(Asia/Shanghai)
-  llc:     "<录像名>-proj.llc" → cutSegments[start,end](录像内相对秒)
-  切片:    "<录像名>-<HH.MM.SS.mmm>-<HH.MM.SSS.mmm>-segN.m4a|.ogg"
-           → 时间戳即录像内偏移（与 llc 一致，交叉验证）
-歌名: 切片文件自带的元数据（不依赖任何外部打标产物）
-  m4a → format_tags.title ; ogg → stream_tags.TITLE
-  生成期可用 SONG_FMT 环境变量套模板（占位符 {title}{artist}），默认 {title} 与原样一致
+Input: TAGGED_DIR/<existing clip stem>.lrc (or AUDIO_ROOT/已打标签).
+No source directory enumeration, media probing or project sidecar reads.
+The existing data.json is the catalog; non-lyric fields are preserved.
 """
-import json, os, re, sys, subprocess, datetime as dt
-
-BASE = os.environ.get("AUDIO_ROOT", "").strip()
-if not BASE:
-    sys.exit("需要设置 AUDIO_ROOT 环境变量（指向切片素材目录）")
-SONG_FMT = os.environ.get("SONG_FMT", "{title}")
-TZ = dt.timezone(dt.timedelta(hours=8))
-
-SEG_RE = re.compile(
-    r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})"
-    r"-(\d{2})\.(\d{2})\.(\d{2})\.(\d{3})"
-    r"-(\d{2})\.(\d{2})\.(\d{2})\.(\d{3})"
-    r"(?:-(seg\d+))?\.(m4a|ogg)$"
-)
+import argparse
+import copy
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import re
+import tempfile
+import time
 
 TS_RE = re.compile(r"\[(\d{1,2}):(\d{2})\.(\d{2,3})\]")
-META_RE = re.compile(r"^\[(ti|ar|by|al|kana):", re.IGNORECASE)
-OFFSET_RE = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]", re.IGNORECASE)
+OFFSET_RE = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]$", re.IGNORECASE)
+META_RE = re.compile(r"^\[[A-Za-z][A-Za-z0-9_-]*:[^\]]*\]$")
 
-def hms_ms(a, b, c, d):
-    return int(a) * 3600 + int(b) * 60 + int(c) + int(d) / 1000.0
 
-def parse_lrc(path):
-    """解析标准 LRC，返回 [{"t": 秒, "text": 歌词}]，t 相对切片开头。
-    支持：一行多个时间戳、2~3 位小数秒、[offset:±ms]（正值=歌词提前 ⇒ t += -offset/1000，多次累加）。
-    失败返回 [] 并打 WARN，不抛异常。
-    """
-    try:
-        with open(path, encoding="utf-8-sig", errors="replace") as fh:
-            lines = fh.read().splitlines()
-    except Exception as e:
-        print(f"WARN: 读歌词失败 {os.path.basename(path)}: {e}", file=sys.stderr)
-        return []
-
-    offset_ms = 0
+def parse_lrc_text(text):
     items = []
-    try:
-        for raw in lines:
-            line = raw.strip()
-            if not line:
+    offset_ms = 0
+    for number, raw in enumerate(text.lstrip("﻿").splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        offset = OFFSET_RE.fullmatch(line)
+        if offset:
+            offset_ms += int(offset.group(1))
+            continue
+        stamps = list(TS_RE.finditer(line))
+        if not stamps:
+            if META_RE.fullmatch(line):
                 continue
-            om = OFFSET_RE.match(line)
-            if om:
-                offset_ms += int(om.group(1))
-                continue
-            if META_RE.match(line):
-                continue
-            stamps = TS_RE.findall(line)
-            if not stamps:
-                continue
-            text = TS_RE.sub("", line).strip()
-            if not text:
-                continue
-            for mm, ss, frac in stamps:
-                t = int(mm) * 60 + int(ss) + int(frac) / (10 ** len(frac))
-                items.append({"t": t, "text": text})
-        shift = -offset_ms / 1000.0
-        for it in items:
-            it["t"] = round(it["t"] + shift, 3)
-        items.sort(key=lambda x: x["t"])
-    except Exception as e:
-        print(f"WARN: 解析歌词失败 {os.path.basename(path)}: {e}", file=sys.stderr)
-        return []
+            raise ValueError(f"line {number}: unsupported LRC syntax")
+        if any(int(match[2]) >= 60 for match in stamps):
+            raise ValueError(f"line {number}: seconds must be below 60")
+        lyric = TS_RE.sub("", line).strip()
+        if not lyric:
+            continue
+        for match in stamps:
+            mm, ss, frac = match.groups()
+            items.append({"t": int(mm) * 60 + int(ss) + int(frac) / 10 ** len(frac),
+                          "text": lyric})
+    for item in items:
+        item["t"] = round(item["t"] - offset_ms / 1000, 3)
+    if not items:
+        raise ValueError("empty or unparseable lyrics; existing data not changed")
+    if any(item["t"] < 0 for item in items):
+        raise ValueError("negative lyric timestamp")
+    if any(b["t"] <= a["t"] for a, b in zip(items, items[1:])):
+        raise ValueError("lyric timestamps must be strictly increasing")
     return items
 
-def read_tags(path):
-    """读切片文件自带的 title/artist 标签，返回 (title, artist)。
-    m4a → format_tags；ogg(Opus) → stream_tags（ffprobe 版本不同大小写不一：title/TITLE、artist/ARTIST 均兼容）。
-    """
-    title = artist = ""
+
+def parse_lrc(path):
+    return parse_lrc_text(Path(path).read_text(encoding="utf-8-sig"))
+
+
+def digest(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def refresh_lyrics(data_path, tagged_dir, *, dry_run=False):
+    data_path = Path(data_path)
+    if data_path.is_symlink():
+        raise ValueError("data output must not be a symlink")
+    original = data_path.read_bytes()
+    before = json.loads(original)
+    after = copy.deepcopy(before)
+    root = Path(tagged_dir).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError("TAGGED_DIR must be a directory")
+    sources = {}
+    clips = changed = rows = 0
+    for recording in after["recordings"]:
+        for clip in recording.get("clips", []):
+            name = clip["file"]
+            if not isinstance(name, str) or not name or Path(name).name != name or name in (".", "..") or chr(92) in name:
+                raise ValueError("clip filename must be a plain basename")
+            source = root / (Path(name).stem + ".lrc")
+            if source.resolve(strict=True).parent != root:
+                raise ValueError("lyric symlink escapes TAGGED_DIR")
+            content = source.read_bytes()
+            expected = sources.setdefault(source, digest(content))
+            if expected != digest(content):
+                raise RuntimeError("lyric source changed during rebuild")
+            lyrics = parse_lrc_text(content.decode("utf-8-sig"))
+            duration = clip["offsetEnd"] - clip["offsetStart"]
+            if not math.isfinite(duration) or duration <= 0 or lyrics[-1]["t"] > duration + 0.05:
+                raise ValueError(f"lyric timestamp outside clip: {name}")
+            changed += clip.get("lyrics", []) != lyrics
+            clip["lyrics"] = lyrics
+            clips += 1
+            rows += len(lyrics)
+    if not clips:
+        raise ValueError("baseline has no clips")
+    for path, expected in sources.items():
+        if digest(path.read_bytes()) != expected:
+            raise RuntimeError("lyric source changed during rebuild")
+    if data_path.read_bytes() != original:
+        raise RuntimeError("data.json changed concurrently; refusing overwrite")
+    if changed and not dry_run:
+        after["generatedAt"] = int(time.time())
+        payload = json.dumps(after, ensure_ascii=False, indent=1).encode("utf-8")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(dir=data_path.parent, prefix=".data-", suffix=".tmp", delete=False) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+                stream.flush()
+                os.fsync(stream.fileno())
+            temporary.chmod(data_path.stat().st_mode & 0o777)
+            if data_path.read_bytes() != original:
+                raise RuntimeError("data.json changed concurrently; refusing overwrite")
+            os.replace(temporary, data_path)
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+    return {"clips": clips, "changed_lyrics": changed, "lyric_rows": rows,
+            "non_lyric_changes": 0, "written": bool(changed and not dry_run)}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tagged-dir", help="directory containing final same-name LRCs")
+    parser.add_argument("--data-file", type=Path,
+                        default=Path(__file__).resolve().parent.parent / "src/lib/data.json")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+    tagged = args.tagged_dir or os.environ.get("TAGGED_DIR", "").strip()
+    if not tagged:
+        legacy = os.environ.get("AUDIO_ROOT", "").strip()
+        if legacy:
+            tagged = str(Path(legacy) / "已打标签")
+    if not tagged:
+        parser.error("set TAGGED_DIR or --tagged-dir; existing data.json is required")
     try:
-        out = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format_tags:stream_tags",
-             "-of", "json", path],
-            capture_output=True, text=True, timeout=15
-        ).stdout
-        j = json.loads(out or "{}")
-        def pick(tags, keys):
-            if not isinstance(tags, dict):
-                return None
-            for k in keys:
-                v = tags.get(k)
-                if v and str(v).strip():
-                    return str(v).strip()
-            return None
-        sources = [((j.get("format", {}) or {}).get("tags"))]
-        for st in j.get("streams", []) or []:
-            sources.append((st or {}).get("tags"))
-        for tags in sources:
-            if not title:
-                title = pick(tags, ("title", "TITLE")) or ""
-            if not artist:
-                artist = pick(tags, ("artist", "ARTIST")) or ""
-            if title and artist:
-                break
-    except Exception as e:
-        print(f"WARN: 读标签失败 {os.path.basename(path)}: {e}", file=sys.stderr)
-    return title, artist
+        summary = refresh_lyrics(args.data_file, tagged, dry_run=args.dry_run)
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        parser.exit(1, f"ERROR: {error}\n")
+    print(json.dumps(summary, ensure_ascii=False))
+    return 0
 
-def fmt_title(tag_title, tag_artist):
-    """按 SONG_FMT 模板生成歌名；模板渲染为空则回退原始 title 标签。默认 {title} 与未设 env 完全一致。"""
-    s = SONG_FMT.replace("{title}", tag_title or "").replace("{artist}", tag_artist or "").strip()
-    return s or (tag_title or "")
-
-def main():
-
-    # 主录像: 建索引（录像名(不含扩展名) → 视频文件名），供骨架种子 + 时长增强用
-    videoByName = {}
-    for f in sorted(os.listdir(BASE)):
-        m = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2})\.(mp4|mkv)$", f)
-        if not m:
-            continue
-        videoByName[m.group(1)] = f
-
-    # 主录像索引同时作为骨架种子: 无切片的录像仍保留在输出中；
-    # 有切片但主录像缺失的录像由切片扫描补建（不再丢弃）
-    recs = {}
-    for name in videoByName:
-        start = dt.datetime.strptime(name[:11] + name[11:].replace('-', ':'), "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
-        recs[name] = {"file": name, "start": int(start.timestamp()), "duration": None}
-
-    # 已打标签: 切片文件 → 归并进骨架（rec_name 无录像时补建）
-    tagged_dir = os.path.join(BASE, "已打标签")
-    for f in sorted(os.listdir(tagged_dir)):
-        if f.endswith(".lrc"):
-            continue
-        m = SEG_RE.match(f)
-        if not m:
-            print(f"WARN: 无法解析切片名: {f}", file=sys.stderr)
-            continue
-        rec_name = m.group(1)
-        if rec_name not in recs:
-            start = dt.datetime.strptime(rec_name[:11] + rec_name[11:].replace('-', ':'), "%Y-%m-%d %H:%M:%S").replace(tzinfo=TZ)
-            recs[rec_name] = {"file": rec_name, "start": int(start.timestamp()), "duration": None}
-        off_start = hms_ms(m.group(2), m.group(3), m.group(4), m.group(5))
-        off_end = hms_ms(m.group(6), m.group(7), m.group(8), m.group(9))
-        seg_no = m.group(10)
-        tag_title, tag_artist = read_tags(os.path.join(tagged_dir, f))
-        title = fmt_title(tag_title, tag_artist)
-        lrc_path = os.path.join(tagged_dir, os.path.splitext(f)[0] + ".lrc")
-        lyrics = parse_lrc(lrc_path) if os.path.exists(lrc_path) else []
-        clip_obj = {
-            "file": f,
-            "opus": f"{os.path.splitext(f)[0]}.opus",
-            "offsetStart": round(off_start, 3),
-            "offsetEnd": round(off_end, 3),
-            "seg": seg_no,
-            "title": title,
-        }
-        if lyrics:
-            clip_obj["lyrics"] = lyrics
-        recs[rec_name].setdefault("clips", []).append(clip_obj)
-
-    # llc: 切片段（按录像名直接匹配骨架 key）
-    for f in sorted(os.listdir(BASE)):
-        m = re.match(r"^(.*)-proj\.llc$", f)
-        if not m:
-            continue
-        key = m.group(1)
-        if key not in recs:
-            print(f"WARN: llc 无对应录像: {f}", file=sys.stderr)
-            continue
-        rec = recs[key]
-        rec["segments"] = []
-        txt = open(os.path.join(BASE, f), encoding="utf-8").read()
-        for sm in re.finditer(r"start:\s*([\d.]+),\s*end:\s*([\d.]+)", txt):
-            rec["segments"].append({"start": float(sm.group(1)), "end": float(sm.group(2))})
-
-    # 录像时长（若 ffprobe 结果缓存存在则读入；无对应主录像则留空由前端标"未知"）
-    dur_path = os.path.join(os.path.dirname(__file__), "durations.json")
-    durs = json.load(open(dur_path)) if os.path.exists(dur_path) else {}
-    for k, r in recs.items():
-        video = videoByName.get(k)
-        r["duration"] = durs.get(video) if video else None
-
-    out = {
-        "generatedAt": int(dt.datetime.now(TZ).timestamp()),
-        "timezone": "Asia/Shanghai",
-        "recordings": [recs[k] for k in sorted(recs)],
-    }
-    dest = os.path.join(os.path.dirname(__file__), "..", "src", "lib", "data.json")
-    os.makedirs(os.path.dirname(dest), exist_ok=True)
-    with open(dest, "w", encoding="utf-8") as fh:
-        json.dump(out, fh, ensure_ascii=False, indent=1)
-    n_rec = len(out["recordings"])
-    n_clips = sum(len(r.get("clips", [])) for r in out["recordings"])
-    n_segs = sum(len(r.get("segments", [])) for r in out["recordings"])
-    print(f"OK: {n_rec} 录像, {n_segs} llc 段, {n_clips} 切片 → {os.path.abspath(dest)}")
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

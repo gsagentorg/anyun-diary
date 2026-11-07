@@ -30,7 +30,7 @@ SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + `lucide-svelte` 图�
 npm install
 npm run dev        # http://127.0.0.1:5173（配置里监听 0.0.0.0:4173 时以 vite.config.ts 为准）
 npm run check      # svelte-kit sync + svelte-check
-npm run build      # 用 adapter-vercel 构建到 .vercel/output
+npm run build      # 默认 adapter-node；DEPLOY_TARGET=vercel 时输出 .vercel/output
 ```
 
 ### 测试（仅本地，不部署）
@@ -139,7 +139,7 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
    BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx node scripts/upload-blob.mjs
    # 输出 PUBLIC_AUDIO_BASE=https://xxxx.public.blob.vercel-storage.com → 配到项目环境变量
    ```
-   脚本走 Blob REST API（无需额外依赖），对象前缀统一 `audio/`，可重跑（覆盖）。
+   脚本使用官方 `@vercel/blob` SDK，对象路径固定为 `audio/<原文件名>`，不添加随机后缀。默认跳过已存在的非空对象；需要覆盖时显式加 `--overwrite`。
 2. **外部静态托管**：把音频放到任意可对公网提供 Range 的站点，设 `PUBLIC_AUDIO_BASE` 指向它（例如自建入口 `<你的生产域名>`）。
 3. **随部署包**（不推荐，体积大）：删掉 `.vercelignore` 里的 `static/audio/` 且把它们加回 git。
 
@@ -147,12 +147,53 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 
 ## 部署到 Vercel
 
-1. 导入仓库 `gsmainagent/anyun-diary`（框架自动识别 SvelteKit）。
-2. 环境变量（可选，但强烈建议）：
-   - `PUBLIC_AUDIO_BASE` = 托管音频的站点地址，例如自建公网入口 `<你的生产域名>`；留空则用同源 `/audio`。
-3. 部署包默认**不含音频**（`.vercelignore` 排除 `static/audio/`，约 264MB）。音频走 `PUBLIC_AUDIO_BASE` 指向的静态托管；若确需随部署包走，删掉该忽略行（注意体积）。
+1. 在 Vercel 导入仓库，Framework Preset 选择 **SvelteKit**，根目录为仓库根。
+2. Node.js 选择 **22.x**（`package.json` 已固定版本），构建命令 `npm run build`，安装命令 `npm ci`；输出目录保持框架默认。`vercel.json` 已提供框架和命令配置。
+3. Vercel 设置 `VERCEL=1` 时自动使用 `adapter-vercel`；也可以显式配置 `DEPLOY_TARGET=vercel`。本地/自托管默认仍使用 `adapter-node`，显式 `DEPLOY_TARGET=node` 可覆盖自动检测。
+4. 给 Production / Preview 配置 `PUBLIC_AUDIO_BASE`（已有音频站或迁移后的 Blob 基础地址，不带 `/audio`）；需要直播区块时配置数字 `PUBLIC_LIVE_ROOM_ID`。
+5. 点击 Deploy；切换音频地址后重新部署。若希望该分支直接作为生产版本，在 Vercel 将 Production Branch 设为 `deploy/vercel`。
 
-构建产物：`.vercel/output/`。
+构建产物：`.vercel/output/`。不要把 Output Directory 改成 `build`。
+构建直接使用已提交的 `src/lib/data.json`，不运行数据生成或音频转换。
+
+### 从已有 PUBLIC_AUDIO_BASE 一次性迁移到 Blob
+
+已有部署的音频地址仍可直接用于 Vercel；若希望改用 Blob，可自动下载并重上传，无需本地音频目录。
+先在 Vercel 项目的 Storage 中创建 **Public** Blob Store，并获取 `BLOB_READ_WRITE_TOKEN`。
+在仓库根目录执行（Node.js 22，先 `npm ci`）：
+
+```bash
+# 基础地址不带 /audio，支持 https://旧站点/子目录 形式
+export SOURCE_AUDIO_BASE='https://旧音频站点.example.com'
+
+# 预览清单：不联网、不需要令牌、不下载或上传
+npm run audio:migrate -- --dry-run
+
+# 在本地终端安全输入令牌（不写入 shell 历史；bash / zsh）
+read -r -s BLOB_READ_WRITE_TOKEN
+export BLOB_READ_WRITE_TOKEN
+npm run audio:migrate
+unset BLOB_READ_WRITE_TOKEN
+```
+
+也可以仅导出旧 `PUBLIC_AUDIO_BASE`：未指定 `SOURCE_AUDIO_BASE` 时会自动使用它。
+命令只读取进程环境，不自动加载 `.env`；若配置已在 `.env` 中，可以执行：
+
+```bash
+node --env-file=.env scripts/upload-blob.mjs --from-remote --dry-run
+node --env-file=.env scripts/upload-blob.mjs --from-remote
+```
+
+- 从 `data.json` 的 `recordings[].clips[].opus` 获取并去重文件名，只迁移歌单中引用的音频。
+- 下载 `${SOURCE_AUDIO_BASE}/audio/<编码后的文件名>`，校验非空、Ogg Opus 头、已知长度，拒绝 HTML 错误页；单文件上限 128 MiB，默认并发 4，可加 `--concurrency=2` 降低内存占用。
+- 使用官方 Blob SDK，上传为 Public、保留 `audio/<原文件名>`，不添加随机后缀。令牌只发送给 Blob，下载源无需 Blob 令牌。
+- 每个文件最多尝试 3 次；失败后非零退出。可直接重跑：默认跳过目标已存在的非空文件，不校验其内容是否与旧站一致；要更新已有文件请加 `--overwrite`。
+- 全部成功后输出 `PUBLIC_AUDIO_BASE=https://xxx.public.blob.vercel-storage.com`，把它填入 Vercel 项目环境变量，再重新部署。部分失败不会输出新的地址，也不会自动修改旧部署或环境变量。
+- 上传成功的文件会保留，下载内容仅暂存在内存，不落盘、不进 Git；后续无需旧音频站持续在线。
+- 迁移是单独命令，不放进构建流程，避免每次发布重复传输或依赖旧站可用性。
+
+本地已有音频时用 `npm run audio:upload`；预览为 `npm run audio:upload -- --dry-run`。
+离线迁移逻辑验证：`npm run test:blob`（模拟下载和 Blob，不访问真实存储）。
 
 ## 本地常驻（可选）
 

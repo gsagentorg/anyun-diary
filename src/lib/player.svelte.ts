@@ -2,7 +2,7 @@ import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
 import diaryData from '$lib/data.json';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
-import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
+import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
 import { isSleepMode, type SleepMode } from './sleep-curves';
 
@@ -271,11 +271,14 @@ function updateMediaSession(t: Track) {
 export function syncLyricMetadata(t: Track | null, pos: number) {
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
   if (!t || !hasLyrics(t.clip) || !Number.isFinite(pos)) return;
-  const idx = lyricIndexAt(t.clip.lyrics, pos);
-  if (idx === mdLineIdx && mdClipFile === t.clip.opus) return;
-  mdLineIdx = idx;
+  const idx = lyricDisplayIndexAt(t.clip.lyrics, pos, t.clip.offsetEnd - t.clip.offsetStart);
+  // 同刻多行（含尾部超界折叠行）只推第一行（owner 2026-11-07：元数据无动画延迟概念）
+  const group = sameTimeGroupBounds(t.clip.lyrics, idx, t.clip.offsetEnd - t.clip.offsetStart);
+  const metaIdx = group ? group[0] : -1;
+  if (metaIdx === mdLineIdx && mdClipFile === t.clip.opus) return;
+  mdLineIdx = metaIdx;
   mdClipFile = t.clip.opus;
-  navigator.mediaSession.metadata = buildMetadata(t, idx < 0 ? null : t.clip.lyrics![idx].text);
+  navigator.mediaSession.metadata = buildMetadata(t, metaIdx < 0 ? null : t.clip.lyrics![metaIdx].text);
 }
 
 /** 同步系统浮层播放状态：不设的 UA 只能靠猜，iOS/macOS 锁屏控件可能因此卡在过期状态 */

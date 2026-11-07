@@ -40,7 +40,9 @@ npm run build      # 用 adapter-vercel 构建到 .vercel/output
 与锁文件中的 Vite 7.3.7 共用同一版本；不要用临时下载最新版的 `npx vite-node` 代替锁文件。
 
 ```bash
-npm test                # 依次运行以下五套；任何断言/套件失败即非零退出
+npm test                # 依次运行以下七套；任何断言/套件失败即非零退出
+npm run test:data       # Python 3：LRC 更新边界、零目录扫描、原子写入和失败不清词
+npm run test:lyrics     # 歌词下标/同刻分组：面板闪过整组、元数据只推首行
 npm run test:playlist   # 合成夹具：范围、排序、日期、M3U URL 精确编码
 npm run test:shuffle    # 固定种子、40 次抽取及非空覆盖检查
 npm run test:lane-scale # 泳道布局/映射
@@ -54,35 +56,32 @@ npm run test:sleep      # 睡眠曲线、音频增益、定时器及取消
 `npm test` 不运行数据生成、音频转换、构建、部署或服务重启。
 睡眠测试是模拟环境下的逻辑验证，不代表 iPhone 锁屏/后台真机验收。
 
-### 生成数据（可选，需先有 NAS/素材）
+### 更新歌词（现有切片清单不变）
+
+`src/lib/data.json` 是现有切片清单；最终 LRC 目录是本次换词的唯一外部输入。
 
 ```bash
-npm run data       # scripts/build_data.py → 解析切片（唯一数据源）+ 可选录像/llc 增强 → src/lib/data.json
-npm run audio      # scripts/to-opus.sh → 切片转 64kbps opus 到 static/audio/
+export TAGGED_DIR=<最终同名LRC所在目录>
+npm run data -- --dry-run  # 检查，不写入
+npm run data              # 只更新现有切片的 lyrics
 ```
 
-### 数据同步（日常导入，幂等可重跑）
-1. 打标切片落 `${AUDIO_ROOT}/已打标签/`（文件名=录像名+起止偏移，歌名在自带 tag；**切片是唯一数据源**）
-2. `npm run audio` → 全量转 64k opus 进 static/audio（已有的自动跳过）
-3. `npm run data` → 重建 data.json（录像时长/llc 段均为可选增强，缺失不丢歌）
-dev 自动热更。
+- 按 data.json 中每个切片的文件名读取同名 `.lrc`，不枚举素材目录，不读或探查录像、LLC、音频标签、时长缓存。
+- 不新增/删除切片，不改变标题、起止偏移、分组或其他既有字段；只有歌词实际变化时更新 `generatedAt`。无变化则文件字节和时间均不改。
+- 缺失、空或无效 LRC、时间越界、源文件变化或 data.json 并发变化时，失败退出且不写入；不会把读取失败当成“无歌词”清空旧词。
+- 同一时间戳的多行（合唱/同唱）按源顺序全部保留：歌词面板整组快速闪过，系统媒体浮层只推送组内第一行。时间戳必须非递减（同刻允许、倒序拒绝）。
+- 末行因整秒取整略超出切片尾部（实测 274 行）时**数据层按源值保留并计数报告**；展示层将其视为正好收在音频结尾（到结尾即点亮、同刻成组快速闪过、元数据推首行）；若 lrc 首行就超出切片尾部则视为拿错文件，拒绝导入。
+- 兼容旧 `AUDIO_ROOT` 环境变量，但仅将其拼成 `已打标签/` 路径，不扫描该根目录。优先使用 `TAGGED_DIR` 消除歧义。
+- 可用 `--data-file <现有JSON>` 指定独立验证副本。缺少现有清单会报错，绝不回退扫描原始素材。
+- `--expand-catalog`：**仅在你明确要求扩容后使用**——扫描 TAGGED_DIR 里的切片音频（文件名承载偏移、ffprobe 读切片自带 tag 除标题外不探查媒体），把目录里没有的切片加入 existing 录音骨架，只增不删；既有条目与字段不动。副产物计入：无词期曲数、尾越界行数、非段名音频跳过计数。
 
-### 如果我有音频，这个前端怎么用
+### 音频与新切片
 
-三步把自有素材接进来（不改任何代码）：
+现有音频转换入口与歌词更新分开：`AUDIO_ROOT=<切片素材根> npm run audio` 将 `已打标签/` 内的切片转成 opus；只更新 LRC 时不要运行它。
 
-1. **切片命名约定**：打标切片放 `${AUDIO_ROOT}/已打标签/`，文件名形如
-   `YYYY-MM-DD HH-MM-SS-HH.MM.SS.mmm-HH.MM.SSS.mmm-segN.m4a|.ogg`
-   （= 录像名 + 录像内起止偏移；歌名写在切片文件自带的 tag 里）。
-   主录像（`YYYY-MM-DD HH-MM-SS.mp4|.mkv`）与 `*-proj.llc` 放 `${AUDIO_ROOT}/` 根目录，缺失也不丢歌（仅少时长/区间增强）。
-2. **设环境变量 + 转码 + 生成数据**：
-   ```bash
-   export AUDIO_ROOT=<你的切片素材目录>   # 也可写进 .env（不入库）
-   npm run audio    # scripts/to-opus.sh：${AUDIO_ROOT}/已打标签 → 64k opus 进 static/audio/
-   npm run data     # scripts/build_data.py：解析切片 → src/lib/data.json
-   ```
-3. **本地预览**：`npm run dev`；素材更新后重跑 `npm run data`，dev 会热更数据。
-   直播间区块可选：`.env` 里配 `PUBLIC_LIVE_ROOM_ID=<B站房间号>`，不配则不渲染该区块。
+`npm run data` **不承担新曲导入或从零建库**。新增/移除切片、调整切片标签属于另一个清单更新操作，须单独确认范围，不能借换词顺便扫描其他输入。
+
+本地预览使用 `npm run dev`；歌词数据变化后 dev 自动热更。直播间区块可通过 `.env` 的 `PUBLIC_LIVE_ROOM_ID` 配置。
 
 ### 发版（本地生产）
 ```
@@ -171,7 +170,13 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 ## 已知限制
 
-- 两场录像（`2026-10-08 06-07-13`、`2026-10-09 15-35-02`）源文件残缺，`ffprobe` 时长 N/A，界面显示「无数据」。
+- **跨平台注意**：runes 模块的导入必须写全后缀——`./player.svelte.ts`、`./theme.svelte.ts`（不是 `./player.svelte`）。
+  `.svelte.ts` 后缀是 Svelte 5 模块级 runes（`$state/$derived`）必需的，不能改名；而裸写的 `./player.svelte`
+  在 macOS 大小写不敏感盘上会先命中同名组件 `Player.svelte`，esbuild 依赖扫描直接报
+  `No matching export`（2026-11-07 已把全部 13 处导入改为显式 `.ts`）。tsconfig 需配套
+  `allowImportingTsExtensions: true`。
+
+- 既有数据中的时长为空时，前端按未知显示；歌词更新不补查原始素材或时长。
 - 「有音频无歌」片段不展示（录制导致，非开播）。
 
 ## 待办

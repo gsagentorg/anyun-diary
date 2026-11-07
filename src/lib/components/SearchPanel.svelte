@@ -1,6 +1,6 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
-  import { playClip } from '$lib/player.svelte';
+  import { playClip } from '$lib/player.svelte.ts';
   import { searchClips, clipClock, type SearchHit } from '$lib/search';
   import { fmtDay } from '$lib/types';
   import type { Recording } from '$lib/types';

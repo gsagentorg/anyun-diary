@@ -2,9 +2,9 @@
   import type { Recording, Clip } from './types';
   import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
-  import { player, playClip, adopt, buildRecTracks } from './player.svelte';
+  import { player, playClip, adopt, buildRecTracks } from './player.svelte.ts';
   import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
-  import { theme } from './theme.svelte';
+  import { theme } from './theme.svelte.ts';
   const grayL = (c: number) => theme.resolved === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
   /** 三次贝塞尔缓动（等价 cubic-bezier(0.65,0,0.35,1)）：渐变 alpha 非线性推进 */
   const bez = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);

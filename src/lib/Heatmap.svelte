@@ -2,8 +2,8 @@
   import type { Recording } from './types';
   import { shDayStart } from './playlist-core';
   import { fmtDur, dateCard } from './types';
-  import { adopt, buildRecTracks } from './player.svelte';
-  import { theme } from './theme.svelte';
+  import { adopt, buildRecTracks } from './player.svelte.ts';
+  import { theme } from './theme.svelte.ts';
   import StateHint from './components/StateHint.svelte';
   import { browser } from '$app/environment';
 

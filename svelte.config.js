@@ -6,9 +6,9 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
-    // DEPLOY_TARGET=vercel → Vercel（Serverless 函数）；默认 node（本地自托管部署，node build）
-    adapter: process.env.DEPLOY_TARGET === 'vercel'
-      ? adapterVercel({ runtime: 'nodejs20.x' })
+    // Vercel 自动设置 VERCEL=1；也支持本地显式选择部署目标。
+    adapter: (process.env.DEPLOY_TARGET ?? (process.env.VERCEL === '1' ? 'vercel' : 'node')) === 'vercel'
+      ? adapterVercel({ runtime: 'nodejs22.x' })
       : adapterNode(),
   },
 };

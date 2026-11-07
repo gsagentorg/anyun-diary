@@ -1,10 +1,10 @@
 <script lang="ts">
-  import { theme, toggleTheme } from '$lib/theme.svelte';
+  import { theme, toggleTheme } from '$lib/theme.svelte.ts';
   import data from '$lib/data.json';
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
-  import { player } from '$lib/player.svelte';
+  import { player } from '$lib/player.svelte.ts';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';

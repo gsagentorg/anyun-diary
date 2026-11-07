@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { SLEEP_MODES, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage } from './sleep-curves';

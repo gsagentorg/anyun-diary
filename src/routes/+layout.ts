@@ -1,4 +1,4 @@
-import { initTheme } from '$lib/theme.svelte';
+import { initTheme } from '$lib/theme.svelte.ts';
 
 export const prerender = true;
 

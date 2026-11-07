@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Recording, Track } from './types';
-  import { prependAt } from './player.svelte';
+  import { prependAt } from './player.svelte.ts';
   import { tracksInRange, dayStartOf, validRange } from './playlist-core';
   import { onMount } from 'svelte';
   import { fmtDur } from './types';

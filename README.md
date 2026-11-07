@@ -167,6 +167,12 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 ## 已知限制
 
+- **跨平台注意**：runes 模块的导入必须写全后缀——`./player.svelte.ts`、`./theme.svelte.ts`（不是 `./player.svelte`）。
+  `.svelte.ts` 后缀是 Svelte 5 模块级 runes（`$state/$derived`）必需的，不能改名；而裸写的 `./player.svelte`
+  在 macOS 大小写不敏感盘上会先命中同名组件 `Player.svelte`，esbuild 依赖扫描直接报
+  `No matching export`（2026-11-07 已把全部 13 处导入改为显式 `.ts`）。tsconfig 需配套
+  `allowImportingTsExtensions: true`。
+
 - 既有数据中的时长为空时，前端按未知显示；歌词更新不补查原始素材或时长。
 - 「有音频无歌」片段不展示（录制导致，非开播）。
 

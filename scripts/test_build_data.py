@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 MODULE = Path(os.environ.get("BUILD_DATA_MODULE", Path(__file__).with_name("build_data.py")))
@@ -185,6 +186,110 @@ class LyricsRefreshTests(unittest.TestCase):
             self.assertEqual(builder.main(["--data-file", str(self.data), "--dry-run"]), 0)
         self.assertEqual(json.loads(output.getvalue())["clips"], 1)
         self.assertEqual(self.data.read_bytes(), self.original)
+
+
+class CatalogExpansionTests(unittest.TestCase):
+    """--expand-catalog：只增不删；切片名承载偏移；标题读切片 tag;同刻/尾部规则同一套。"""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.tagged = self.root / "已打标签"
+        self.tagged.mkdir()
+        self.data = self.root / "data.json"
+        self.stem = "2026-10-10 09-00-00-01.00.00.000-01.00.30.000-seg1"
+        self.baseline = {
+            "generatedAt": 10, "timezone": "Asia/Shanghai",
+            "recordings": [{"file": "2026-10-10 09-00-00", "start": 1789, "duration": None,
+                            "clips": [{"file": self.stem + ".m4a", "title": "Existing",
+                                       "opus": self.stem + ".opus", "offsetStart": 3600.0,
+                                       "offsetEnd": 3630.0, "seg": "seg1",
+                                       "lyrics": [{"t": 1, "text": "old"}]}]}],
+        }
+        self.data.write_text(json.dumps(self.baseline))
+        (self.tagged / (self.stem + ".m4a")).write_bytes(b"old"*8)
+        (self.tagged / (self.stem + ".lrc")).write_text("[00:01.00]old\n")
+        self.new_a = "2026-10-20 10-00-00-00.00.05.000-00.00.10.000-seg1"
+        self.new_b = "2026-10-20 10-00-00-00.00.12.000-00.00.20.000-seg2"
+        self.new_c = "2026-10-15 08-00-00-00.01.00.000-00.01.30.000-seg01"
+        (self.tagged / (self.new_a + ".m4a")).write_bytes(b"a"*16)
+        (self.tagged / (self.new_a + ".lrc")).write_text("[00:01.20]duet a\n[00:01.20]duet b\n")
+        (self.tagged / (self.new_b + ".m4a")).write_bytes(b"b"*16)
+        (self.tagged / (self.new_c + ".ogg")).write_bytes(b"c"*16)
+        (self.tagged / "junk.m4a").write_bytes(b"x")
+        self.original = self.data.read_bytes()
+        patcher = mock.patch.object(builder, "read_tags", lambda p: ("New Song", "Artist"))
+        patcher.start(); self.addCleanup(patcher.stop)
+
+    def test_expand_adds_sorted_clips_without_touching_existing(self):
+        result = builder.expand_catalog(self.data, self.tagged)
+        self.assertTrue(result["written"])
+        self.assertEqual(result["recordings_added"], 2)
+        self.assertEqual(result["clips_added"], 3)
+        self.assertEqual(result["clips_without_lyrics"], 2)  # seg2 + 10-15 seg01 have no lrc
+        self.assertEqual(result["skipped_non_segment_audio"], 1)  # junk.m4a
+        actual = json.loads(self.data.read_text())
+        self.assertEqual([r["file"] for r in actual["recordings"]],
+                         ["2026-10-10 09-00-00", "2026-10-15 08-00-00", "2026-10-20 10-00-00"])
+        existing = actual["recordings"][0]
+        self.assertEqual(existing["clips"][0]["lyrics"], self.baseline["recordings"][0]["clips"][0]["lyrics"])
+        rec20 = actual["recordings"][2]
+        self.assertEqual(rec20["start"], builder.catalog_epoch_ms_of("2026-10-20 10-00-00"))
+        self.assertEqual(rec20["duration"], None)
+        self.assertEqual([c["file"] for c in rec20["clips"]], [self.new_a + ".m4a", self.new_b + ".m4a"])
+        a = rec20["clips"][0]
+        self.assertEqual(a["title"], "New Song")
+        self.assertEqual(a["offsetStart"], 5.0)
+        self.assertEqual(a["offsetEnd"], 10.0)
+        self.assertEqual(a["seg"], "seg1")
+        self.assertEqual(a["lyrics"], [{"t": 1.2, "text": "duet a"}, {"t": 1.2, "text": "duet b"}])
+        self.assertNotIn("lyrics", rec20["clips"][1])  # no lrc -> no key
+        self.assertIn("generatedAt", actual)
+
+    def test_expand_dry_run_reports_without_write(self):
+        result = builder.expand_catalog(self.data, self.tagged, dry_run=True)
+        self.assertFalse(result["written"])
+        self.assertEqual(result["clips_added"], 3)
+        self.assertEqual(self.data.read_bytes(), self.original)
+
+    def test_expand_bad_lrc_stops_atomically(self):
+        (self.tagged / (self.new_a + ".lrc")).write_text("[00:05.00]later\n[00:01.00]earlier\n")
+        with self.assertRaises(ValueError):
+            builder.expand_catalog(self.data, self.tagged)
+        self.assertEqual(self.data.read_bytes(), self.original)
+
+    def test_expand_first_line_beyond_end_rejects_wrong_clip(self):
+        (self.tagged / (self.new_a + ".lrc")).write_text("[00:08.00]starts beyond clip\n")
+        with self.assertRaises(ValueError):
+            builder.expand_catalog(self.data, self.tagged)
+        self.assertEqual(self.data.read_bytes(), self.original)
+
+    def test_expand_song_fmt_applied(self):
+        with mock.patch.dict(os.environ, {"SONG_FMT": "{artist}·{title}"}):
+            builder.expand_catalog(self.data, self.tagged)
+        actual = json.loads(self.data.read_text())
+        rec20 = next(r for r in actual["recordings"] if r["file"] == "2026-10-20 10-00-00")
+        self.assertEqual(rec20["clips"][0]["title"], "Artist·New Song")
+
+    def test_expand_idempotent_then_no_op(self):
+        builder.expand_catalog(self.data, self.tagged)
+        after_first = self.data.read_bytes()
+        result = builder.expand_catalog(self.data, self.tagged)
+        self.assertFalse(result["written"])
+        self.assertEqual(self.data.read_bytes(), after_first)
+
+
+class ReadTagsTests(unittest.TestCase):
+    def test_read_tags_merges_format_and_stream(self):
+        payload = json.dumps({"format": {"tags": {"artist": "Only Artist"}},
+                              "streams": [{"tags": {"TITLE": "Stream Title"}}]})
+        with mock.patch.object(builder.subprocess, "run",
+                               return_value=mock.Mock(stdout=payload)):
+            self.assertEqual(builder.read_tags(Path("x.m4a")), ("Stream Title", "Only Artist"))
+
+    def test_read_tags_failure_returns_empty(self):
+        with mock.patch.object(builder.subprocess, "run", side_effect=OSError("boom")):
+            self.assertEqual(builder.read_tags(Path("x.m4a")), ("", ""))
 
 
 if __name__ == "__main__":

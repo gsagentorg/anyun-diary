@@ -1,6 +1,6 @@
 import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
-import diaryData from '$lib/data.json';
+import { backend, bundledRecordings } from './backend.svelte';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
 import { SleepAudio } from './sleep-audio';
@@ -571,7 +571,8 @@ export function saveSessionProgress() {
 
 /** 快照队列 → Track 列表：按 clip.file 反查，已删/改名的条目静默剔除 */
 function snapshotRebuild(queue: string[]): Track[] {
-  const recs = (diaryData as unknown as { recordings: Recording[] }).recordings;
+  // 索引来源与全站一致：远程已拉到用远程，否则内置兜底（启动恢复通常早于远程索引返回，走内置）
+  const recs = backend.recordings ?? bundledRecordings;
   const byFile = new Map<string, Track>();
   for (const r of recs) {
     (r.clips ?? []).forEach((c, i) => {

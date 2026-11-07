@@ -126,7 +126,7 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 155 个 opus（264MB）是**可从 NAS 切片重新生成的产物**（`npm run audio`），因此：
 
 - **不进 git 跟踪**（`.gitignore` 已排除 `static/audio/`），也不进 Vercel 部署包（`.vercelignore`）。
-- 站点按 `${PUBLIC_AUDIO_BASE}/audio/<文件名>` 取音频；留空则用同源 `/audio`。
+- 站点按 `${后端}/audio/<文件名>` 取音频、`${后端}/data.json` 拉索引；后端留空则音频用同源 `/audio`、索引用内置兜底。App 内可运行时修改后端地址（首启无后端时弹窗收集，存 localStorage `anyun-backend-v1`）；web 端不可运行时配置，恒用构建期注入的 `PUBLIC_AUDIO_BASE`。
 
 三种托管方式：
 
@@ -136,7 +136,7 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
    BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx node scripts/upload-blob.mjs
    # 输出 PUBLIC_AUDIO_BASE=https://xxxx.public.blob.vercel-storage.com → 配到项目环境变量
    ```
-   脚本走 Blob REST API（无需额外依赖），对象前缀统一 `audio/`，可重跑（覆盖）。
+   脚本走 Blob REST API（无需额外依赖），对象前缀统一 `audio/`，可重跑（覆盖）；索引 `src/lib/data.json` 一并上传到根 `data.json`（`--no-index` 跳过）。
 2. **外部静态托管**：把音频放到任意可对公网提供 Range 的站点，设 `PUBLIC_AUDIO_BASE` 指向它（例如自建入口 `<你的生产域名>`）。
 3. **随部署包**（不推荐，体积大）：删掉 `.vercelignore` 里的 `static/audio/` 且把它们加回 git。
 
@@ -150,6 +150,19 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 3. 部署包默认**不含音频**（`.vercelignore` 排除 `static/audio/`，约 264MB）。音频走 `PUBLIC_AUDIO_BASE` 指向的静态托管；若确需随部署包走，删掉该忽略行（注意体积）。
 
 构建产物：`.vercel/output/`。
+
+## iOS App（Capacitor）
+
+纯静态单页打进 App（无服务端）：
+
+```bash
+DEPLOY_TARGET=capacitor npm run build && npx cap sync ios
+```
+
+- 索引与音频都不随包走：App 首次启动弹窗填**后端地址**（结尾不带 `/audio`，需 https），索引按 `<地址>/data.json`、音频按 `<地址>/audio/<文件名>` 拉取；保存在 localStorage，之后可随时修改。构建时若设了 `PUBLIC_AUDIO_BASE` 则作为默认值。
+- 壳内启用 `CapacitorHttp` 全局接管 fetch，绕过 WKWebView 的 CORS 限制，后端站点无需开跨域；音频走 `<audio>` 加载，本就不受 CORS 约束。
+- 内置 `data.json` 永远是首屏与离线兜底：远程拉取失败或还没拉到时按内置索引渲染，不白屏。**web 端行为完全不变**——后端地址不可运行时配置（恒用构建期注入的 `PUBLIC_AUDIO_BASE`），索引始终用内置 `data.json`，不发任何远程索引请求。
+- `/api/live`（直播状态）是服务端代理端点，App 内不可用，直播条恒为兜底版式。
 
 ## 本地常驻（可选）
 

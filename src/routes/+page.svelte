@@ -1,6 +1,5 @@
 <script lang="ts">
   import { theme, toggleTheme } from '$lib/theme.svelte.ts';
-  import data from '$lib/data.json';
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
@@ -9,8 +8,9 @@
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
   import LyricsSheet from '$lib/components/LyricsSheet.svelte';
+  import BackendSheet from '$lib/components/BackendSheet.svelte';
+  import { backend, bundledRecordings, isNativeApp } from '$lib/backend.svelte';
   import { validRange } from '$lib/playlist-core';
-  import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
   import { ListMusic, Sun, Moon, Monitor, Search } from 'lucide-svelte';
@@ -67,7 +67,8 @@
 
   $effect(() => {
     let id: ReturnType<typeof setInterval> | undefined;
-    if (!LIVE_URL) {
+    // App 内没有 /api/live（服务端代理端点），跳过轮询，避免每 60s 白打一次 404
+    if (!LIVE_URL || isNativeApp()) {
       liveInfo = null;
       return;
     }
@@ -84,13 +85,8 @@
     return () => clearInterval(id);
   });
 
-  // 缺字段的录像（未导出切片/无时长）补空数组，避免组件里 undefined.length
-  const recordings: Recording[] = (data.recordings as unknown as Recording[]).map((r) => ({
-    ...r,
-    duration: r.duration ?? null,
-    segments: r.segments ?? [],
-    clips: r.clips ?? [],
-  }));
+  // 索引：远程拉取成功用远程，否则内置兜底（首屏 SSR/预渲染也走内置）
+  const recordings = $derived(backend.recordings ?? bundledRecordings);
 
   // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
   let plOpen = $state(true);
@@ -245,6 +241,7 @@
 
   <QueueOverlay />
   <LyricsSheet />
+  <BackendSheet />
   <SearchPanel bind:open={searchOpen} {recordings} rangeFrom={rangeFrom} rangeTo={rangeTo} />
 
   {#if current === 0}

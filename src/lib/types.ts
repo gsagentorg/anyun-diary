@@ -98,11 +98,10 @@ export function hueOf(title: string): number {
   return h % 360;
 }
 
-/** 切片音频基础地址：默认同源 /audio；Vercel 等静态托管不带宽音频时用 PUBLIC_AUDIO_BASE 指向外部 */
-import { env as _env } from '$env/dynamic/public';
-export const AUDIO_BASE = ((_env && _env.PUBLIC_AUDIO_BASE) as string | undefined ?? '').replace(/\/+$/, '');
-
-/** 切片音频 URL（文件名含空格/中文，需编码） */
+/** 切片音频 URL（文件名含空格/中文，需编码）。
+ * base 是运行时可变的（web 用构建期注入的 PUBLIC_AUDIO_BASE；App 内首启弹窗填写并存 localStorage），
+ * 所以每次调用都读最新值，返回值勿缓存。 */
+import { backend } from './backend.svelte';
 export function audioUrl(opus: string): string {
-  return `${AUDIO_BASE}/audio/` + encodeURIComponent(opus);
+  return `${backend.base}/audio/` + encodeURIComponent(opus);
 }

@@ -76,10 +76,30 @@ class LyricsRefreshTests(unittest.TestCase):
             builder.refresh_lyrics(self.data, self.tagged)
         self.assertEqual(self.data.read_bytes(), self.original)
 
+    def test_equal_timestamps_kept_in_source_order(self):
+        # Simultaneous/duet lines share one stamp; they stay in order (owner 2026-11-07).
+        self.lyric.write_text("[00:05.00]duet a\n[00:05.00]duet b\n[00:06.500]next\n")
+        result = builder.refresh_lyrics(self.data, self.tagged)
+        actual = json.loads(self.data.read_text())["recordings"][0]["clips"][0]["lyrics"]
+        self.assertTrue(result["written"])
+        self.assertEqual(actual, [{"t": 5.0, "text": "duet a"},
+                                  {"t": 5.0, "text": "duet b"},
+                                  {"t": 6.5, "text": "next"}])
+
+    def test_trailing_beyond_end_kept_and_reported(self):
+        # Whole-second rounding trails ≤0.5s past the cut on 27/238 real clips
+        # (owner data 2026-11-07): keep source values, count them, never drop.
+        self.lyric.write_text("[00:01.00]in range\n[00:12.400]rounds past end\n")
+        result = builder.refresh_lyrics(self.data, self.tagged)
+        self.assertTrue(result["written"])
+        self.assertEqual(result["trailing_beyond_end_lines"], 1)
+        actual = json.loads(self.data.read_text())["recordings"][0]["clips"][0]["lyrics"]
+        self.assertEqual(actual[-1], {"t": 12.4, "text": "rounds past end"})
+
     def test_bad_lyrics_never_clear_existing_lyrics(self):
         for text in ("", "[ti:Only metadata]", "not LRC", "[00:60.00]bad seconds",
-                     "[00:05.00]later\n[00:01.00]earlier", "[00:01.00]a\n[00:01.00]b",
-                     "[offset:2000]\n[00:01.00]negative", "[00:11.00]outside"):
+                     "[00:05.00]later\n[00:01.00]earlier", "[00:20.00]starts beyond clip",
+                     "[offset:2000]\n[00:01.00]negative"):
             with self.subTest(text=text):
                 self.lyric.write_text(text)
                 with self.assertRaises(ValueError):

@@ -1,78 +1,187 @@
 #!/usr/bin/env node
-/**
- * scripts/upload-blob.mjs — 把 static/audio/*.opus 上传到 Vercel Blob。
- *
- * 前置：在 Vercel 项目里创建 Blob Store，拿到 BLOB_READ_WRITE_TOKEN。
- *   BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx node scripts/upload-blob.mjs
- *
- * 上传后把打印出的 base 设为 PUBLIC_AUDIO_BASE（如 https://xxxx.public.blob.vercel-storage.com）。
- * 站点按 `${PUBLIC_AUDIO_BASE}/audio/<文件名>` 取音频，因此这里统一用 `audio/` 前缀。
- *
- * 可选参数：
- *   --dry-run        只列出将要上传的文件
- *   --concurrency=4  并发数（默认 4）
- *   --prefix=audio/  对象前缀（默认 audio/）
- */
-import { readdir, readFile } from 'node:fs/promises';
-import { join, basename } from 'node:path';
-
-const TOKEN = process.env.BLOB_READ_WRITE_TOKEN;
-const args = process.argv.slice(2);
-const dryRun = args.includes('--dry-run');
-const concurrency = Number((args.find((a) => a.startsWith('--concurrency=')) ?? '').split('=')[1]) || 4;
-const prefix = (args.find((a) => a.startsWith('--prefix=')) ?? '').split('=')[1] ?? 'audio/';
-const DIR = join(process.cwd(), 'static/audio');
+// Local upload or manifest-based migration. No uploads run during the site build.
+import { readFile, readdir } from 'node:fs/promises';
+import { join, extname } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 const MIME = { '.opus': 'audio/ogg', '.m4a': 'audio/mp4', '.ogg': 'audio/ogg', '.mp3': 'audio/mpeg' };
+const MAX_BYTES = 128 * 1024 * 1024;
 
-if (!TOKEN && !dryRun) {
-  console.error('缺少 BLOB_READ_WRITE_TOKEN。先在 Vercel 创建 Blob Store，再：');
-  console.error('  BLOB_READ_WRITE_TOKEN=vercel_blob_rw_... node scripts/upload-blob.mjs');
-  process.exit(1);
+export function parseOptions(args, env = process.env) {
+  const options = { dryRun: false, overwrite: false, remote: false, concurrency: 4 };
+  let source;
+  for (const arg of args) {
+    if (arg === '--dry-run') options.dryRun = true;
+    else if (arg === '--overwrite') options.overwrite = true;
+    else if (arg === '--from-remote') options.remote = true;
+    else if (arg.startsWith('--source-base=')) {
+      source = arg.slice('--source-base='.length);
+      options.remote = true;
+    } else if (arg.startsWith('--concurrency=')) options.concurrency = Number(arg.split('=')[1]);
+    else throw new Error(`未知参数：${arg}`);
+  }
+  if (!Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 16) {
+    throw new Error('--concurrency 必须为 1–16 的整数');
+  }
+  if (options.remote) {
+    source ??= env.SOURCE_AUDIO_BASE || env.PUBLIC_AUDIO_BASE;
+    if (!source) throw new Error('请设置 SOURCE_AUDIO_BASE（旧音频地址），或 PUBLIC_AUDIO_BASE');
+    const url = new URL(source);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
+      throw new Error('旧音频地址必须是无凭据、查询参数或片段的 HTTP(S) 基础地址');
+    }
+    options.sourceBase = url.href.replace(/\/+$/, '');
+  }
+  options.token = env.BLOB_READ_WRITE_TOKEN;
+  if (!options.dryRun && !options.token) throw new Error('缺少 BLOB_READ_WRITE_TOKEN，请先创建 Public Blob Store');
+  return options;
 }
 
-const files = (await readdir(DIR)).filter((f) => f in MIME || /\.(opus|m4a|ogg|mp3)$/i.test(f));
-console.log(`待上传 ${files.length} 个文件 → 前缀 ${prefix}，并发 ${concurrency}${dryRun ? '（dry-run）' : ''}`);
+export function manifestFiles(data) {
+  if (!Array.isArray(data.recordings)) throw new Error('data.json 缺少 recordings');
+  const files = [...new Set(data.recordings.flatMap((rec) => {
+    // Recordings without identified songs legitimately omit clips.
+    if (rec.clips == null) return [];
+    if (!Array.isArray(rec.clips)) throw new Error('data.json 缺少 clips');
+    return rec.clips.map((clip) => clip.opus);
+  }))];
+  for (const name of files) {
+    if (typeof name !== 'string' || !name.endsWith('.opus') || /[/\\\x00-\x1f]/.test(name)) {
+      throw new Error('data.json 含无效的 opus 文件名');
+    }
+  }
+  if (!files.length) throw new Error('没有待迁移的音频');
+  return files;
+}
 
-let done = 0, failed = 0, base = null;
+async function download(url, fetchImpl) {
+  const response = await fetchImpl(url, { signal: AbortSignal.timeout(120_000) });
+  if (!response.ok || response.status !== 200) {
+    await response.body?.cancel();
+    throw new Error(`音频下载 HTTP ${response.status}`);
+  }
+  const type = response.headers.get('content-type') ?? '';
+  if (/text\/|json|xml/i.test(type)) {
+    await response.body?.cancel();
+    throw new Error('旧地址返回了文本/HTML，而非音频');
+  }
+  const length = response.headers.get('content-length');
+  if (length && Number(length) > MAX_BYTES) {
+    await response.body?.cancel();
+    throw new Error('单个音频超过 128 MiB 限制');
+  }
+  const chunks = [];
+  let size = 0;
+  if (!response.body) throw new Error('下载响应为空');
+  const reader = response.body.getReader();
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BYTES) throw new Error('单个音频超过 128 MiB 限制');
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    await reader.cancel();
+  }
+  if (length && !response.headers.get('content-encoding') && size !== Number(length)) {
+    throw new Error('下载不完整：大小与 Content-Length 不符');
+  }
+  const bytes = Buffer.concat(chunks);
+  if (bytes.subarray(0, 4).toString() !== 'OggS' || !bytes.subarray(0, 512).includes(Buffer.from('OpusHead'))) {
+    throw new Error('下载内容不是有效的 Ogg Opus 文件');
+  }
+  return bytes;
+}
 
-async function uploadOne(name) {
-  const pathname = prefix + name;
-  const bytes = await readFile(join(DIR, name));
-  const res = await fetch('https://blob.vercel-storage.com/' + encodeURI(pathname), {
-    method: 'PUT',
-    headers: {
-      authorization: `Bearer ${TOKEN}`,
-      'x-api-version': '7',
-      'x-content-type': MIME[name.slice(name.lastIndexOf('.'))] ?? 'application/octet-stream',
-      'x-add-random-suffix': '0',
-      'x-allow-overwrite': '1',
-    },
-    body: bytes,
-  });
-  if (!res.ok) {
-    failed++;
-    console.error(`✗ ${name}: ${res.status} ${await res.text()}`);
+// Dependencies can be injected for offline verification; tokens never go to the source host.
+export async function uploadFiles(files, options, deps) {
+  const { head, put, BlobNotFoundError } = deps;
+  const log = deps.log ?? console.log;
+  const pause = deps.pause ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  let uploaded = 0, skipped = 0, failed = 0;
+  const origins = new Set();
+  const queue = [...files];
+  async function transfer(name) {
+    const pathname = `audio/${name}`;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        let blob;
+        if (!options.overwrite) {
+          try {
+            blob = await head(pathname, { token: options.token, abortSignal: AbortSignal.timeout(120_000) });
+            if (!(blob.size > 0)) throw new Error('目标 Blob 文件为空，需用 --overwrite 修复');
+          } catch (error) {
+            if (!(error instanceof BlobNotFoundError)) throw error;
+          }
+        }
+        const existed = Boolean(blob);
+        if (!blob) {
+          const bytes = options.remote
+            ? await download(`${options.sourceBase}/audio/${encodeURIComponent(name)}`, deps.fetch ?? fetch)
+            : await readFile(join('static/audio', name));
+          if (!bytes.length || bytes.length > MAX_BYTES) throw new Error('音频为空或超过 128 MiB');
+          blob = await put(pathname, bytes, {
+            token: options.token,
+            access: 'public',
+            addRandomSuffix: false,
+            allowOverwrite: options.overwrite,
+            contentType: MIME[extname(name).toLowerCase()],
+            abortSignal: AbortSignal.timeout(120_000),
+          });
+        }
+        const url = new URL(blob.url);
+        if (url.protocol !== 'https:' || !url.hostname.endsWith('.public.blob.vercel-storage.com') ||
+            decodeURIComponent(url.pathname) !== `/${pathname}`) {
+          throw new Error('目标不是保持原路径的 Public Blob URL');
+        }
+        origins.add(url.origin);
+        if (existed) skipped++;
+        else uploaded++;
+        log(`✓ ${name}`);
+        return;
+      } catch (error) {
+        // Avoid printing SDK errors that may contain credentials or signed URLs.
+        if (attempt < 3) {
+          log(`重试 ${attempt}/2：${name}`);
+          await pause(500 * 2 ** (attempt - 1));
+        } else {
+          failed++;
+          log(`✗ ${name}（${error?.name ?? 'Error'}；请检查源文件、网络或 Blob 权限）`);
+        }
+      }
+    }
+  }
+  async function worker() {
+    while (queue.length) await transfer(queue.shift());
+  }
+  await Promise.all(Array.from({ length: Math.min(options.concurrency, files.length) }, worker));
+  log(`完成：上传 ${uploaded}，跳过 ${skipped}，失败 ${failed}`);
+  if (failed || origins.size !== 1) throw new Error('迁移未全部完成，保留旧 PUBLIC_AUDIO_BASE，修复后重跑');
+  const base = [...origins][0];
+  log(`PUBLIC_AUDIO_BASE=${base}`);
+  return { uploaded, skipped, base };
+}
+
+export async function main(args = process.argv.slice(2), env = process.env) {
+  const options = parseOptions(args, env);
+  const files = options.remote
+    ? manifestFiles(JSON.parse(await readFile('src/lib/data.json', 'utf8')))
+    : (await readdir('static/audio')).filter((name) => extname(name).toLowerCase() in MIME);
+  if (!files.length) throw new Error('没有待上传音频');
+  console.log(`待${options.remote ? '迁移' : '上传'} ${files.length} 个文件，并发 ${options.concurrency}`);
+  if (options.dryRun) {
+    for (const name of files) console.log(`audio/${name}`);
+    console.log('dry-run：未下载或上传文件');
     return;
   }
-  const json = await res.json();
-  if (!base && json.url) base = json.url.slice(0, json.url.length - encodeURI(pathname).length);
-  done++;
-  if (done % 20 === 0) console.log(`  …${done}/${files.length}`);
+  await uploadFiles(files, options, await import('@vercel/blob'));
 }
 
-const queue = [...files];
-async function worker() {
-  while (queue.length) {
-    const name = queue.shift();
-    await uploadOne(name);
-  }
-}
-
-if (dryRun) {
-  console.log(files.slice(0, 5).join('\n') + (files.length > 5 ? `\n…（共 ${files.length}）` : ''));
-} else {
-  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
-  console.log(`\n完成：成功 ${done}，失败 ${failed}`);
-  if (base) console.log(`PUBLIC_AUDIO_BASE=${base}`);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
 }

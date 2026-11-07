@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Recording } from './types';
   import { fmtDay, fmtDur, fmtOffset, hueOf } from './types';
-  import { player, playClip, adopt, buildRecTracks } from './player.svelte';
+  import { player, playClip, adopt, buildRecTracks } from './player.svelte.ts';
   import { ListMusic } from 'lucide-svelte';
   import Chip from './components/Chip.svelte';
   import StateHint from './components/StateHint.svelte';

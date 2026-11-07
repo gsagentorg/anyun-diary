@@ -1,6 +1,6 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
-  import { player, getAudio } from '$lib/player.svelte';
+  import { player, getAudio } from '$lib/player.svelte.ts';
   import { hasLyrics, lyricIndexAt } from '$lib/lyrics';
   import { dateCard } from '$lib/types';
   import { LocateFixed } from 'lucide-svelte';

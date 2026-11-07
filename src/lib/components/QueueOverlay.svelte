@@ -1,7 +1,7 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
   import StateHint from './StateHint.svelte';
-  import { player, playAt, removeAt, clearQueue, moveTrack } from '$lib/player.svelte';
+  import { player, playAt, removeAt, clearQueue, moveTrack } from '$lib/player.svelte.ts';
   import { fmtDur } from '$lib/types';
   import { X } from 'lucide-svelte';
 

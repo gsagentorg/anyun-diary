@@ -52,8 +52,10 @@ def parse_lrc_text(text):
         raise ValueError("empty or unparseable lyrics; existing data not changed")
     if any(item["t"] < 0 for item in items):
         raise ValueError("negative lyric timestamp")
-    if any(b["t"] <= a["t"] for a, b in zip(items, items[1:])):
-        raise ValueError("lyric timestamps must be strictly increasing")
+    # Equal timestamps are valid (simultaneous/duet lines; owner 2026-11-07:
+    # panel flashes through them, metadata pushes only the first).
+    if any(b["t"] < a["t"] for a, b in zip(items, items[1:])):
+        raise ValueError("lyric timestamps must be non-decreasing")
     return items
 
 
@@ -76,7 +78,7 @@ def refresh_lyrics(data_path, tagged_dir, *, dry_run=False):
     if not root.is_dir():
         raise ValueError("TAGGED_DIR must be a directory")
     sources = {}
-    clips = changed = rows = 0
+    clips = changed = rows = trailing = 0
     for recording in after["recordings"]:
         for clip in recording.get("clips", []):
             name = clip["file"]
@@ -91,8 +93,14 @@ def refresh_lyrics(data_path, tagged_dir, *, dry_run=False):
                 raise RuntimeError("lyric source changed during rebuild")
             lyrics = parse_lrc_text(content.decode("utf-8-sig"))
             duration = clip["offsetEnd"] - clip["offsetStart"]
-            if not math.isfinite(duration) or duration <= 0 or lyrics[-1]["t"] > duration + 0.05:
-                raise ValueError(f"lyric timestamp outside clip: {name}")
+            if not math.isfinite(duration) or duration <= 0:
+                raise ValueError(f"invalid clip duration: {name}")
+            # Whole-second rounding can trail ≤0.5s past the cut; such lines are inert
+            # (never highlighted) and kept verbatim. A lrc that STARTS beyond the clip
+            # is treated as the wrong file (owner data 2026-11-07: 27/238 trailing ≤0.5s).
+            if lyrics[0]["t"] > duration + 0.05:
+                raise ValueError(f"lyrics start beyond clip end (wrong clip?): {name}")
+            trailing += sum(1 for x in lyrics if x["t"] > duration + 0.05)
             changed += clip.get("lyrics", []) != lyrics
             clip["lyrics"] = lyrics
             clips += 1
@@ -122,6 +130,7 @@ def refresh_lyrics(data_path, tagged_dir, *, dry_run=False):
             if temporary is not None:
                 temporary.unlink(missing_ok=True)
     return {"clips": clips, "changed_lyrics": changed, "lyric_rows": rows,
+            "trailing_beyond_end_lines": trailing,
             "non_lyric_changes": 0, "written": bool(changed and not dry_run)}
 
 

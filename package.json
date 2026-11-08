@@ -36,6 +36,7 @@
     "vite-node": "3.2.4"
   },
   "dependencies": {
+    "@vercel/analytics": "^2.0.1",
     "bits-ui": "^2.5.0",
     "lucide-svelte": "^0.545.0"
   },

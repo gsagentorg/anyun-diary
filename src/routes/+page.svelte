@@ -245,7 +245,7 @@
 
   <QueueOverlay />
   <LyricsSheet />
-  <SearchPanel bind:open={searchOpen} {recordings} rangeFrom={rangeFrom} rangeTo={rangeTo} />
+  <SearchPanel bind:open={searchOpen} {recordings} />
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />

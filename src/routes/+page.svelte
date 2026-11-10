@@ -3,7 +3,6 @@
   import data from '$lib/data.json';
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
-  import Heatmap from '$lib/Heatmap.svelte';
   import { player } from '$lib/player.svelte.ts';
   import SearchPanel from '$lib/components/SearchPanel.svelte';
   import Playlist from '$lib/Playlist.svelte';
@@ -17,7 +16,7 @@
   import Chip from '$lib/components/Chip.svelte';
   import * as publicEnv from '$env/static/public';
 
-  const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
+  const variants = ['泳道时间轴', '日卡片'] as const;
   let current = $state(0);
   let searchOpen = $state(false);
 
@@ -121,6 +120,14 @@
       </div>
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
+        <a
+          href="/stats"
+          class="rounded-full border border-base-300 px-3 py-1 text-sm opacity-60 transition hover:border-accent hover:opacity-100"
+        >统计</a>
+        <a
+          href="/wish"
+          class="rounded-full border border-base-300 px-3 py-1 text-sm opacity-60 transition hover:border-accent hover:opacity-100"
+        >许愿池</a>
         <div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="视图切换">
           {#each variants as v, i}
             <button
@@ -249,9 +256,7 @@
 
   {#if current === 0}
     <Timeline recordings={recordings} laneMode={laneMode} />
-  {:else if current === 1}
-    <DayStrip recordings={recordings} />
   {:else}
-    <Heatmap recordings={recordings} />
+    <DayStrip recordings={recordings} />
   {/if}
 </div>

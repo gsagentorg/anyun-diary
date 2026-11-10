@@ -5,9 +5,8 @@
   import { adopt, buildRecTracks } from './player.svelte.ts';
   import { theme } from './theme.svelte.ts';
   import StateHint from './components/StateHint.svelte';
-  import { browser } from '$app/environment';
 
-  let { recordings }: { recordings: Recording[] } = $props();
+  let { recordings, from = '', to = '' }: { recordings: Recording[]; from?: string; to?: string } = $props();
 
   interface Cell {
     day: number;       // 当天 0 点 epoch
@@ -22,42 +21,11 @@
       timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit',
     });
 
-  // 范围选择：独立于歌单生成的 range；本地记忆（anyun-heat-range-v1），刷新保留
-  const HEAT_KEY = 'anyun-heat-range-v1';
-  let from = $state('');
-  let to = $state('');
-  $effect(() => {
-    if (!browser) return;
-    try {
-      const raw = localStorage.getItem(HEAT_KEY);
-      if (raw) {
-        const v = JSON.parse(raw) as { from?: unknown; to?: unknown };
-        if (typeof v.from === 'string') from = v.from;
-        if (typeof v.to === 'string') to = v.to;
-      }
-    } catch { /* 忽略 */ }
-  });
-  $effect(() => {
-    if (!browser) return;
-    try {
-      localStorage.setItem(HEAT_KEY, JSON.stringify({ from, to }));
-    } catch { /* 配额/隐私模式静默 */ }
-  });
 
   // YYYY-MM-DD（上海时区）
   const dayStr = (epoch: number) =>
     new Date(epoch * 1000).toLocaleDateString('sv', { timeZone: 'Asia/Shanghai' });
 
-  function presetDays(n: number) {
-    const today = shDayStart(Date.now() / 1000);
-    from = dayStr(today - (n - 1) * 86400);
-    to = dayStr(today);
-  }
-
-  function clearRange() {
-    from = '';
-    to = '';
-  }
 
   // 按范围过滤（录像按上海日界归天；空串 = 不限）
   const filtered = $derived.by(() => {
@@ -153,39 +121,6 @@
     if (tracks.length) adopt(tracks, 0);
   }
 </script>
-
-<!-- 范围选择（独立于歌单生成的日期；带本地记忆） -->
-<div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
-  <span class="opacity-55">范围</span>
-  <input
-    type="date"
-    bind:value={from}
-    aria-label="开始日期"
-    class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums"
-  />
-  <span class="opacity-55">→</span>
-  <input
-    type="date"
-    bind:value={to}
-    aria-label="结束日期"
-    class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums"
-  />
-  <button
-    type="button"
-    class="rounded border border-base-300 px-2 py-1 text-2xs transition hover:border-accent"
-    onclick={clearRange}
-  >全部</button>
-  <button
-    type="button"
-    class="rounded border border-base-300 px-2 py-1 text-2xs transition hover:border-accent"
-    onclick={() => presetDays(7)}
-  >近7天</button>
-  <button
-    type="button"
-    class="rounded border border-base-300 px-2 py-1 text-2xs transition hover:border-accent"
-    onclick={() => presetDays(30)}
-  >近30天</button>
-</div>
 
 <!-- 统计：活跃天数 / 次数 / 总时长 / 平均（总体） -->
 <div class="mt-2 flex flex-wrap gap-1.5 text-2xs">

@@ -10,6 +10,7 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 5173, // 开发实例；生产(adapter-node)占 4173
     strictPort: true,
-    allowedHosts: ['anyun-diary-dev.public.bcw2.top']
+    // dev 阶段放行全部 Host（owner 2026-11-12 定），便于任意隧道/域名接入
+    allowedHosts: true
   }
 });

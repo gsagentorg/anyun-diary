@@ -6,3 +6,4 @@ build/
 .env
 static/audio/
 scripts/__pycache__/
+RUNBOOK.md

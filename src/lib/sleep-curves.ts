@@ -40,6 +40,30 @@ export function sleepCurvePath(mode: SleepMode): string {
   }).join(' ');
 }
 
+/** Curve width in the shared SVG viewBox. */
+export const SLEEP_AXIS_WIDTH = 180;
+/** A dragged end may never shorten the timer below one minute. */
+export const MIN_SLEEP_SECONDS = 60;
+export const MIN_SLEEP_MINUTES = 1;
+
+/**
+ * Drag handle to remaining seconds. `x` is the owner's axis coordinate
+ * (0 = full length, 180 = no time left); the UI passes `180 - handleX`
+ * so the right-end handle still reads left-to-right as "shorter".
+ */
+export function sleepSecondsFromHandle(x: number, totalSeconds: number): number {
+  const distance = Number.isFinite(x) ? Math.max(0, Math.min(SLEEP_AXIS_WIDTH, x)) : 0;
+  const base = Number.isFinite(totalSeconds) && totalSeconds > 0 ? totalSeconds : 0;
+  return Math.max(MIN_SLEEP_SECONDS, Math.round((1 - distance / SLEEP_AXIS_WIDTH) * base));
+}
+
+/** Preview-mode counterpart: whole minutes, never below one. */
+export function sleepMinutesFromHandle(x: number, totalMinutes: number): number {
+  const distance = Number.isFinite(x) ? Math.max(0, Math.min(SLEEP_AXIS_WIDTH, x)) : 0;
+  const base = Number.isFinite(totalMinutes) && totalMinutes > 0 ? totalMinutes : 0;
+  return Math.max(MIN_SLEEP_MINUTES, Math.round((1 - distance / SLEEP_AXIS_WIDTH) * base));
+}
+
 /** Uses the existing countdown tick; no second clock or timer to drift. */
 export function sleepProgress(totalMs: number, remainingSeconds: number): number {
   if (!Number.isFinite(totalMs) || totalMs <= 0 || !Number.isFinite(remainingSeconds)) return 0;

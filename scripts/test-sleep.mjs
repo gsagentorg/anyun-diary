@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, SLEEP_MODES, isSleepMode } from '../src/lib/sleep-curves.ts';
+import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, SLEEP_MODES, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
 import { SleepAudio } from '../src/lib/sleep-audio.ts';
 let checks = 0;
 function ok(value, message) { assert.ok(value, message); checks++; }
@@ -82,7 +82,7 @@ globalThis.window = { localStorage: { getItem: (k) => storage.get(k) ?? null, se
 globalThis.document = { visibilityState: 'visible', addEventListener() {} };
 Object.defineProperty(globalThis, 'navigator', { value: { mediaSession: { setActionHandler() {}, setPositionState() {} } }, configurable: true });
 globalThis.MediaMetadata = class {};
-const { sleep, player, startSleep, cancelSleep, syncSleep, getAudio, setSleepPreset, initSleep, onTrackEnded, step } = await import('../src/lib/player.svelte.ts');
+const { sleep, player, startSleep, cancelSleep, adjustSleepEnd, syncSleep, getAudio, setSleepPreset, initSleep, onTrackEnded, step } = await import('../src/lib/player.svelte.ts');
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 setSleepPreset('gentle');
 ok(storage.get('anyun-sleep-preset-v1') === 'gentle', 'preset persisted');
@@ -171,4 +171,39 @@ const pending = new SleepAudio(new AudioStub());
 const before = graphCount;
 const preparation = pending.prepare(); pending.restore(); release(); await preparation;
 ok(graphCount === before, 'cancelled async preparation does not route audio');
+// Fade-curve handle: horizontal drag rescales the time axis, shape unchanged.
+ok(sleepSecondsFromHandle(0, 1800) === 1800, 'handle: left edge keeps full duration');
+ok(sleepSecondsFromHandle(180, 1800) === MIN_SLEEP_SECONDS, 'handle: right edge floors at 60s');
+ok(sleepSecondsFromHandle(90, 1800) === 900, 'handle: halfway is half the time');
+ok(sleepSecondsFromHandle(179.9, 1800) === 60, 'handle: near-right still floors at 60s');
+ok(sleepSecondsFromHandle(-20, 1800) === 1800 && sleepSecondsFromHandle(400, 1800) === 60, 'handle: out-of-range input clamped');
+ok(sleepSecondsFromHandle(NaN, 1800) === 1800, 'handle: invalid coordinate keeps full duration');
+ok(sleepSecondsFromHandle(90, 0) === 60 && sleepSecondsFromHandle(90, NaN) === 60, 'handle: invalid duration falls back to the 60s floor');
+ok(sleepMinutesFromHandle(0, 15) === 15, 'preview handle: full tier');
+ok(sleepMinutesFromHandle(90, 15) === 8, 'preview handle: rounds to whole minutes');
+ok(sleepMinutesFromHandle(45, 15) === 11, 'preview handle: rounds half down-to-nearest');
+ok(sleepMinutesFromHandle(180, 15) === MIN_SLEEP_MINUTES, 'preview handle: one-minute floor');
+ok(sleepMinutesFromHandle(NaN, 15) === 15 && sleepMinutesFromHandle(90, 0) === 1, 'preview handle: invalid input safe');
+
+// Running timer: dragging the end keeps started/preset/mode and re-arms automation.
+setSleepPreset('gentle'); startSleep(30); await settle();
+const dragStart = sleep.until;
+const dragStartedAt = sleep.started;
+const beforeDragCurve = curves.length;
+now = dragStart - 600000; syncSleep();
+ok(sleep.remaining === 600, 'drag baseline: ten minutes left');
+adjustSleepEnd(300);
+ok(sleep.until === now + 300000 && sleep.remaining === 300, 'drag shortens wall-clock deadline');
+ok(sleep.started === dragStartedAt && sleep.mode === 'gentle', 'drag preserves started/preset/mode semantics');
+ok(sleep.fired === false, 'drag clears a fired flag');
+ok(curves.length > beforeDragCurve, 'drag reschedules native automation');
+const dragProgress = (now - dragStartedAt) / (sleep.until - dragStartedAt);
+ok(Math.abs(curves.at(-1).values[0] - sleepGain('gentle', dragProgress)) < 1e-6, 'drag reschedule starts from current gain');
+adjustSleepEnd(5);
+ok(sleep.remaining === MIN_SLEEP_SECONDS && sleep.until === now + 60000, 'drag never goes below the 60s floor');
+adjustSleepEnd(NaN);
+ok(sleep.remaining === MIN_SLEEP_SECONDS, 'invalid drag distance ignored');
+cancelSleep();
+ok(sleep.plannedSeconds === 0 && sleep.until === null, 'cancel clears the planned window');
+
 console.log(`sleep: ${checks} checks passed`);

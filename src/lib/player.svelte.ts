@@ -689,12 +689,13 @@ export const sleep = $state<{
   started: number | null;
   afterTrack: boolean;
   remaining: number;
+  progress: number;
   plannedSeconds: number; // 本次定时原始总时长：曲线手柄按它换算剩余比例
   fired: boolean;
   preset: SleepMode;
   mode: SleepMode; // 本次已启动的方式，和下一次选择分开
   notice: string | null;
-}>({ until: null, started: null, afterTrack: false, remaining: 0, plannedSeconds: 0,
+}>({ until: null, started: null, afterTrack: false, remaining: 0, progress: 0, plannedSeconds: 0,
   fired: false, preset: 'gentle', mode: 'gentle', notice: null });
 
 const SLEEP_PRESET_KEY = 'anyun-sleep-preset-v1';
@@ -717,10 +718,11 @@ function sleepAudio() {
 /** Public for deterministic clock tests and foreground recovery. */
 export function syncSleep(now = Date.now(), reschedule = true) {
   if (sleep.until == null || sleep.started == null) return;
+  sleep.progress = Math.max(0, Math.min(1, (now - sleep.started) / (sleep.until - sleep.started)));
   sleep.remaining = Math.max(0, Math.ceil((sleep.until - now) / 1000));
   if (now >= sleep.until) { stopForSleep(); return; }
   if (sleep.mode !== 'off') {
-    sleepAudio().tick(sleep.mode, (now - sleep.started) / (sleep.until - sleep.started));
+    sleepAudio().tick(sleep.mode, sleep.progress);
     if (reschedule) sleepAudio().schedule(sleep.mode, sleep.started, sleep.until, now);
   }
 }
@@ -775,6 +777,16 @@ export function adjustSleepEnd(remainingSeconds: number) {
   sleep.fired = false;
   sleep.until = now + seconds * 1000;
   sleep.remaining = seconds;
+  syncSleep(now, true);
+}
+
+/** Seek the curve phase while preserving the selected total duration. */
+export function seekSleepProgress(progress: number) {
+  if (sleep.until == null || !Number.isFinite(progress)) return;
+  const t = Math.max(0, Math.min(1, progress));
+  const now = Date.now(), duration = sleep.plannedSeconds * 1000;
+  sleep.started = now - t * duration;
+  sleep.until = sleep.started + duration;
   syncSleep(now, true);
 }
 

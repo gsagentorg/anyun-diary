@@ -82,7 +82,7 @@ globalThis.window = { localStorage: { getItem: (k) => storage.get(k) ?? null, se
 globalThis.document = { visibilityState: 'visible', addEventListener() {} };
 Object.defineProperty(globalThis, 'navigator', { value: { mediaSession: { setActionHandler() {}, setPositionState() {} } }, configurable: true });
 globalThis.MediaMetadata = class {};
-const { sleep, player, startSleep, cancelSleep, adjustSleepEnd, syncSleep, getAudio, setSleepPreset, initSleep, onTrackEnded, step } = await import('../src/lib/player.svelte.ts');
+const { sleep, player, startSleep, cancelSleep, seekSleepProgress, adjustSleepEnd, syncSleep, getAudio, setSleepPreset, initSleep, onTrackEnded, step } = await import('../src/lib/player.svelte.ts');
 const settle = async () => { await Promise.resolve(); await Promise.resolve(); };
 setSleepPreset('gentle');
 ok(storage.get('anyun-sleep-preset-v1') === 'gentle', 'preset persisted');
@@ -206,4 +206,15 @@ ok(sleep.remaining === MIN_SLEEP_SECONDS, 'invalid drag distance ignored');
 cancelSleep();
 ok(sleep.plannedSeconds === 0 && sleep.until === null, 'cancel clears the planned window');
 
+setSleepPreset('gentle'); startSleep(15); await settle();
+seekSleepProgress(0.5);
+ok(sleep.plannedSeconds === 900 && sleep.remaining === 450, '15-minute halfway retains 7m30');
+ok(sleep.progress === 0.5 && sleep.until - sleep.started === 900000, 'point and time share stable duration');
+ok(Math.abs(curves.at(-1).values[0] - sleepGain('gentle', 0.5)) < 1e-6, 'audio uses exact dot phase');
+seekSleepProgress(0.95);
+ok(sleep.remaining === 45 && sleep.progress === 0.95, 'quiet end is 95 percent, no minute floor');
+seekSleepProgress(0.25);
+ok(sleep.remaining === 675 && sleep.progress === 0.25, 'backwards seek restores earlier phase');
+seekSleepProgress(1);
+ok(sleep.until === null && sleep.fired, 'endpoint stops timer');
 console.log(`sleep: ${checks} checks passed`);

@@ -84,7 +84,7 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
         if(!matches&&!o.overwrite)throw Error('Destination differs; use --overwrite');
       }
       const body=await read(),m=meter(full);const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
-      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg',...(!o.overwrite?{'if-none-match':'*'}:{})}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
+      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg'}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
       catch(e){ac.abort();m.stream.destroy();await pump.catch(()=>{});throw e;}
       const head=await request(s3('HEAD'),{method:'HEAD'},signal);try{if(contentLength(head)!==size)throw Error('Destination length mismatch');}finally{await head.body?.cancel();}
       if(full){const r=await request(s3('GET'),{},signal);if(!same(await digest(r.body,signal),original))throw Error('Destination integrity mismatch');}

@@ -19,7 +19,7 @@ const server=createServer(async(req,res)=>{
   if(req.method==='HEAD'&&mode==='target-head-error'){res.writeHead(503);res.end();return;}
   if(req.method==='HEAD'&&mode==='target-length'){res.writeHead(200);res.end();return;}
   if(req.method==='GET')targetGets++;
-  if(req.method==='PUT'){events.push('PUT:target');if(puts===0)assert.equal(req.headers['if-none-match'],'*');puts++;const chunks=[];for await(const c of req)chunks.push(c);target=Buffer.concat(chunks);if(mode==='corrupt')target[5]^=1;res.end();return;}
+  if(req.method==='PUT'){events.push('PUT:target');assert.equal(req.headers['if-none-match'],undefined, 'B2-compatible PUT must not use conditional headers');puts++;const chunks=[];for await(const c of req)chunks.push(c);target=Buffer.concat(chunks);if(mode==='corrupt')target[5]^=1;res.end();return;}
   if(!target){res.writeHead(404);res.end();return;}res.writeHead(200,{'content-length':target.length});res.end(req.method==='HEAD'?undefined:target);
 });
 try{

@@ -41,7 +41,7 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --concurr
 已有目标同大小就跳过（不 GET 源或目标）；大小不同默认报冲突，需明确 --overwrite。
 需要写入时只 GET 源一次，直接流式 PUT；检查传输字节数、OggS 魔数、PUT 成功和写后目标 HEAD 大小。默认完全不 GET 目标，不预下载源计算摘要。
 **大小一致不是密码学完整性证明：同长度但内容不同的目标可能被跳过，传输中的同长度损坏也不能靠大小检查发现。** --overwrite 可强制写入，包括同大小对象。
-首次非覆盖写入使用 If-None-Match: *，提供商必须支持条件 PUT 以避免并发覆盖。
+兼容 Backblaze B2：不发送 If-None-Match 条件 PUT。覆盖保护依赖上传前 HEAD 检查，不是原子操作；HEAD 与 PUT 之间存在竞态。迁移期间必须保证没有其他进程向相同目标 key 写入，不要同时运行两份迁移；--overwrite 仅表示允许覆盖，不提供并发互斥。
 
 需要完整校验时显式加 --verify-full：
 

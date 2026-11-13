@@ -1,6 +1,6 @@
 # 音频存储后端方案（多存储支持）
 
-状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。迁移操作手册见 `docs/audio-migration.md`。
+状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。默认迁移直接从已有 HTTP 实例流式传到 S3，不经本地音频文件；迁移操作手册见 `docs/audio-migration.md`。
 
 ## 抽象模型
 
@@ -30,8 +30,8 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 ### 鉴权边界
 
 - 私有桶：secret key 只存在于服务端（`$env/dynamic/private`），永不下发前端；未配置 = 端点 500/503，不影响其他档。
-- 文件名白名单校验（字符集 + `.opus` 后缀，拒绝路径分隔与 `..`），防枚举/穿越；预签 URL 本身限时，泄露窗口有限。
-- 防盗刷：私有桶不给直链，外部无法绕过端点拿文件。
+- 文件名白名单校验（字符集 + `.opus` 后缀，拒绝路径分隔与 `..`），拒绝非法路径（不保证防枚举）；预签 URL 本身限时，泄露窗口有限。
+- 公开预签端点可被任何访问者调用，私有桶与限时 URL 不等于用户鉴权、防盗链或防盗刷；需要时另加鉴权、限流与预算控制。
 
 ### 环境变量
 
@@ -39,8 +39,8 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 - `PUBLIC_AUDIO_STORAGE=local|s3`（默认 local）
 
 私有（服务端）：
-- `AUDIO_S3_ENDPOINT`（如 `https://s3.eu-central-003.backblazeb2.com`）
-- `AUDIO_S3_REGION`（B2 如 `eu-central-003`）
+- `AUDIO_S3_ENDPOINT`（如 `https://YOUR-S3-HOST-HERE`）
+- `AUDIO_S3_REGION`（填 `YOUR-REGION-HERE` 对应实际区域）
 - `AUDIO_S3_BUCKET`
 - `AUDIO_S3_ACCESS_KEY_ID` / `AUDIO_S3_SECRET_ACCESS_KEY`
 - `AUDIO_S3_KEY_PREFIX`（默认 `audio/`）
@@ -49,7 +49,7 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 
 ### B2 免费档要点（2026-11-10 调查）
 
-10GB 存储 / 1GB·天⁻¹ 下载（超出 $0.01/GB）；免费档不支持公有直链防盗链，私有桶 + 本端点 = 鉴权与防刷都落在服务端。原生 API 另有 `b2_get_download_authorization`（按前缀签 ≤24h token），本方案选 S3 兼容层以复用标准 SigV4。
+10GB 存储 / 1GB·天⁻¹ 下载（超出 $0.01/GB）；免费档不支持公有直链防盗链，私有桶 + 公开预签端点只保护长期凭据，不提供访问者鉴权或防刷。原生 API 另有 `b2_get_download_authorization`（按前缀签 ≤24h token），本方案选 S3 兼容层以复用标准 SigV4。
 
 ## 验证
 

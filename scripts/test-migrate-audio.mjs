@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { run, presign } from './migrate-audio.mjs';
 const dir=await mkdtemp(join(tmpdir(),'audio-migration-'));
 const name='中文 space.opus', audio=Buffer.from('OggShello streamed audio');
-let target=null,puts=0,mode='',requests=0,sourceGets=0,targetGets=0,events=[];
+let target=null,puts=0,mode='',requests=0,sourceGets=0,targetGets=0,events=[],conditional=false;
 const server=createServer(async(req,res)=>{
   requests++;const u=new URL(req.url,'http://localhost');
   if(u.pathname==='/api/audio-url'){res.writeHead(302,{location:'/audio/'+encodeURIComponent(name)});res.end();return;}
@@ -19,7 +19,7 @@ const server=createServer(async(req,res)=>{
   if(req.method==='HEAD'&&mode==='target-head-error'){res.writeHead(503);res.end();return;}
   if(req.method==='HEAD'&&mode==='target-length'){res.writeHead(200);res.end();return;}
   if(req.method==='GET')targetGets++;
-  if(req.method==='PUT'){events.push('PUT:target');assert.equal(req.headers['if-none-match'],undefined, 'B2-compatible PUT must not use conditional headers');puts++;const chunks=[];for await(const c of req)chunks.push(c);target=Buffer.concat(chunks);if(mode==='corrupt')target[5]^=1;res.end();return;}
+  if(req.method==='PUT'){events.push('PUT:target');assert.equal(req.headers['if-none-match'],conditional?'*':undefined, 'conditional PUT follows explicit switch');puts++;const chunks=[];for await(const c of req)chunks.push(c);target=Buffer.concat(chunks);if(mode==='corrupt')target[5]^=1;res.end();return;}
   if(!target){res.writeHead(404);res.end();return;}res.writeHead(200,{'content-length':target.length});res.end(req.method==='HEAD'?undefined:target);
 });
 try{
@@ -40,6 +40,7 @@ try{
   mode='target-length';await call();assert.equal(puts,writes+1);
   mode='length';await assert.rejects(call(),/Content-Length/);
   mode='404';await assert.rejects(call(),/404/);mode='';
+  target=null;conditional=true;await call('--conditional-put');assert.deepEqual(target,audio);conditional=false;
   const before=requests;await assert.rejects(call('--concurrency=0'),/concurrency/);assert.equal(requests,before);
   await assert.rejects(call('--concurrency','wat'),/concurrency/);
   target=null;events=[];await writeFile(join(dir,'src/lib/data.json'),JSON.stringify({recordings:[{clips:[{opus:name},{opus:'second.opus'}]}]}));

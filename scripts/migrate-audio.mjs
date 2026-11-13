@@ -27,7 +27,7 @@ function parse(args) {
   const command=args.shift(), o={command,concurrency:4,'timeout-ms':120000,out:'static/audio'};
   if(!['transfer','pull','push-s3','verify'].includes(command)) throw Error('Command: transfer | pull | push-s3 | verify');
   for(let i=0;i<args.length;i++) { const m=/^--([a-z-]+)(?:=(.*))?$/.exec(args[i]); if(!m)throw Error('Invalid option'); const [,k,v]=m;
-    if(['dry-run','overwrite','source-api','verify-full'].includes(k)){if(v!==undefined)throw Error('Flag takes no value');o[k]=true;}
+    if(['dry-run','overwrite','source-api','verify-full','conditional-put'].includes(k)){if(v!==undefined)throw Error('Flag takes no value');o[k]=true;}
     else if(['concurrency','timeout-ms','out'].includes(k)){o[k]=v??args[++i];if(!o[k]||o[k].startsWith('--'))throw Error('Missing option value');}
     else throw Error('Unknown option');
   }
@@ -83,7 +83,7 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
         return; // B2 same-key uploads create versions: never re-upload an existing key.
       }
       const body=await read(),m=meter(full);const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
-      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg'}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
+      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg',...(o['conditional-put']?{'if-none-match':'*'}:{})}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
       catch(e){ac.abort();m.stream.destroy();await pump.catch(()=>{});throw e;}
       const head=await request(s3('HEAD'),{method:'HEAD'},signal);try{if(contentLength(head)!==size)throw Error('Destination length mismatch');}finally{await head.body?.cancel();}
       if(full){const r=await request(s3('GET'),{},signal);if(!same(await digest(r.body,signal),original))throw Error('Destination integrity mismatch');}

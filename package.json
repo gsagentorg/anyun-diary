@@ -10,7 +10,7 @@
     "data": "python3 scripts/build_data.py",
     "audio": "bash scripts/to-opus.sh",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:data && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:blob",
+    "test": "npm run test:data && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:blob && npm run test:storage",
     "test:data": "python3 scripts/test_build_data.py",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
@@ -20,7 +20,8 @@
     "test:sleep": "vite-node scripts/test-sleep.mjs",
     "audio:upload": "node scripts/upload-blob.mjs",
     "audio:migrate": "node scripts/upload-blob.mjs --from-remote",
-    "test:blob": "node --test scripts/test-upload-blob.mjs"
+    "test:blob": "node --test scripts/test-upload-blob.mjs",
+    "test:storage": "vite-node scripts/test-storage.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",
@@ -33,7 +34,8 @@
     "svelte-check": "^4.4.0",
     "tailwindcss": "^4.3.3",
     "vite": "^7.3.0",
-    "vite-node": "3.2.4"
+    "vite-node": "3.2.4",
+    "@types/node": "^26.6.6"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",

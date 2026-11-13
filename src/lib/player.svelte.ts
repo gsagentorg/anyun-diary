@@ -4,7 +4,7 @@ import diaryData from '$lib/data.json';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
-import { isSleepMode, type SleepMode } from './sleep-curves';
+import { isSleepMode, MIN_SLEEP_SECONDS, type SleepMode } from './sleep-curves';
 
 export type { Track };
 export { buildRecTracks };
@@ -689,12 +689,13 @@ export const sleep = $state<{
   started: number | null;
   afterTrack: boolean;
   remaining: number;
+  plannedSeconds: number; // 本次定时原始总时长：曲线手柄按它换算剩余比例
   fired: boolean;
   preset: SleepMode;
   mode: SleepMode; // 本次已启动的方式，和下一次选择分开
   notice: string | null;
-}>({ until: null, started: null, afterTrack: false, remaining: 0, fired: false,
-  preset: 'gentle', mode: 'gentle', notice: null });
+}>({ until: null, started: null, afterTrack: false, remaining: 0, plannedSeconds: 0,
+  fired: false, preset: 'gentle', mode: 'gentle', notice: null });
 
 const SLEEP_PRESET_KEY = 'anyun-sleep-preset-v1';
 export function initSleep() {
@@ -747,8 +748,9 @@ export function startSleep(minutes: number | null, afterTrack = false) {
   }
   sleep.mode = sleep.preset;
   sleep.started = Date.now();
-  sleep.until = sleep.started + minutes! * 60000;
-  sleep.remaining = Math.ceil(minutes! * 60);
+  sleep.plannedSeconds = Math.ceil(minutes! * 60);
+  sleep.until = sleep.started + sleep.plannedSeconds * 1000;
+  sleep.remaining = sleep.plannedSeconds;
   const run = sleepRun;
   if (sleep.mode !== 'off') {
     sleep.notice = '正在启用渐弱音频引擎…';
@@ -761,6 +763,21 @@ export function startSleep(minutes: number | null, afterTrack = false) {
   sleepTimer = setInterval(() => syncSleep(Date.now(), false), 100);
 }
 
+/**
+ * 曲线手柄拖拽：只拉伸时间轴，保持 started / preset / mode 语义不变。
+ * remainingSeconds 是「从现在起」的剩余秒数；重排 WebAudio 自动化并刷新 tick。
+ */
+export function adjustSleepEnd(remainingSeconds: number) {
+  if (sleep.until == null || sleep.started == null) return;
+  if (!Number.isFinite(remainingSeconds)) return;
+  const seconds = Math.max(MIN_SLEEP_SECONDS, Math.round(remainingSeconds));
+  const now = Date.now();
+  sleep.fired = false;
+  sleep.until = now + seconds * 1000;
+  sleep.remaining = seconds;
+  syncSleep(now, true);
+}
+
 /** 取消睡眠定时 */
 export function cancelSleep() {
   ++sleepRun;
@@ -770,6 +787,7 @@ export function cancelSleep() {
   sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
+  sleep.plannedSeconds = 0;
   sleep.notice = null;
 }
 
@@ -783,6 +801,7 @@ function stopForSleep() {
   sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
+  sleep.plannedSeconds = 0;
   sleep.fired = true;
   setMediaPlaybackState('paused');
 }

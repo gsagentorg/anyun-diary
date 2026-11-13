@@ -40,7 +40,8 @@
   "dependencies": {
     "@vercel/analytics": "^2.0.1",
     "bits-ui": "^2.5.0",
-    "lucide-svelte": "^0.545.0"
+    "lucide-svelte": "^0.545.0",
+    "@aws-sdk/client-s3": "^3.1168.0"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

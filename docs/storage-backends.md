@@ -1,6 +1,6 @@
 # 音频存储后端方案（多存储支持）
 
-状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。
+状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。默认迁移直接从已有 HTTP 实例流式传到 S3，不经本地音频文件；以文件为单位下载→上传→检查后释放并发槽，不做整批暂存。默认只 HEAD 大小检查，写入时源 GET 一次、目标不 GET；同大小但内容不同的已有目标可能跳过，大小一致不是密码学完整性证明。目标 key 已存在始终跳过（`--overwrite` 只用于本地 pull）；`--verify-full` 才启用源 SHA256、目标完整 GET 校验及摘要一致续跑，增加源重复读取与目标下载成本。可选 `pull` 冷备不属迁移前置。迁移操作手册见 `docs/audio-migration.md`。
 
 ## 抽象模型
 
@@ -30,8 +30,8 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 ### 鉴权边界
 
 - 私有桶：secret key 只存在于服务端（`$env/dynamic/private`），永不下发前端；未配置 = 端点 500/503，不影响其他档。
-- 文件名白名单校验（字符集 + `.opus` 后缀，拒绝路径分隔与 `..`），防枚举/穿越；预签 URL 本身限时，泄露窗口有限。
-- 防盗刷：私有桶不给直链，外部无法绕过端点拿文件。
+- 文件名白名单校验（字符集 + `.opus` 后缀，拒绝路径分隔与 `..`），拒绝非法路径（不保证防枚举）；预签 URL 本身限时，泄露窗口有限。
+- 公开预签端点可被任何访问者调用，私有桶与限时 URL 不等于用户鉴权、防盗链或防盗刷；需要时另加鉴权、限流与预算控制。
 
 ### 环境变量
 
@@ -39,8 +39,8 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 - `PUBLIC_AUDIO_STORAGE=local|s3`（默认 local）
 
 私有（服务端）：
-- `AUDIO_S3_ENDPOINT`（如 `https://s3.eu-central-003.backblazeb2.com`）
-- `AUDIO_S3_REGION`（B2 如 `eu-central-003`）
+- `AUDIO_S3_ENDPOINT`（如 `https://YOUR-S3-HOST-HERE`）
+- `AUDIO_S3_REGION`（填 `YOUR-REGION-HERE` 对应实际区域）
 - `AUDIO_S3_BUCKET`
 - `AUDIO_S3_ACCESS_KEY_ID` / `AUDIO_S3_SECRET_ACCESS_KEY`
 - `AUDIO_S3_KEY_PREFIX`（默认 `audio/`）
@@ -49,8 +49,14 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 
 ### B2 免费档要点（2026-11-10 调查）
 
-10GB 存储 / 1GB·天⁻¹ 下载（超出 $0.01/GB）；免费档不支持公有直链防盗链，私有桶 + 本端点 = 鉴权与防刷都落在服务端。原生 API 另有 `b2_get_download_authorization`（按前缀签 ≤24h token），本方案选 S3 兼容层以复用标准 SigV4。
+10GB 存储 / 1GB·天⁻¹ 下载（超出 $0.01/GB）；免费档不支持公有直链防盗链，私有桶 + 公开预签端点只保护长期凭据，不提供访问者鉴权或防刷。原生 API 另有 `b2_get_download_authorization`（按前缀签 ≤24h token），本方案选 S3 兼容层以复用标准 SigV4。
 
 ## 验证
 
 `npm run test:storage`：SigV4 确定性、URL 结构、排序、过期参数、文件名校验。
+
+### 标准桶 CORS 配置
+
+迁移工具支持独立 `configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE`，以及 `transfer --configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE`。显式 origin 可重复，无通配默认；标准 AWS SDK GetBucketCors → 保留合并 → PutBucketCors → 读回验证，非 B2 专用。managed GET/HEAD 规则不改变其他规则，不撤销之前批准的 origins；403/网络/不支持均失败关闭。整份替换无原子 CAS，运行时须暂停其它管理员修改，提供商私有扩展需人工核查。完整 env、dry-run 与命令见 `docs/audio-migration.md`。
+
+CORS origin 是浏览器站点 origin，不是服务端 S3 endpoint 或音频源地址。CORS 不提供鉴权；本功能不实现播放器 `crossOrigin="anonymous"` opt-in，不承诺 Web Audio 自动可用。

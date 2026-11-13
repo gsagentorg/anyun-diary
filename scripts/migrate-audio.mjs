@@ -57,15 +57,19 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
     const prefix=env.AUDIO_S3_KEY_PREFIX??'audio/';if(prefix.startsWith('/')||prefix.includes('..')||[...prefix].some(c=>c.charCodeAt(0)<32||c.charCodeAt(0)===92))throw Error('Invalid prefix');
     cfg={ep:ep.origin,region:env.AUDIO_S3_REGION,bucket:env.AUDIO_S3_BUCKET,ak:env.AUDIO_S3_ACCESS_KEY_ID,sk:env.AUDIO_S3_SECRET_ACCESS_KEY,prefix,pathStyle:env.AUDIO_S3_PATH_STYLE==='1',ttl:number(env.AUDIO_S3_URL_TTL_SECONDS??3600,'TTL',604800)};
   }
-  const dir=resolve(cwd,o.out);let next=0;const failures=[];
-  async function object(name){const ac=new AbortController(),signal=ac.signal,timer=setTimeout(()=>ac.abort(),o.timeout);
+  const dir=resolve(cwd,o.out);let next=0,completed=0;const failures=[];
+  const log=(i,stage)=>console.log(new Date().toISOString()+' ['+(i+1)+'/'+names.length+'] '+stage);
+  const safeError=e=>e.name==='AbortError'?'Timeout/cancelled':/https?:|Signature|Credential/i.test(e.message)?'Network failure (redacted)':e.message;
+  async function object(name,index){
+    log(index,'start');const ac=new AbortController(),signal=ac.signal,timer=setTimeout(()=>ac.abort(),o.timeout);
     try{
       const local=join(dir,name);const from=source?new URL(o['source-api']?'api/audio-url?f='+enc(name):'audio/'+enc(name),source.href.endsWith('/')?source.href:source.href+'/').href:null;
       const s3=method=>presign({...cfg,key:name,method});
+      log(index,'checking source');
       const read=async()=>source?(await request(from,{},signal)).body:createReadStream(local);
       if(o.command==='verify'){await digest(await read(),signal);return;}
       let size;if(source){const r=await request(from,{method:'HEAD'},signal);try{size=contentLength(r);}finally{await r.body?.cancel();}}else size=(await stat(local)).size;
-      if(o['dry-run'])return;
+      if(o['dry-run']){log(index,'dry-run checked');return;}
       const full=o['verify-full']||o.command==='pull';
       const original=full?await digest(await read(),signal):null;if(original&&original.bytes!==size)throw Error('Source length mismatch');
       if(o.command==='pull'){
@@ -73,6 +77,7 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
         await mkdir(dir,{recursive:true});const tmp=local+'.part';let created=false;
         try{const sink=createWriteStream(tmp,{flags:'wx'});sink.on('open',()=>{created=true;});const m=meter();await pipeline(await read(),m.stream,sink,{signal});if(!same(m.result(),original))throw Error('Source changed');await rename(tmp,local);}finally{if(created)await rm(tmp,{force:true});}return;
       }
+      log(index,'checking destination');
       const existing=await request(s3('HEAD'),{method:'HEAD'},signal,true);
       if(existing){
         await existing.body?.cancel();
@@ -80,16 +85,19 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
           const r=await request(s3('GET'),{},signal);
           if(!same(await digest(r.body,signal),original))throw Error('Destination differs; existing object not uploaded');
         }
-        return; // B2 same-key uploads create versions: never re-upload an existing key.
+        log(index,'skip: destination exists');
+        return; // Existing destination keys are never re-uploaded.
       }
+      log(index,'uploading');
       const body=await read(),m=meter(full);const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
       try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg',...(o['conditional-put']?{'if-none-match':'*'}:{})}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
       catch(e){ac.abort();m.stream.destroy();await pump.catch(()=>{});throw e;}
+      log(index,'checking uploaded object');
       const head=await request(s3('HEAD'),{method:'HEAD'},signal);try{if(contentLength(head)!==size)throw Error('Destination length mismatch');}finally{await head.body?.cancel();}
       if(full){const r=await request(s3('GET'),{},signal);if(!same(await digest(r.body,signal),original))throw Error('Destination integrity mismatch');}
     }finally{clearTimeout(timer);ac.abort();}
   }
-  await Promise.all(Array.from({length:Math.min(o.concurrency,names.length)},async()=>{while(next<names.length){const i=next++;try{await object(names[i]);}catch(e){failures.push('object '+(i+1)+': '+(e.name==='AbortError'?'Timeout/cancelled':/https?:|Signature|Credential/i.test(e.message)?'Network failure (redacted)':e.message));}}}));
+  await Promise.all(Array.from({length:Math.min(o.concurrency,names.length)},async()=>{while(next<names.length){const i=next++;try{await object(names[i],i);completed++;log(i,'done; completed '+completed+'/'+names.length);}catch(e){const message='object '+(i+1)+': '+safeError(e);failures.push(message);console.error(new Date().toISOString()+' ERROR '+message);}}}));
   console.log(o.command+': '+(names.length-failures.length)+'/'+names.length+' objects OK'+(o['dry-run']?' (dry-run; no PUT)':''));if(failures.length)throw Error(failures.join('\n'));
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))run().catch(e=>{console.error(/https?:|Signature|Credential/i.test(e.message)?'Migration failed (redacted)':e.message);process.exitCode=1;});

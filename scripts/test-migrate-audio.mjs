@@ -31,14 +31,13 @@ try{
   await call();assert.deepEqual(target,audio);assert.equal(puts,1);assert.equal(sourceGets,1);assert.equal(targetGets,0);
   target[5]^=1;await call('--source-api');assert.equal(puts,1);assert.equal(sourceGets,1);assert.equal(targetGets,0); // size-only resume deliberately skips same-size corruption
   await assert.rejects(call('--verify-full'),/Destination differs/);
-  await call('--verify-full','--overwrite');assert.deepEqual(target,audio);
-  target=Buffer.from(audio);target[0]=0;await call('--verify-full','--overwrite');assert.deepEqual(target,audio);
   const writes=puts;
-  target=Buffer.from('OggSdifferent');await assert.rejects(call(),/Destination differs/);assert.equal(puts,writes);
-  await call('--overwrite');assert.deepEqual(target,audio);
+  await assert.rejects(call('--verify-full','--overwrite'),/Destination differs/);assert.equal(puts,writes);
+  target=Buffer.from('OggSdifferent');await call();assert.equal(puts,writes);
+  await call('--overwrite');assert.equal(puts,writes); // existing key always skipped, even differing length
   target=null;mode='corrupt';await assert.rejects(call('--verify-full'),/integrity mismatch/);
   mode='target-head-error';await assert.rejects(call(),/503/);
-  mode='target-length';await assert.rejects(call(),/Content-Length/);
+  mode='target-length';await call();assert.equal(puts,writes+1);
   mode='length';await assert.rejects(call(),/Content-Length/);
   mode='404';await assert.rejects(call(),/404/);mode='';
   const before=requests;await assert.rejects(call('--concurrency=0'),/concurrency/);assert.equal(requests,before);

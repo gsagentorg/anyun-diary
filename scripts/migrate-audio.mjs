@@ -75,13 +75,12 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
       }
       const existing=await request(s3('HEAD'),{method:'HEAD'},signal,true);
       if(existing){
-        let matches;try{matches=contentLength(existing)===size;}finally{await existing.body?.cancel();}
-        if(full&&matches){
+        await existing.body?.cancel();
+        if(full){
           const r=await request(s3('GET'),{},signal);
-          try{matches=same(await digest(r.body,signal),original);}catch(e){if(!o.overwrite)throw e;matches=false;}
+          if(!same(await digest(r.body,signal),original))throw Error('Destination differs; existing object not uploaded');
         }
-        if(matches&&!o.overwrite)return;
-        if(!matches&&!o.overwrite)throw Error('Destination differs; use --overwrite');
+        return; // B2 same-key uploads create versions: never re-upload an existing key.
       }
       const body=await read(),m=meter(full);const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
       try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg'}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}

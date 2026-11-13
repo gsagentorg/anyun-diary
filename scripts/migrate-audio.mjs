@@ -27,7 +27,7 @@ function parse(args) {
   const command=args.shift(), o={command,concurrency:4,'timeout-ms':120000,out:'static/audio'};
   if(!['transfer','pull','push-s3','verify'].includes(command)) throw Error('Command: transfer | pull | push-s3 | verify');
   for(let i=0;i<args.length;i++) { const m=/^--([a-z-]+)(?:=(.*))?$/.exec(args[i]); if(!m)throw Error('Invalid option'); const [,k,v]=m;
-    if(['dry-run','overwrite','source-api'].includes(k)){if(v!==undefined)throw Error('Flag takes no value');o[k]=true;}
+    if(['dry-run','overwrite','source-api','verify-full'].includes(k)){if(v!==undefined)throw Error('Flag takes no value');o[k]=true;}
     else if(['concurrency','timeout-ms','out'].includes(k)){o[k]=v??args[++i];if(!o[k]||o[k].startsWith('--'))throw Error('Missing option value');}
     else throw Error('Unknown option');
   }
@@ -39,8 +39,9 @@ async function request(u,init,signal,missing=false) {
   if(!r.ok){const retry=r.headers.get('retry-after');await r.body?.cancel();throw Error('HTTP '+r.status+(r.status===429?' throttled; Retry-After '+(/^[0-9]+$/.test(retry??'')?retry+' seconds':'unspecified/date; consult provider'):'')+'; no automatic retry');}
   if(r.headers.get('content-encoding')&&r.headers.get('content-encoding')!=='identity'){await r.body?.cancel();throw Error('Encoded response unsupported');}return r;
 }
-function meter(){const h=createHash('sha256');let bytes=0,first=Buffer.alloc(0);const stream=new Transform({transform(c,e,cb){bytes+=c.length;h.update(c);if(first.length<4)first=Buffer.concat([first,c.subarray(0,4-first.length)]);cb(null,c);}});return {stream,result(){if(first.toString()!=='OggS')throw Error('Invalid OggS');return {bytes,sha256:h.digest('hex')};}};}
+function meter(full=true){const h=full?createHash('sha256'):null;let bytes=0,first=Buffer.alloc(0);const stream=new Transform({transform(c,e,cb){bytes+=c.length;h?.update(c);if(first.length<4)first=Buffer.concat([first,c.subarray(0,4-first.length)]);cb(null,c);}});return {stream,result(){if(first.toString()!=='OggS')throw Error('Invalid OggS');return {bytes,sha256:h?.digest('hex')};}};}
 async function digest(body,signal){const m=meter();await pipeline(body,m.stream,new Writable({write(c,e,cb){cb();}}),{signal});return m.result();}
+function contentLength(r){const l=r.headers.get('content-length');if(l===null||!/^[0-9]+$/.test(l)||!Number.isSafeInteger(+l))throw Error('Missing/invalid Content-Length');return +l;}
 const same=(a,b)=>a.bytes===b.bytes&&a.sha256===b.sha256;
 export async function run(args=process.argv.slice(2),env=process.env,cwd=process.cwd()) {
   const o=parse([...args]);const data=JSON.parse(await readFile(join(cwd,'src/lib/data.json'),'utf8'));
@@ -63,20 +64,30 @@ export async function run(args=process.argv.slice(2),env=process.env,cwd=process
       const s3=method=>presign({...cfg,key:name,method});
       const read=async()=>source?(await request(from,{},signal)).body:createReadStream(local);
       if(o.command==='verify'){await digest(await read(),signal);return;}
-      let size;if(source){const r=await request(from,{method:'HEAD'},signal);try{const l=r.headers.get('content-length');if(l===null||!/^[0-9]+$/.test(l)||!Number.isSafeInteger(+l))throw Error('Missing/invalid Content-Length');size=+l;}finally{await r.body?.cancel();}}else size=(await stat(local)).size;
+      let size;if(source){const r=await request(from,{method:'HEAD'},signal);try{size=contentLength(r);}finally{await r.body?.cancel();}}else size=(await stat(local)).size;
       if(o['dry-run'])return;
-      const original=await digest(await read(),signal);if(original.bytes!==size)throw Error('Source length mismatch');
+      const full=o['verify-full']||o.command==='pull';
+      const original=full?await digest(await read(),signal):null;if(original&&original.bytes!==size)throw Error('Source length mismatch');
       if(o.command==='pull'){
         try{const old=await digest(createReadStream(local),signal);if(same(old,original))return;if(!o.overwrite)throw Error('Existing backup differs; use --overwrite');}catch(e){if(e.code!=='ENOENT')throw e;}
         await mkdir(dir,{recursive:true});const tmp=local+'.part';let created=false;
         try{const sink=createWriteStream(tmp,{flags:'wx'});sink.on('open',()=>{created=true;});const m=meter();await pipeline(await read(),m.stream,sink,{signal});if(!same(m.result(),original))throw Error('Source changed');await rename(tmp,local);}finally{if(created)await rm(tmp,{force:true});}return;
       }
-      const existing=await request(s3('GET'),{},signal,true);
-      if(existing){const old=await digest(existing.body,signal);if(same(old,original))return;if(!o.overwrite)throw Error('Destination differs; use --overwrite');}
-      const body=await read(),m=meter();const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
-      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg',...(!o.overwrite?{'if-none-match':'*'}:{})}},signal);await r.body?.cancel();await pump;if(!same(m.result(),original))throw Error('Source changed during upload');}
+      const existing=await request(s3('HEAD'),{method:'HEAD'},signal,true);
+      if(existing){
+        let matches;try{matches=contentLength(existing)===size;}finally{await existing.body?.cancel();}
+        if(full&&matches){
+          const r=await request(s3('GET'),{},signal);
+          try{matches=same(await digest(r.body,signal),original);}catch(e){if(!o.overwrite)throw e;matches=false;}
+        }
+        if(matches&&!o.overwrite)return;
+        if(!matches&&!o.overwrite)throw Error('Destination differs; use --overwrite');
+      }
+      const body=await read(),m=meter(full);const pump=pipeline(body,m.stream,{signal});pump.catch(()=>ac.abort());
+      try{const r=await request(s3('PUT'),{method:'PUT',body:m.stream,duplex:'half',headers:{'content-length':String(size),'content-type':'audio/ogg',...(!o.overwrite?{'if-none-match':'*'}:{})}},signal);await r.body?.cancel();await pump;const sent=m.result();if(sent.bytes!==size)throw Error('Source length mismatch during upload');if(full&&!same(sent,original))throw Error('Source changed during upload');}
       catch(e){ac.abort();m.stream.destroy();await pump.catch(()=>{});throw e;}
-      const r=await request(s3('GET'),{},signal);if(!same(await digest(r.body,signal),original))throw Error('Destination integrity mismatch');
+      const head=await request(s3('HEAD'),{method:'HEAD'},signal);try{if(contentLength(head)!==size)throw Error('Destination length mismatch');}finally{await head.body?.cancel();}
+      if(full){const r=await request(s3('GET'),{},signal);if(!same(await digest(r.body,signal),original))throw Error('Destination integrity mismatch');}
     }finally{clearTimeout(timer);ac.abort();}
   }
   await Promise.all(Array.from({length:Math.min(o.concurrency,names.length)},async()=>{while(next<names.length){const i=next++;try{await object(names[i]);}catch(e){failures.push('object '+(i+1)+': '+(e.name==='AbortError'?'Timeout/cancelled':/https?:|Signature|Credential/i.test(e.message)?'Network failure (redacted)':e.message));}}}));

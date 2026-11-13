@@ -37,17 +37,29 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --concurr
 
 ## 2. 完整性、重跑与失败
 
-每对象先流式读源，计算字节数与 SHA256；若目标存在，完整流式 GET 目标并比较。
-一致才跳过；不同默认失败，只有明确 --overwrite 才覆盖。首次写入使用 If-None-Match: *，提供商必须支持条件 PUT 以避免并发覆盖。
-上传再次流式读源，边传边计数/计算 SHA256；随后完整 GET 目标，与上传前源摘要比较。
-HEAD、ETag、长度一致都不单独作为完整性证明。OggS 仅格式魔数检查，不是解码验证。
-源需在迁移期间保持稳定；变化可能导致已写目标验证失败，此时不要切换服务。
+默认只做大小检查：每对象 HEAD 源取得 Content-Length，再 HEAD 目标检查存在性及大小。
+已有目标同大小就跳过（不 GET 源或目标）；大小不同默认报冲突，需明确 --overwrite。
+需要写入时只 GET 源一次，直接流式 PUT；检查传输字节数、OggS 魔数、PUT 成功和写后目标 HEAD 大小。默认完全不 GET 目标，不预下载源计算摘要。
+**大小一致不是密码学完整性证明：同长度但内容不同的目标可能被跳过，传输中的同长度损坏也不能靠大小检查发现。** --overwrite 可强制写入，包括同大小对象。
+首次非覆盖写入使用 If-None-Match: *，提供商必须支持条件 PUT 以避免并发覆盖。
 
-不写续传日志，不依赖本地状态；重跑始终重新验证源和目标。中断不能按字节续传，但已一致对象无需重传。
+需要完整校验时显式加 --verify-full：
+
+~~~bash
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --verify-full
+~~~
+
+此模式先完整流式读源计算 SHA256；目标同大小时完整 GET 并比摘要，一致才作为已验证对象跳过。
+上传再次读源并比摘要，写后完整 GET 目标比 SHA256。目标损坏/不同默认失败；--verify-full --overwrite 可覆盖损坏目标（包括 OggS 损坏）。
+因此新对象通常读取源两遍、完整下载目标一遍；已存在同大小目标也要完整下载校验，会增加流量、请求及时间成本，使用前确认配额。默认模式不承担这些完整校验下载成本。
+HEAD、ETag、长度一致不单独作为完整性证明；OggS 仅格式魔数检查，不是解码验证。
+源需在迁移期间保持稳定；完整校验可检测摘要变化，默认模式不能检测同长度变化。
+
+不写续传日志，不依赖本地状态；重跑按所选模式重新检查。中断不能按字节续传。
+按文件粒度占用并发槽：一份文件完成下载→上传→所选检查后，该槽立即领取下一份；绝非整批下载完再整批上传。
 流有 backpressure；内存随并发和流缓冲增长，不随音频文件大小增长。传输无音频临时文件。
 失败会取消相关流；每对象有超时。429 报 Retry-After 提示并失败，无隐藏重试；按提供商要求等待后人工重跑。
 迁移只读源，不删除旧对象。输出不含端点、签名或密钥，失败按清单对象序号定位。
-读取源两遍、目标校验完整下载会产生流量费用，迁移前确认配额。
 
 ## 3. 可选本地冷备
 
@@ -59,12 +71,12 @@ node scripts/migrate-audio.mjs verify --out /YOUR-BACKUP-DIR-HERE
 node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs push-s3 --out /YOUR-BACKUP-DIR-HERE
 ~~~
 
-pull 和 push-s3 也使用流；pull 以 .part 临时文件落备份目录后改名。已有备份先做摘要比较，不同需 --overwrite。
+push-s3 默认大小检查，也可加 --verify-full。pull 保留完整摘要比较作为可选冷备流程；两者都使用流；pull 以 .part 临时文件落备份目录后改名。已有备份先做摘要比较，不同需 --overwrite。
 verify 检查清单内文件可读及 OggS 魔数，不替代远端摘要比较，不报告清单外对象。
 
 ## 4. 切换、验收与回滚
 
-1. 所有迁移对象验证成功才进入切换；保留旧源及原部署 env。
+1. 所有迁移对象通过所选检查（默认仅大小检查，非完整摘要验证）才进入切换；保留旧源及原部署 env。
 2. 本机 env 不会自动传到 Vercel。Vercel 项目 Settings → Environment Variables 配置服务端 AUDIO_S3_*，PUBLIC_AUDIO_STORAGE=s3；清空不再使用的 PUBLIC_AUDIO_BASE，重新部署。自托管按其服务配置加载同样变量并重启。
 3. 页面抽样播放、拖动 seek/Range、锁屏 MediaSession，检查请求确实到新目标且无 404；再选一个未缓存曲目。
 4. 验证 /api/audio-url?f=... 跳转，非法路径被拒。该公开端点不是用户鉴权或防盗刷措施。

@@ -50,6 +50,7 @@ globalThis.setInterval = (fn) => { timers.set(++timerId, fn); return timerId; };
 globalThis.clearInterval = (id) => timers.delete(id);
 const events = [];
 class AudioStub {
+  crossOrigin = 'anonymous';
   paused = true; volume = 0.7; currentTime = 0; duration = 120; src = '';
   listeners = new Map();
   addEventListener(name, fn) { const handlers = this.listeners.get(name) ?? []; handlers.push(fn); this.listeners.set(name, handlers); }
@@ -144,6 +145,16 @@ ok(sleep.fired && player.pos === positionBeforeEnd, 'deadline prevents auto-next
 const baselineTimers = timers.size;
 for (let i = 0; i < 4; i++) { startSleep(1); cancelSleep(); }
 ok(timers.size === baselineTimers, 'no leaked sleep intervals');
+
+// Non-CORS media must never enter an irreversible Web Audio graph.
+const unsafeAudio = new AudioStub(); unsafeAudio.crossOrigin = null;
+const unsafeEngine = new SleepAudio(unsafeAudio);
+const graphBeforeUnsafe = graphCount;
+ok((await unsafeEngine.prepare()).includes('兼容渐弱'), 'non-CORS media uses volume fallback');
+ok(graphCount === graphBeforeUnsafe && unsafeAudio.volume === 0.7, 'non-CORS prepare preserves sound and creates no graph');
+unsafeEngine.tick('gentle', 0);
+ok(unsafeAudio.volume === 0.7, 'fade starts at original volume');
+unsafeEngine.restore();
 
 // No AudioContext: relative HTML volume fallback and honest unsupported notice.
 delete globalThis.AudioContext;

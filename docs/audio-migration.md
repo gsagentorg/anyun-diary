@@ -101,3 +101,29 @@ node scripts/test-migrate-audio.mjs
 ## 实时日志
 
 默认逐文件实时输出时间、清单序号和阶段（源检查、目标检查、上传、验证、跳过、完成）；错误立即写 stderr，不再等整批结束。末尾仍保留失败汇总。日志不输出签名 URL 或凭据，按序号对应清单。
+
+## 标准 S3 桶 CORS（显式 opt-in）
+
+先运行 `npm ci` 安装锁定依赖。桶配置使用维护中的 AWS SDK v3（`@aws-sdk/client-s3`）的标准 GetBucketCors / PutBucketCors，XML 解析、序列化与 SigV4 由 SDK 负责，不依赖 B2 原生 API。对象传输仍使用原流式实现。
+
+独立配置（不需要 SOURCE_AUDIO_BASE 或音频清单）：
+
+~~~bash
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE --dry-run
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE --cors-origin http://localhost:5173
+~~~
+
+随迁移在任何对象请求之前配置并读回验证，失败即停止迁移：
+
+~~~bash
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE --dry-run
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE --concurrency 4
+~~~
+
+将命令中的占位 origin 替换为规范的小写 http(s) origin；只允许 scheme + host + 可选端口，不能带尾斜线、路径、查询、fragment、账号密码或通配符。可重复 --cors-origin，没有默认全开放规则。此值是**浏览器播放页面的 origin**，不是 AUDIO_S3_ENDPOINT、SOURCE_AUDIO_BASE、PUBLIC_AUDIO_BASE 或预签 URL；不会由这些变量推导。服务端 AUDIO_S3_* 与公共部署变量保持原来的分离，密钥不输出。沿用 AUDIO_S3_PATH_STYLE，--timeout-ms 限制整个 CORS 流程（默认 120000ms），SDK maxAttempts=1，无自动重试。
+
+先读取并校验现有规则，仅 NoSuchCORSConfiguration 视为空配置；403、网络失败、普通 404、服务不支持都失败关闭，绝不清空配置或回退到提供商专用接口。需要 s3:GetBucketCORS、s3:PutBucketCORS（具体服务权限名称以其文档为准）。仅新增/合并 ID 为 anyun-diary-audio-read-v1 的专属规则：GET、HEAD；AllowedHeaders=Range；ExposeHeaders=Accept-Ranges、Content-Range、Content-Length、ETag。其它规则保留，先前已批准的 managed origins 保留；相同规则不再 PUT。ID 冲突、非预期权限形状、无效配置直接拒绝，需管理员检查，不擅自修复。写后完整读回比较，不一致报错且不回滚覆盖他人更改。
+
+PutBucketCors 是**整份替换**：本工具先读再合并，但 S3 无通用原子 CAS；并发管理员在 GET 与 PUT 之间修改仍可能被覆盖。执行期间必须暂停其它桶 CORS 管理操作。只保留标准 S3 SDK 可表达的配置；提供商私有扩展不在可保留承诺内，使用前人工核查。--dry-run 仍 GET，显示脱敏拟定规则（隐藏既有 origin/ID），不 PUT，不证明写权限；transfer dry-run 随后仍检查源 HEAD。
+
+CORS 不是用户鉴权、桶公开权限或防盗刷。它也不会自动启用 Web Audio：本任务**没有实现 audio.crossOrigin='anonymous' 的播放器 opt-in**；仍须独立修改并验证播放器、302 与最终音频响应的 CORS 链路，不能把桶配置成功当成 Web Audio 已恢复。

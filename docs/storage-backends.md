@@ -1,6 +1,6 @@
 # 音频存储后端方案（多存储支持）
 
-状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。默认迁移直接从已有 HTTP 实例流式传到 S3，不经本地音频文件；以文件为单位下载→上传→检查后释放并发槽，不做整批暂存。默认只 HEAD 大小检查，写入时源 GET 一次、目标不 GET；同大小但内容不同的已有目标可能跳过，大小一致不是密码学完整性证明。`--overwrite` 强制写入；`--verify-full` 才启用源 SHA256、目标完整 GET 校验及摘要一致续跑，增加源重复读取与目标下载成本。可选 `pull` 冷备不属迁移前置。迁移操作手册见 `docs/audio-migration.md`。
+状态：设计已定（2026-11-10 owner 拍板）；本档落地 s3 兼容存储，其余两档为路线图。默认迁移直接从已有 HTTP 实例流式传到 S3，不经本地音频文件；以文件为单位下载→上传→检查后释放并发槽，不做整批暂存。默认只 HEAD 大小检查，写入时源 GET 一次、目标不 GET；同大小但内容不同的已有目标可能跳过，大小一致不是密码学完整性证明。目标 key 已存在始终跳过（`--overwrite` 只用于本地 pull）；`--verify-full` 才启用源 SHA256、目标完整 GET 校验及摘要一致续跑，增加源重复读取与目标下载成本。可选 `pull` 冷备不属迁移前置。迁移操作手册见 `docs/audio-migration.md`。
 
 ## 抽象模型
 
@@ -54,3 +54,9 @@ data.json 曲目只存文件名，存储类型是全局部署配置，不做逐�
 ## 验证
 
 `npm run test:storage`：SigV4 确定性、URL 结构、排序、过期参数、文件名校验。
+
+### 标准桶 CORS 配置
+
+迁移工具支持独立 `configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE`，以及 `transfer --configure-cors --cors-origin https://YOUR-PLAYBACK-HOST-HERE`。显式 origin 可重复，无通配默认；标准 AWS SDK GetBucketCors → 保留合并 → PutBucketCors → 读回验证，非 B2 专用。managed GET/HEAD 规则不改变其他规则，不撤销之前批准的 origins；403/网络/不支持均失败关闭。整份替换无原子 CAS，运行时须暂停其它管理员修改，提供商私有扩展需人工核查。完整 env、dry-run 与命令见 `docs/audio-migration.md`。
+
+CORS origin 是浏览器站点 origin，不是服务端 S3 endpoint 或音频源地址。CORS 不提供鉴权；本功能不实现播放器 `crossOrigin="anonymous"` opt-in，不承诺 Web Audio 自动可用。

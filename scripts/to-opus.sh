@@ -12,6 +12,8 @@ n=0; total=$(ls "$SRC" | wc -l)
 for f in "$SRC"/*; do
   base=$(basename "$f")
   ext="${base##*.}"
+  # 只转音频；lrc 等旁置文件无音频流，喂给 ffmpeg 会报 no stream
+  case "$ext" in m4a|mp3|wav|flac|aac|ogg) ;; *) continue ;; esac
   out="$DST/${base%.*}.opus"
   [ -s "$out" ] && { echo "skip $base"; continue; }
   ffmpeg -y -v error -i "$f" -c:a libopus -b:a 64k -application audio "$out"

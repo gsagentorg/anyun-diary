@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
-  import { SLEEP_MODES, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage } from './sleep-curves';
+  import { SLEEP_MODES, isSleepMode, MIN_SLEEP_MINUTES, MIN_SLEEP_SECONDS, sleepCurvePath, sleepCurvePoint, sleepMinutesFromHandle, sleepProgress, sleepSecondsFromHandle, sleepStage } from './sleep-curves';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
   let progress = $state(0);
@@ -34,6 +34,11 @@
   let shuffleEl = $state<HTMLElement>();
   let dotsW = 36;
   let customMin = $state(15);
+  // 直接拖动曲线进度点，保留所选总时长。
+  let sleepSvgEl = $state<SVGSVGElement>();
+  let sleepPreviewBase = $state(0); // 预览态拖动开始时选中的整档分钟数；0 表示未拖动
+  let sleepDragging = false;
+  let sleepDragBaseMinutes = 15;
   let dragging = $state(false);
   let playing = $state(false);
   let rateInput = $state(1);
@@ -45,11 +50,29 @@
   const sleepRunning = $derived(sleep.until != null && sleep.started != null);
   const shownSleepMode = $derived(sleepRunning ? activeSleepMode : selectedSleepMode);
   const sleepTotalMs = $derived(sleepRunning ? sleep.until! - sleep.started! : 0);
-  const sleepPosition = $derived(sleepProgress(sleepTotalMs, sleep.remaining));
+  const sleepPosition = $derived(sleep.progress);
   const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition));
   const sleepPercent = $derived(Math.floor(sleepPosition * 100 + 1e-9));
   const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition));
   const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleep.remaining)));
+  const sleepBaseSeconds = $derived(sleepRunning ? Math.max(1, sleep.plannedSeconds) : 0);
+  const sleepPreviewMinutes = $derived(Math.max(MIN_SLEEP_MINUTES, Math.round(Number(customMin) || 0)));
+  // 手柄横坐标：运行中按剩余比例落位；预览态取拖动后的位置，否则停在右端表示整档。
+  const sleepCurveWidth = $derived.by(() => {
+    if (sleepRunning) {
+      const base = Math.max(1, sleep.plannedSeconds);
+      const minP = Math.min(180, (180 * MIN_SLEEP_SECONDS) / base);
+      const p = (180 * Math.max(0, sleep.remaining)) / base;
+      return Math.max(minP, Math.min(180, p));
+    }
+    if (sleepPreviewBase > 0) return Math.max(0, Math.min(180, (180 * sleepPreviewMinutes) / sleepPreviewBase));
+    return 180;
+  });
+  const sleepHandleLabel = $derived(
+    sleepRunning
+      ? `睡眠结束时间手柄，剩余 ${fmtClockShort(sleep.remaining)}，左右拖动或方向键调整`
+      : `睡眠时长手柄，当前 ${sleepPreviewMinutes} 分钟，左右拖动或方向键调整`,
+  );
 
   onMount(() => { initRate(); initDedup(); initSession(); initSleep(); });
 
@@ -195,8 +218,54 @@
   }
 
   function pick(minutes: number | null, afterTrack = false) {
+    sleepPreviewBase = 0;
     startSleep(minutes, afterTrack);
     // Keep status/capability feedback visible after arming; close explicitly as usual.
+  }
+
+  // —— 睡眠曲线右端可拖拽手柄 ——
+  function sleepHandleCoord(e: PointerEvent): number {
+    const svg = sleepSvgEl;
+    if (!svg) return sleepCurveWidth;
+    const matrix = svg.getScreenCTM();
+    if (!matrix) return sleepPoint.x;
+    const point = svg.createSVGPoint();
+    point.x = e.clientX; point.y = e.clientY;
+    return Math.max(0, Math.min(180, point.matrixTransform(matrix.inverse()).x));
+  }
+
+  function applySleepHandle(handleX: number) {
+    if (sleepRunning) seekSleepProgress(handleX / 180);
+  }
+
+  function sleepHandleDown(e: PointerEvent) {
+    if (e.button !== 0 && e.pointerType === 'mouse') return;
+    e.preventDefault();
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    sleepDragging = true;
+    if (!sleepRunning && sleepPreviewBase === 0) sleepPreviewBase = sleepPreviewMinutes;
+    sleepDragBaseMinutes = sleepPreviewBase || sleepPreviewMinutes;
+  }
+
+  function sleepHandleMove(e: PointerEvent) {
+    if (!sleepDragging) return;
+    e.preventDefault();
+    applySleepHandle(sleepHandleCoord(e));
+  }
+
+  function sleepHandleUp(e: PointerEvent) {
+    if (!sleepDragging) return;
+    sleepDragging = false;
+    (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+  }
+
+  function sleepHandleKey(e: KeyboardEvent) {
+    const delta = e.key === 'ArrowLeft' ? -9 : e.key === 'ArrowRight' ? 9 : 0;
+    if (!delta) return;
+    e.preventDefault();
+    if (!sleepRunning && sleepPreviewBase === 0) sleepPreviewBase = sleepPreviewMinutes;
+    sleepDragBaseMinutes = sleepPreviewMinutes;
+    applySleepHandle(sleepPoint.x + delta);
   }
 
   // 倍速按钮角标：整数省小数，否则两位小数
@@ -345,15 +414,26 @@
   </label>
   {#if sleepRunning}<p class="mt-1 px-1 text-2xs font-medium">当前运行：{shownSleepMode.label}</p>{/if}
   <p class="px-1 text-2xs leading-relaxed opacity-70">{shownSleepMode.description}</p>
-  <svg class="my-1 h-12 w-full text-accent" viewBox="-4 0 188 44" role="img" aria-label={`${shownSleepMode.label}音量变化示意，横轴为时间，纵轴为相对分贝${sleepRunning ? `；当前位置：已过${sleepPercent}%，${currentSleepStage}` : ''}`}>
+  <svg bind:this={sleepSvgEl} class="my-1 h-12 w-full text-accent" viewBox="-4 0 188 44" role="group" aria-label={`${shownSleepMode.label}音量变化示意，横轴为时间，纵轴为相对分贝${sleepRunning ? `；当前位置：已过${sleepPercent}%，${currentSleepStage}` : ''}；拖动曲线上的点调整渐弱进度`}>
     <path d="M0,38 H180" fill="none" stroke="currentColor" opacity="0.2" />
     <path d={sleepCurvePath(shownSleepMode.id)} fill="none" stroke="currentColor" stroke-width="2" />
     {#if sleepRunning}
       <line x1={sleepPoint.x} x2={sleepPoint.x} y1="1" y2="40" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
-      <circle data-sleep-position cx={sleepPoint.x} cy={sleepPoint.y} r="3.5" fill="currentColor" stroke="var(--color-base-100)" stroke-width="1.5" />
+      <g data-sleep-handle role="slider" tabindex="0"
+        aria-label="睡眠渐弱进度，左右拖动曲线上的点"
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={sleepPercent}
+        class="cursor-ew-resize" style="touch-action:none"
+        onpointerdown={sleepHandleDown} onpointermove={sleepHandleMove}
+        onpointerup={sleepHandleUp} onpointercancel={sleepHandleUp} onkeydown={sleepHandleKey}>
+        <circle cx={sleepPoint.x} cy={sleepPoint.y} r="10" fill="transparent" />
+        <circle data-sleep-position cx={sleepPoint.x} cy={sleepPoint.y} r="3.5" fill="currentColor" stroke="var(--color-base-100)" stroke-width="1.5" />
+      </g>
     {/if}
   </svg>
   <div class="mb-1 flex justify-between px-1 text-2xs opacity-50"><span>开始</span><span>停止</span></div>
+  {#if !sleepRunning && sleepPreviewBase > 0}
+    <p class="mb-1 px-1 text-2xs text-accent" role="status">自定义 {sleepPreviewMinutes} 分钟</p>
+  {/if}
   {#if sleepRunning}
     <div class="mb-2 flex flex-wrap justify-between gap-x-2 px-1 text-2xs tabular-nums" data-sleep-stage>
       <span>已过 {fmtClockShort(sleepElapsed)} · {sleepPercent}%</span><span class="text-accent">{currentSleepStage}</span>
@@ -378,6 +458,7 @@
       min="1"
       max="600"
       bind:value={customMin}
+      oninput={() => { sleepPreviewBase = 0; }}
       class="w-16 rounded-md border border-base-300 bg-base-200 px-1.5 py-0.5 text-xs tabular-nums"
       aria-label="自定义睡眠分钟数"
     />

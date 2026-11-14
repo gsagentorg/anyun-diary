@@ -1,7 +1,7 @@
 <script lang="ts">
   import Sheet from './Sheet.svelte';
   import { player, getAudio } from '$lib/player.svelte.ts';
-  import { hasLyrics, lyricIndexAt } from '$lib/lyrics';
+  import { hasLyrics, lyricDisplayIndexAt, sameTimeGroupBounds } from '$lib/lyrics';
   import { dateCard } from '$lib/types';
   import { LocateFixed } from 'lucide-svelte';
 
@@ -26,8 +26,25 @@
 
   const clip = $derived(player.track?.clip ?? null);
   const lines = $derived(clip?.lyrics ?? []);
-  const idx = $derived(lyricIndexAt(clip?.lyrics, posAudio));
-  const activeIdx = $derived(idx < 0 ? 0 : idx);
+  const clipDur = $derived(clip ? clip.offsetEnd - clip.offsetStart : Infinity);
+  const idx = $derived(lyricDisplayIndexAt(clip?.lyrics, posAudio, clipDur));
+  /** 同刻多行（合唱/同唱）与收尾超界行（展示层折叠到结尾）：整组快速闪过，每行短暂停留；滚动锚定组首防抖（owner 2026-11-07） */
+  const FLASH_MS = 450;
+  const group = $derived(sameTimeGroupBounds(clip?.lyrics, idx, clipDur));
+  let flashStep = $state(0);
+  $effect(() => {
+    const g = group;
+    flashStep = 0;
+    if (!g || g[1] === g[0]) return;
+    const lastOffset = g[1] - g[0];
+    const iv = setInterval(() => {
+      flashStep += 1;
+      if (flashStep >= lastOffset) clearInterval(iv);
+    }, FLASH_MS);
+    return () => clearInterval(iv);
+  });
+  const shownIdx = $derived(group ? group[0] + Math.min(flashStep, group[1] - group[0]) : idx);
+  const activeIdx = $derived(idx < 0 ? 0 : group ? group[0] : idx);
 
   // 切歌：进度清零（修旧进度残影）+ 回到跟随
   $effect(() => {
@@ -127,8 +144,8 @@
           >
             {#each lines as l, i (i)}
               <button
-                class="lyr-line {i === idx ? 'text-accent font-semibold' : 'opacity-55'}"
-                class:lyr-active={i === idx}
+                class="lyr-line {i === shownIdx ? 'text-accent font-semibold' : 'opacity-55'}"
+                class:lyr-active={i === shownIdx}
                 onclick={() => seekLine(i)}
                 title="点击跳到这句"
               >

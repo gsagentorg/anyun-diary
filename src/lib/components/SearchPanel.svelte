@@ -8,17 +8,15 @@
   let {
     open = $bindable(false),
     recordings,
-    rangeFrom = '',
-    rangeTo = '',
   }: {
     open: boolean;
     recordings: Recording[];
-    /** 当前日期筛选范围（有则只在范围内搜） */
-    rangeFrom?: string;
-    rangeTo?: string;
   } = $props();
 
   let q = $state('');
+  // 搜索自带的日期限定：独立于播放列表区间，默认空 = 搜全部
+  let rangeFrom = $state('');
+  let rangeTo = $state('');
   let hits = $state<SearchHit[]>([]);
   let debounce: ReturnType<typeof setTimeout> | undefined;
 
@@ -49,6 +47,29 @@
       class="w-full shrink-0 rounded-md border border-base-300 bg-base-100 px-2.5 py-1.5 text-sm outline-none transition focus:border-accent"
       aria-label="搜索关键词"
     />
+    <div class="flex shrink-0 items-center gap-1.5 text-2xs">
+      <span class="shrink-0 opacity-55">日期限定</span>
+      <input
+        type="date"
+        bind:value={rangeFrom}
+        class="min-w-0 flex-1 rounded-md border border-base-300 bg-base-100 px-1.5 py-1 outline-none transition focus:border-accent"
+        aria-label="搜索起始日期"
+      />
+      <span class="shrink-0 opacity-40">–</span>
+      <input
+        type="date"
+        bind:value={rangeTo}
+        class="min-w-0 flex-1 rounded-md border border-base-300 bg-base-100 px-1.5 py-1 outline-none transition focus:border-accent"
+        aria-label="搜索结束日期"
+      />
+      {#if rangeFrom || rangeTo}
+        <button
+          class="shrink-0 rounded-md px-1.5 py-1 hover:bg-base-200"
+          onclick={() => { rangeFrom = ''; rangeTo = ''; }}
+          title="清除日期限定"
+        >✕</button>
+      {/if}
+    </div>
     <div class="min-h-0 flex-1 overflow-y-auto">
       {#if q.trim() === ''}
         <div class="space-y-1 p-1 text-2xs leading-5 opacity-55">
@@ -58,7 +79,7 @@
             <code>title:</code> 歌名 · <code>lyrics:</code> 歌词 ·
             <code>time:</code> HH:MM 或 HH:MM-HH:MM · <code>date:</code> MM-DD 或 YYYY-MM-DD
           </p>
-          <p>多个条件用空格分隔 = 同时满足（AND）。有日期筛选时只在范围内搜。</p>
+          <p>多个条件用空格分隔 = 同时满足（AND）。日期限定独立于播放列表区间，不填 = 搜全部。</p>
         </div>
       {:else if hits.length === 0}
         <div class="p-1 text-sm opacity-50">无结果</div>

@@ -15,7 +15,10 @@ export class SleepAudio {
     const revision = ++this.revision;
     const host = globalThis as typeof globalThis & { webkitAudioContext?: typeof AudioContext };
     const Context = host.AudioContext ?? host.webkitAudioContext;
-    if (Context) {
+    // MediaElementAudioSource silently outputs zeros for non-CORS cross-origin
+    // media (including same-origin URLs redirecting to private object storage).
+    // Routing is irreversible: only opt in when the element was loaded in CORS mode.
+    if (Context && this.audio.crossOrigin === 'anonymous') {
       try {
         this.context ??= new Context();
         // Invoked synchronously from the sleep button's user gesture.

@@ -2,9 +2,9 @@ import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
 import { backend, bundledRecordings } from './backend.svelte';
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
-import { hasLyrics, lyricsFingerprint, lyricIndexAt } from './lyrics';
+import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
-import { isSleepMode, type SleepMode } from './sleep-curves';
+import { isSleepMode, MIN_SLEEP_SECONDS, type SleepMode } from './sleep-curves';
 
 export type { Track };
 export { buildRecTracks };
@@ -271,11 +271,14 @@ function updateMediaSession(t: Track) {
 export function syncLyricMetadata(t: Track | null, pos: number) {
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
   if (!t || !hasLyrics(t.clip) || !Number.isFinite(pos)) return;
-  const idx = lyricIndexAt(t.clip.lyrics, pos);
-  if (idx === mdLineIdx && mdClipFile === t.clip.opus) return;
-  mdLineIdx = idx;
+  const idx = lyricDisplayIndexAt(t.clip.lyrics, pos, t.clip.offsetEnd - t.clip.offsetStart);
+  // 同刻多行（含尾部超界折叠行）只推第一行（owner 2026-11-07：元数据无动画延迟概念）
+  const group = sameTimeGroupBounds(t.clip.lyrics, idx, t.clip.offsetEnd - t.clip.offsetStart);
+  const metaIdx = group ? group[0] : -1;
+  if (metaIdx === mdLineIdx && mdClipFile === t.clip.opus) return;
+  mdLineIdx = metaIdx;
   mdClipFile = t.clip.opus;
-  navigator.mediaSession.metadata = buildMetadata(t, idx < 0 ? null : t.clip.lyrics![idx].text);
+  navigator.mediaSession.metadata = buildMetadata(t, metaIdx < 0 ? null : t.clip.lyrics![metaIdx].text);
 }
 
 /** 同步系统浮层播放状态：不设的 UA 只能靠猜，iOS/macOS 锁屏控件可能因此卡在过期状态 */
@@ -687,12 +690,14 @@ export const sleep = $state<{
   started: number | null;
   afterTrack: boolean;
   remaining: number;
+  progress: number;
+  plannedSeconds: number; // 本次定时原始总时长：曲线手柄按它换算剩余比例
   fired: boolean;
   preset: SleepMode;
   mode: SleepMode; // 本次已启动的方式，和下一次选择分开
   notice: string | null;
-}>({ until: null, started: null, afterTrack: false, remaining: 0, fired: false,
-  preset: 'gentle', mode: 'gentle', notice: null });
+}>({ until: null, started: null, afterTrack: false, remaining: 0, progress: 0, plannedSeconds: 0,
+  fired: false, preset: 'gentle', mode: 'gentle', notice: null });
 
 const SLEEP_PRESET_KEY = 'anyun-sleep-preset-v1';
 export function initSleep() {
@@ -714,10 +719,11 @@ function sleepAudio() {
 /** Public for deterministic clock tests and foreground recovery. */
 export function syncSleep(now = Date.now(), reschedule = true) {
   if (sleep.until == null || sleep.started == null) return;
+  sleep.progress = Math.max(0, Math.min(1, (now - sleep.started) / (sleep.until - sleep.started)));
   sleep.remaining = Math.max(0, Math.ceil((sleep.until - now) / 1000));
   if (now >= sleep.until) { stopForSleep(); return; }
   if (sleep.mode !== 'off') {
-    sleepAudio().tick(sleep.mode, (now - sleep.started) / (sleep.until - sleep.started));
+    sleepAudio().tick(sleep.mode, sleep.progress);
     if (reschedule) sleepAudio().schedule(sleep.mode, sleep.started, sleep.until, now);
   }
 }
@@ -745,8 +751,9 @@ export function startSleep(minutes: number | null, afterTrack = false) {
   }
   sleep.mode = sleep.preset;
   sleep.started = Date.now();
-  sleep.until = sleep.started + minutes! * 60000;
-  sleep.remaining = Math.ceil(minutes! * 60);
+  sleep.plannedSeconds = Math.ceil(minutes! * 60);
+  sleep.until = sleep.started + sleep.plannedSeconds * 1000;
+  sleep.remaining = sleep.plannedSeconds;
   const run = sleepRun;
   if (sleep.mode !== 'off') {
     sleep.notice = '正在启用渐弱音频引擎…';
@@ -759,6 +766,31 @@ export function startSleep(minutes: number | null, afterTrack = false) {
   sleepTimer = setInterval(() => syncSleep(Date.now(), false), 100);
 }
 
+/**
+ * 曲线手柄拖拽：只拉伸时间轴，保持 started / preset / mode 语义不变。
+ * remainingSeconds 是「从现在起」的剩余秒数；重排 WebAudio 自动化并刷新 tick。
+ */
+export function adjustSleepEnd(remainingSeconds: number) {
+  if (sleep.until == null || sleep.started == null) return;
+  if (!Number.isFinite(remainingSeconds)) return;
+  const seconds = Math.max(MIN_SLEEP_SECONDS, Math.round(remainingSeconds));
+  const now = Date.now();
+  sleep.fired = false;
+  sleep.until = now + seconds * 1000;
+  sleep.remaining = seconds;
+  syncSleep(now, true);
+}
+
+/** Seek the curve phase while preserving the selected total duration. */
+export function seekSleepProgress(progress: number) {
+  if (sleep.until == null || !Number.isFinite(progress)) return;
+  const t = Math.max(0, Math.min(1, progress));
+  const now = Date.now(), duration = sleep.plannedSeconds * 1000;
+  sleep.started = now - t * duration;
+  sleep.until = sleep.started + duration;
+  syncSleep(now, true);
+}
+
 /** 取消睡眠定时 */
 export function cancelSleep() {
   ++sleepRun;
@@ -768,6 +800,7 @@ export function cancelSleep() {
   sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
+  sleep.plannedSeconds = 0;
   sleep.notice = null;
 }
 
@@ -781,6 +814,7 @@ function stopForSleep() {
   sleep.started = null;
   sleep.afterTrack = false;
   sleep.remaining = 0;
+  sleep.plannedSeconds = 0;
   sleep.fired = true;
   setMediaPlaybackState('paused');
 }

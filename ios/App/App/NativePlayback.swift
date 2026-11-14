@@ -44,6 +44,9 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var resumeAfterInterruption = false
     private var wantsPlayback = false
     private var lastSave = Date.distantPast
+    private let audioSessionQueue = DispatchQueue(label: "anyun.audio-session")
+    private var audioActivationToken = UUID()
+    private var audioActivationPending = false
     private let savedKey = "anyun-native-playback-v1"
 
     public override func load() {
@@ -141,7 +144,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.tick()
             if call.getBool("replace") == true || previous != self.currentID {
                 self.loadCurrent(autoplay: false)
-            } else if self.wantsPlayback { self.audio.rate = self.rate }
+            } else if self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
             self.tick(); self.persist(); self.publish()
             call.resolve(self.snapshot())
         }
@@ -155,7 +158,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             case "rate":
                 self.tick()
                 self.rate = Float(min(8, max(0.01, call.getDouble("value") ?? 1)))
-                if self.wantsPlayback { self.audio.rate = self.rate }
+                if self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
             case "next": self.step(1)
             case "previous": self.step(-1)
             case "random": self.random()
@@ -170,6 +173,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentID: String { queue.indices.contains(pos) ? queue[pos]["id"] as? String ?? "" : "" }
     private var expired: Bool { sleepState.until.map { Date().timeIntervalSince1970 * 1000 >= $0 } ?? false }
     private func loadCurrent(autoplay: Bool, at: Double = 0) {
+        audioActivationToken = UUID(); audioActivationPending = false
         errorMessage = ""; wantsPlayback = false; audio.pause(); itemObserver = nil
         guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String, let url = URL(string: raw) else {
             audio.replaceCurrentItem(with: nil); publish(); return
@@ -192,20 +196,49 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         sleepState.fired = false
         guard audio.currentItem != nil else { errorMessage = "没有可播放的曲目"; return false }
         if audio.currentItem?.status == .failed { errorMessage = audio.currentItem?.error?.localizedDescription ?? "加载失败，请重新选播"; return false }
-        do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
-            let duration = audio.currentItem?.duration.seconds ?? 0
-            if duration.isFinite && duration > 0 && audio.currentTime().seconds >= duration { seek(0) }
-            // The app may have been suspended while paused: refresh gain before any sound.
-            tick()
-            if sleepState.fired { return true }
-            errorMessage = ""; wantsPlayback = true
-            audio.playImmediately(atRate: rate)
-            activateSession(); publish(); return true
-        } catch { errorMessage = error.localizedDescription; publish(); return false }
+        let duration = audio.currentItem?.duration.seconds ?? 0
+        if duration.isFinite && duration > 0 && audio.currentTime().seconds >= duration { seek(0) }
+        tick()
+        if sleepState.fired { return true }
+        errorMessage = ""; wantsPlayback = true
+        audioActivationPending = true
+        let token = UUID()
+        audioActivationToken = token
+        // Category changes and legacy activation can block; keep both off the UI thread.
+        audioSessionQueue.async {
+            let session = AVAudioSession.sharedInstance()
+            let complete: (Bool, Error?) -> Void = { activated, error in
+                DispatchQueue.main.async {
+                    guard self.audioActivationToken == token, self.wantsPlayback else { return }
+                    self.audioActivationPending = false
+                    guard activated else {
+                        self.wantsPlayback = false
+                        self.errorMessage = error?.localizedDescription ?? "音频会话激活失败"
+                        self.publish(); return
+                    }
+                    self.tick()
+                    guard self.wantsPlayback, !self.sleepState.fired else { return }
+                    self.audio.playImmediately(atRate: self.rate)
+                    self.activateSession(); self.publish()
+                }
+            }
+            do {
+                try session.setCategory(.playback, mode: .default)
+                if #available(iOS 27.0, *) {
+                    session.activate(options: [], completionHandler: complete)
+                } else {
+                    try session.setActive(true)
+                    complete(true, nil)
+                }
+            } catch { complete(false, error) }
+        }
+        publish()
+        return true
     }
-    private func pause() { wantsPlayback = false; audio.pause(); publish() }
+    private func pause() {
+        audioActivationToken = UUID(); audioActivationPending = false
+        wantsPlayback = false; audio.pause(); publish()
+    }
     private func seek(_ seconds: Double) {
         guard seconds.isFinite else { return }
         audio.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600)) { [weak self] _ in
@@ -245,6 +278,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     private func finishSleep() {
         // Pause before restoring normal volume so no full-volume tail escapes.
+        audioActivationToken = UUID(); audioActivationPending = false
         wantsPlayback = false; resumeAfterInterruption = false; audio.pause()
         sleepState.finish()
         audio.volume = 1; persist(); publish()
@@ -272,7 +306,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         return ["queue": summary, "pos": pos, "history": history, "redo": redo, "played": played,
                 "shuffle": shuffle, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": time.isFinite ? time : 0, "duration": duration.isFinite ? duration : 0,
-                "playing": audio.timeControlStatus == .playing, "loading": audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                "playing": audio.timeControlStatus == .playing, "loading": audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
     }

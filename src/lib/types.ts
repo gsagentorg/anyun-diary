@@ -99,6 +99,7 @@ export function hueOf(title: string): number {
 }
 
 /** 切片音频基础地址：默认同源 /audio；Vercel 等静态托管不带宽音频时用 PUBLIC_AUDIO_BASE 指向外部 */
+import { backend, isNativeApp } from './backend.svelte';
 import { env as _env } from '$env/dynamic/public';
 export const AUDIO_BASE = ((_env && _env.PUBLIC_AUDIO_BASE) as string | undefined ?? '').replace(/\/+$/, '');
 /** 存储档位：local（同源/直链）| s3（经 /api/audio-url 预签） */
@@ -106,6 +107,7 @@ export const AUDIO_STORAGE = ((_env && (_env.PUBLIC_AUDIO_STORAGE as string | un
 
 /** 切片音频 URL（文件名含空格/中文，需编码）；s3 档返回端点 URL，服务端 302 到预签地址 */
 export function audioUrl(opus: string): string {
+  if (isNativeApp()) return `${backend.base}/audio/` + encodeURIComponent(opus);
   if (AUDIO_STORAGE === 's3') return '/api/audio-url?f=' + encodeURIComponent(opus);
   return `${AUDIO_BASE}/audio/` + encodeURIComponent(opus);
 }

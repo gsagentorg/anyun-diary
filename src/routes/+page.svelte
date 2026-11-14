@@ -1,27 +1,14 @@
 <script lang="ts">
   import { theme, toggleTheme } from '$lib/theme.svelte.ts';
   import { onMount } from 'svelte';
-  import { validateCatalog } from '$lib/catalog-schema.js';
-  import type { DiaryData } from '$lib/types';
   import { setPlayerCatalog } from '$lib/player.svelte.ts';
-  let data = $state<DiaryData | null>(null);
-  let catalogError = $state('');
   onMount(() => {
-    let stopped = false;
-    const load = async () => {
-      try {
-        const response = await fetch('/api/catalog', { cache: 'no-store' });
-        if (!response.ok) throw new Error('catalog unavailable');
-        const next = validateCatalog(await response.json()) as DiaryData;
-        if (stopped) return;
-        data = next;
-        setPlayerCatalog(next.recordings);
-        catalogError = '';
-      } catch { if (!stopped) catalogError = '目录加载失败；保留上次目录，将自动重试。'; }
-    };
-    void load();
-    const timer = setInterval(load, 30_000);
-    return () => { stopped = true; clearInterval(timer); };
+    void fetchIndex();
+    const timer = setInterval(() => void fetchIndex(), 30_000);
+    return () => clearInterval(timer);
+  });
+  $effect(() => {
+    if (backend.recordings) setPlayerCatalog(backend.recordings);
   });
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
@@ -31,8 +18,9 @@
   import Playlist from '$lib/Playlist.svelte';
   import QueueOverlay from '$lib/components/QueueOverlay.svelte';
   import LyricsSheet from '$lib/components/LyricsSheet.svelte';
+  import BackendSheet from '$lib/components/BackendSheet.svelte';
+  import { backend, fetchIndex, isNativeApp } from '$lib/backend.svelte';
   import { validRange } from '$lib/playlist-core';
-  import type { Recording } from '$lib/types';
   import { page } from '$app/state';
   import { browser } from '$app/environment';
   import { ListMusic, Sun, Moon, Monitor, Search } from 'lucide-svelte';
@@ -89,7 +77,8 @@
 
   $effect(() => {
     let id: ReturnType<typeof setInterval> | undefined;
-    if (!LIVE_URL) {
+    // App 内没有 /api/live（服务端代理端点），跳过轮询，避免每 60s 白打一次 404
+    if (!LIVE_URL || isNativeApp()) {
       liveInfo = null;
       return;
     }
@@ -107,7 +96,7 @@
   });
 
   // 首页与播放器恢复共享同一份经校验的运行时目录
-  const recordings: Recording[] = $derived(data?.recordings ?? []);
+  const recordings = $derived(backend.recordings ?? []);
 
   // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
   let plOpen = $state(true);
@@ -260,9 +249,10 @@
   </div>
   </div>
 
-  {#if catalogError}<p role="alert">{catalogError}</p>{:else if !data}<p role="status">正在加载目录…</p>{/if}
+  {#if backend.error}<p role="alert">{backend.error}</p>{:else if !backend.recordings}<p role="status">正在加载目录…</p>{/if}
   <QueueOverlay />
   <LyricsSheet />
+  <BackendSheet />
   <SearchPanel bind:open={searchOpen} {recordings} />
 
   {#if current === 0}

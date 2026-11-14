@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
+  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { SLEEP_MODES, isSleepMode, MIN_SLEEP_MINUTES, MIN_SLEEP_SECONDS, sleepCurvePath, sleepCurvePoint, sleepMinutesFromHandle, sleepProgress, sleepSecondsFromHandle, sleepStage } from './sleep-curves';
@@ -281,7 +281,7 @@
 
   function closePlayer() {
     getAudio().pause();
-    player.track = null;
+    stopCurrent();
   }
 
   // ⋮ 菜单点击外部关闭：不在菜单面板、也不在 ⋮ 按钮内 → 收起（浏览器守卫）
@@ -477,7 +477,7 @@
     </p>
   {/if}
   {#if sleep.notice}<p class="mt-1 px-1 text-2xs leading-relaxed text-warning" role="status">{sleep.notice}</p>{/if}
-  <p class="mt-1 px-1 text-2xs leading-relaxed opacity-50">仅调整本播放器音量；取消或结束后恢复。锁屏、后台执行受浏览器和系统限制。</p>
+  <p class="mt-1 px-1 text-2xs leading-relaxed opacity-50">仅调整本播放器音量；取消或结束后恢复。App 内由原生执行；网页端受浏览器和系统限制。</p>
   {#if sleep.until != null || sleep.afterTrack}
     <button
       class="mt-1 w-full rounded-md px-2 py-1 text-left text-xs text-warning transition hover:bg-base-200"
@@ -553,6 +553,7 @@
   {@const t = player.track}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
     <div class="mx-auto flex min-h-14 max-w-6xl flex-nowrap items-center gap-2 px-3 py-1 sm:gap-3 sm:px-4" bind:this={barEl}>
+      {#if player.error}<span class="text-xs text-warning" role="alert">{player.error}</span>{/if}
       <!-- 左区：播放/暂停 + 曲目信息 -->
       <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button

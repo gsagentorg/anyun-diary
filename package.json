@@ -10,7 +10,7 @@
     "data": "python3 scripts/build_data.py",
     "audio": "bash scripts/to-opus.sh",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:data && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:blob && npm run test:storage && npm run test:catalog",
+    "test": "npm run test:data && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:blob && npm run test:storage && npm run test:catalog && npm run test:native-audio && npm run test:backend",
     "test:data": "python3 scripts/test_build_data.py",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
@@ -23,6 +23,8 @@
     "test:blob": "node --test scripts/test-upload-blob.mjs",
     "test:storage": "vite-node scripts/test-storage.mjs",
     "data:publish": "node scripts/publish-data.mjs",
+    "test:native-audio": "vite-node scripts/test-native-audio.mjs",
+    "test:backend": "vite-node scripts/test-backend.mjs",
     "test:catalog": "python3 scripts/test_derive_catalog.py && vite-node scripts/test-catalog.mjs"
   },
   "devDependencies": {
@@ -40,6 +42,9 @@
     "@types/node": "^26.6.6"
   },
   "dependencies": {
+    "@capacitor/cli": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
+    "@capacitor/ios": "^8.6.0",
     "@vercel/analytics": "^2.0.1",
     "bits-ui": "^2.5.0",
     "lucide-svelte": "^0.545.0",

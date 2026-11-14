@@ -129,7 +129,7 @@ static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，
 155 个 opus（264MB）是**可从 NAS 切片重新生成的产物**（`npm run audio`），因此：
 
 - **不进 git 跟踪**（`.gitignore` 已排除 `static/audio/`），也不进 Vercel 部署包（`.vercelignore`）。
-- 站点按 `${PUBLIC_AUDIO_BASE}/audio/<文件名>` 取音频；留空则用同源 `/audio`。
+- Web 从同源 `/api/catalog` 读取运行时目录；App 从运行时配置的后端 `/api/catalog` 读取。`objects/<hash>.opus` 始终走该后端 `/api/audio-url` 签名重定向；旧文件名保留 `/audio/<文件名>` 兼容。
 
 三种托管方式：
 
@@ -194,6 +194,22 @@ node --env-file=.env scripts/upload-blob.mjs --from-remote
 
 本地已有音频时用 `npm run audio:upload`；预览为 `npm run audio:upload -- --dry-run`。
 离线迁移逻辑验证：`npm run test:blob`（模拟下载和 Blob，不访问真实存储）。
+
+## iOS App（Capacitor）
+
+> **状态（2026-11-07）：壳已跑通** —— 真机验证通过，播放正常（.opus 在现代 iOS WebKit 可直接解码，无需转格式）。
+> **原生播放已接入**：iOS 直接选歌即可使用 AVPlayer；后台队列、系统媒体控制和睡眠定时由原生持有。构建及真机验收见 [iOS 原生播放器验收](docs/ios-opus-test.md)。
+
+纯静态单页打进 App（无服务端）：
+
+```bash
+DEPLOY_TARGET=capacitor npm run build && npx cap sync ios
+```
+
+- App 首次启动填写 HTTPS 后端地址（不带 `/audio`），保存于 localStorage；目录请求 `<地址>/api/catalog`，不可变音频请求 `<地址>/api/audio-url`。构建期 `PUBLIC_AUDIO_BASE` 可作为默认后端。
+- 壳内启用 `CapacitorHttp` 全局接管 fetch，绕过 WKWebView 的 CORS 限制，后端站点无需开跨域；音频走 `<audio>` 加载，本就不受 CORS 约束。
+- Web 与 App 共用经校验的动态目录和播放器恢复数据。加载失败保留上次成功目录并自动重试；首次加载显示状态，不回退到旧 bundled 清单。App 未配置后端时不请求静态壳自身的 `/api/catalog`。
+- `/api/live`（直播状态）是服务端代理端点，App 内不可用，直播条恒为兜底版式。
 
 ## 本地常驻（可选）
 

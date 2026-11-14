@@ -224,3 +224,7 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 - [x] 前端视觉重构（见 `docs/frontend-refactor-plan.md`，已完成于 `refactor/frontend` 分支）
 - [ ] 合并 `refactor/frontend` 到 `main` 前重跑 Lighthouse 可访问性验收
+
+## 独立数据发布
+
+部署与数据更新解耦的配置及唯一更新命令见 [数据发布说明](docs/data-publication.md)。

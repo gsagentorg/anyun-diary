@@ -21,10 +21,12 @@ globalThis.Audio = class {
   pause() { this.paused = true; }
 };
 
-const { player, initSession, toggleShuffle, step, setRate, getAudio, prependAt, __resetSessionGuardForTest } = await import('../src/lib/player.svelte.ts');
+const { player, setPlayerCatalog, initSession, toggleShuffle, step, setRate, getAudio, prependAt, __resetSessionGuardForTest } = await import('../src/lib/player.svelte.ts');
 const { buildRecTracks } = await import('../src/lib/types.ts');
 const data = (await import('../src/lib/data.json')).default;
 const recs = data.recordings;
+setPlayerCatalog(recs);
+__resetSessionGuardForTest();
 const allTracks = recs.flatMap((r) => buildRecTracks(r));
 const byFile = new Map(allTracks.map((t) => [t.clip.file, t]));
 const C = ['0', '1', '2'].map((i) => [...byFile.keys()][Number(i)]);

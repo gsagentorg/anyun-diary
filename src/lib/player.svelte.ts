@@ -1,6 +1,10 @@
 import type { Clip, Recording, Track } from './types';
 import { audioUrl, buildRecTracks, dateCard } from './types';
-import diaryData from '$lib/data.json';
+let catalogRecordings: Recording[] = [];
+export function setPlayerCatalog(recordings: Recording[]) {
+  catalogRecordings = recordings;
+  if (typeof window !== 'undefined') initSession();
+}
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
@@ -574,7 +578,7 @@ export function saveSessionProgress() {
 
 /** 快照队列 → Track 列表：按 clip.file 反查，已删/改名的条目静默剔除 */
 function snapshotRebuild(queue: string[]): Track[] {
-  const recs = (diaryData as unknown as { recordings: Recording[] }).recordings;
+  const recs = catalogRecordings;
   const byFile = new Map<string, Track>();
   for (const r of recs) {
     (r.clips ?? []).forEach((c, i) => {
@@ -596,7 +600,7 @@ export function __resetSessionGuardForTest() {
 
 /** 启动恢复：读快照 → 重建队列 → 预载当前曲到进度处（保持暂停）；仅浏览器调用一次 */
 export function initSession() {
-  if (typeof window === 'undefined' || gAudio.__anyunSessionInit) return;
+  if (typeof window === 'undefined' || !catalogRecordings.length || gAudio.__anyunSessionInit) return;
   gAudio.__anyunSessionInit = true;
 
   let snap: SessionSnapshot | null = null;

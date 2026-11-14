@@ -7,7 +7,8 @@ import { isValidAudioFile, presignGet } from '$lib/server/s3-presign';
  *  未配置或校验失败：404/503，不带存储细节。 */
 export const GET: RequestHandler = async ({ url, setHeaders }) => {
   const file = url.searchParams.get('f') ?? '';
-  if (!isValidAudioFile(file)) return new Response(null, { status: 404 });
+  const immutable = /^objects\/[a-f0-9]{64}\.opus$/.test(file);
+  if (!immutable && !isValidAudioFile(file)) return new Response(null, { status: 404 });
 
   const { AUDIO_S3_ENDPOINT, AUDIO_S3_REGION, AUDIO_S3_BUCKET, AUDIO_S3_ACCESS_KEY_ID, AUDIO_S3_SECRET_ACCESS_KEY } = env;
   const prefix = (env.AUDIO_S3_KEY_PREFIX ?? 'audio/').replace(/^\/+/, '');
@@ -20,7 +21,7 @@ export const GET: RequestHandler = async ({ url, setHeaders }) => {
     endpoint: AUDIO_S3_ENDPOINT,
     region: AUDIO_S3_REGION,
     bucket: AUDIO_S3_BUCKET,
-    key: prefix + file,
+    key: immutable ? file : prefix + file,
     accessKeyId: AUDIO_S3_ACCESS_KEY_ID,
     secretAccessKey: AUDIO_S3_SECRET_ACCESS_KEY,
     expiresSeconds: Number.isFinite(ttl) ? ttl : 3600,

@@ -106,6 +106,6 @@ export const AUDIO_STORAGE = ((_env && (_env.PUBLIC_AUDIO_STORAGE as string | un
 
 /** 切片音频 URL（文件名含空格/中文，需编码）；s3 档返回端点 URL，服务端 302 到预签地址 */
 export function audioUrl(opus: string): string {
-  if (AUDIO_STORAGE === 's3') return '/api/audio-url?f=' + encodeURIComponent(opus);
+  if (opus.startsWith('objects/') || AUDIO_STORAGE === 's3') return '/api/audio-url?f=' + encodeURIComponent(opus);
   return `${AUDIO_BASE}/audio/` + encodeURIComponent(opus);
 }

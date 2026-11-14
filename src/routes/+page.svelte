@@ -1,6 +1,28 @@
 <script lang="ts">
   import { theme, toggleTheme } from '$lib/theme.svelte.ts';
-  import data from '$lib/data.json';
+  import { onMount } from 'svelte';
+  import { validateCatalog } from '$lib/catalog-schema.js';
+  import type { DiaryData } from '$lib/types';
+  import { setPlayerCatalog } from '$lib/player.svelte.ts';
+  let data = $state<DiaryData | null>(null);
+  let catalogError = $state('');
+  onMount(() => {
+    let stopped = false;
+    const load = async () => {
+      try {
+        const response = await fetch('/api/catalog', { cache: 'no-store' });
+        if (!response.ok) throw new Error('catalog unavailable');
+        const next = validateCatalog(await response.json()) as DiaryData;
+        if (stopped) return;
+        data = next;
+        setPlayerCatalog(next.recordings);
+        catalogError = '';
+      } catch { if (!stopped) catalogError = '目录加载失败；保留上次目录，将自动重试。'; }
+    };
+    void load();
+    const timer = setInterval(load, 30_000);
+    return () => { stopped = true; clearInterval(timer); };
+  });
   import Timeline from '$lib/Timeline.svelte';
   import DayStrip from '$lib/DayStrip.svelte';
   import Heatmap from '$lib/Heatmap.svelte';
@@ -84,13 +106,8 @@
     return () => clearInterval(id);
   });
 
-  // 缺字段的录像（未导出切片/无时长）补空数组，避免组件里 undefined.length
-  const recordings: Recording[] = (data.recordings as unknown as Recording[]).map((r) => ({
-    ...r,
-    duration: r.duration ?? null,
-    segments: r.segments ?? [],
-    clips: r.clips ?? [],
-  }));
+  // 首页与播放器恢复共享同一份经校验的运行时目录
+  const recordings: Recording[] = $derived(data?.recordings ?? []);
 
   // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
   let plOpen = $state(true);
@@ -243,6 +260,7 @@
   </div>
   </div>
 
+  {#if catalogError}<p role="alert">{catalogError}</p>{:else if !data}<p role="status">正在加载目录…</p>{/if}
   <QueueOverlay />
   <LyricsSheet />
   <SearchPanel bind:open={searchOpen} {recordings} />

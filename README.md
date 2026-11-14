@@ -198,7 +198,7 @@ node --env-file=.env scripts/upload-blob.mjs --from-remote
 ## iOS App（Capacitor）
 
 > **状态（2026-11-07）：壳已跑通** —— 真机验证通过，播放正常（.opus 在现代 iOS WebKit 可直接解码，无需转格式）。
-> **待办：原生交互优化**（锁屏/后台播放与媒体会话、安全区/状态栏适配、手势与滚动行为等，清单待开工时定）。
+> **原生播放已接入**：iOS 直接选歌即可使用 AVPlayer；后台队列、系统媒体控制和睡眠定时由原生持有。构建及真机验收见 [iOS 原生播放器验收](docs/ios-opus-test.md)。
 
 纯静态单页打进 App（无服务端）：
 

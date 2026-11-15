@@ -18,6 +18,7 @@
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
 AB0011111111111111111111 /* NativePlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0022222222222222222222; };
 AB0033333333333333333333 /* NativeLyrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0044444444444444444444; };
+AB0077777777777777777777 /* NativeRetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0088888888888888888888; };
 AB0055555555555555555555 /* NativeSleep.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0066666666666666666666; };
 /* End PBXBuildFile section */
 
@@ -35,6 +36,7 @@ AB0055555555555555555555 /* NativeSleep.swift in Sources */ = {isa = PBXBuildFil
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 AB0022222222222222222222 /* NativePlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayback.swift; sourceTree = "<group>"; };
 AB0044444444444444444444 /* NativeLyrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLyrics.swift; sourceTree = "<group>"; };
+AB0088888888888888888888 /* NativeRetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeRetry.swift; sourceTree = "<group>"; };
 AB0066666666666666666666 /* NativeSleep.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSleep.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -73,6 +75,7 @@ AB0066666666666666666666 /* NativeSleep.swift */ = {isa = PBXFileReference; last
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
  AB0022222222222222222222 /* NativePlayback.swift */,
  AB0044444444444444444444 /* NativeLyrics.swift */,
+ AB0088888888888888888888 /* NativeRetry.swift */,
  AB0066666666666666666666 /* NativeSleep.swift */,
 				50379B222058CBB4000EE86E /* capacitor.config.json */,
 				504EC3071FED79650016851F /* AppDelegate.swift */,
@@ -171,6 +174,7 @@ AB0066666666666666666666 /* NativeSleep.swift */ = {isa = PBXFileReference; last
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
  AB0011111111111111111111 /* NativePlayback.swift in Sources */,
  AB0033333333333333333333 /* NativeLyrics.swift in Sources */,
+ AB0077777777777777777777 /* NativeRetry.swift in Sources */,
  AB0055555555555555555555 /* NativeSleep.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

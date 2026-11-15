@@ -2,6 +2,7 @@ import UIKit
 import AVFoundation
 import MediaPlayer
 import Capacitor
+import OSLog
 
 final class DiaryBridgeViewController: CAPBridgeViewController {
     override func capacitorDidLoad() {
@@ -47,12 +48,20 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private let audioSessionQueue = DispatchQueue(label: "anyun.audio-session")
     private var audioActivationToken = UUID()
     private var audioActivationPending = false
+    private var recoveryAttempts = 0
+    private var lastProgressAt = Date()
+    private var failureDetectedAt: Date?
+    private var retryAt: Date?
+    private var lastPosition: Double = 0
+    private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "anyun", category: "Playback")
+    private let logQueue = DispatchQueue(label: "anyun.playback.log")
     private let savedKey = "anyun-native-playback-v1"
 
     public override func load() {
         DispatchQueue.main.async { self.setup() }
     }
     private func setup() {
+        diagnostic("setup")
         audio.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         var remote = MPRemoteCommandCenter.shared()
         if #available(iOS 16.0, *) {
@@ -74,7 +83,10 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             return self.onMain { self.seek(event.positionTime); return true }
         }))
         controlObserver = audio.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
-            DispatchQueue.main.async { self?.activateSession(); self?.publish() }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.activateSession(); self.publish()
+            }
         }
         timeObserver = audio.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
             self?.tick(); self?.publish()
@@ -102,8 +114,22 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         notifications.append(center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] note in
             if (note.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt) == AVAudioSession.RouteChangeReason.oldDeviceUnavailable.rawValue { self?.pause() }
         })
-        notifications.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in self?.tick(); self?.publish() })
-        notifications.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.persist(); self?.publish() })
+        for name in [AVPlayerItem.playbackStalledNotification, AVPlayerItem.failedToPlayToEndTimeNotification, AVPlayerItem.newErrorLogEntryNotification] {
+            notifications.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let self, let item = note.object as? AVPlayerItem, item === self.audio.currentItem else { return }
+                let event = item.errorLog()?.events.last
+                self.diagnostic(name.rawValue, detail: "domain=\(event?.errorDomain ?? "") code=\(event?.errorStatusCode ?? 0)")
+                if name == AVPlayerItem.failedToPlayToEndTimeNotification {
+                    self.failureDetectedAt = Date(); self.retryAt = nil
+                }
+            })
+        }
+        notifications.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            self.diagnostic("foreground")
+            self.tick(); self.publish()
+        })
+        notifications.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.diagnostic("background"); self?.persist(); self?.publish() })
         if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let items = saved["queue"] as? [[String: Any]], valid(items) {
             queue = items; pos = saved["pos"] as? Int ?? -1
             rate = (saved["rate"] as? NSNumber)?.floatValue ?? 1
@@ -172,7 +198,10 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     private var currentID: String { queue.indices.contains(pos) ? queue[pos]["id"] as? String ?? "" : "" }
     private var expired: Bool { sleepState.until.map { Date().timeIntervalSince1970 * 1000 >= $0 } ?? false }
-    private func loadCurrent(autoplay: Bool, at: Double = 0) {
+    private func loadCurrent(autoplay: Bool, at: Double = 0, recovering: Bool = false) {
+        if !recovering { recoveryAttempts = 0 }
+        lastPosition = at; lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
+        diagnostic(recovering ? "reload" : "load")
         audioActivationToken = UUID(); audioActivationPending = false
         errorMessage = ""; wantsPlayback = false; audio.pause(); itemObserver = nil
         guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String, let url = URL(string: raw) else {
@@ -182,20 +211,29 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         itemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self, item === self.audio.currentItem else { return }
-                if item.status == .failed { self.errorMessage = item.error?.localizedDescription ?? "原生音频加载失败"; self.wantsPlayback = false }
+                if item.status == .failed {
+                    self.failureDetectedAt = Date(); self.retryAt = nil
+                    self.errorMessage = item.error?.localizedDescription ?? "原生音频加载失败"
+                    let error = item.error as NSError?
+                    self.diagnostic("item-failed", detail: "domain=\(error?.domain ?? "") code=\(error?.code ?? 0)")
+                }
                 self.publish()
             }
         }
         audio.replaceCurrentItem(with: item)
         if at > 0 { seek(at) }
-        if autoplay { _ = start() }
+        if autoplay { _ = start(recovering: recovering) }
         publish()
     }
-    private func start() -> Bool {
+    private func start(recovering: Bool = false) -> Bool {
+        if !recovering { recoveryAttempts = 0 }
+        lastProgressAt = Date()
         if expired { finishSleep(); return true }
         sleepState.fired = false
         guard audio.currentItem != nil else { errorMessage = "没有可播放的曲目"; return false }
-        if audio.currentItem?.status == .failed { errorMessage = audio.currentItem?.error?.localizedDescription ?? "加载失败，请重新选播"; return false }
+        if audio.currentItem?.status == .failed {
+            loadCurrent(autoplay: false, at: lastPosition)
+        }
         let duration = audio.currentItem?.duration.seconds ?? 0
         if duration.isFinite && duration > 0 && audio.currentTime().seconds >= duration { seek(0) }
         tick()
@@ -214,10 +252,13 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                     guard activated else {
                         self.wantsPlayback = false
                         self.errorMessage = error?.localizedDescription ?? "音频会话激活失败"
+                        let failure = error as NSError?
+                        self.diagnostic("activation-failed", detail: "domain=\(failure?.domain ?? "") code=\(failure?.code ?? 0)")
                         self.publish(); return
                     }
                     self.tick()
                     guard self.wantsPlayback, !self.sleepState.fired else { return }
+                    self.lastProgressAt = Date()
                     self.audio.playImmediately(atRate: self.rate)
                     self.activateSession(); self.publish()
                 }
@@ -236,11 +277,13 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         return true
     }
     private func pause() {
+        diagnostic("pause")
         audioActivationToken = UUID(); audioActivationPending = false
         wantsPlayback = false; audio.pause(); publish()
     }
     private func seek(_ seconds: Double) {
         guard seconds.isFinite else { return }
+        lastPosition = max(0, seconds); lastProgressAt = Date()
         audio.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600)) { [weak self] _ in
             DispatchQueue.main.async { self?.persist(); self?.publish() }
         }
@@ -275,6 +318,43 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         let decision = sleepState.decision(at: Date().timeIntervalSince1970 * 1000)
         if decision.stop { finishSleep(); return }
         audio.volume = Float(decision.gain)
+        checkRecovery()
+    }
+    // Runs natively while background audio is active, and immediately on foreground.
+    private func checkRecovery() {
+        guard wantsPlayback, !audioActivationPending, audio.currentItem != nil else { return }
+        let position = audio.currentTime().seconds
+        if position.isFinite && position > lastPosition + 0.05 {
+            lastPosition = position
+            lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
+            if recoveryAttempts > 0 { diagnostic("recovered") }
+            recoveryAttempts = 0
+            return
+        }
+        if retryAt == nil {
+            let delay = NativeRetry.delay(attempt: recoveryAttempts, confirmedFailure: failureDetectedAt != nil,
+                jitter: Double.random(in: 0...1))
+            retryAt = (failureDetectedAt ?? lastProgressAt).addingTimeInterval(delay)
+        }
+        guard let deadline = retryAt, Date() >= deadline else { return }
+        recoveryAttempts = min(30, recoveryAttempts + 1)
+        diagnostic("retry", detail: "attempt=\(recoveryAttempts)")
+        loadCurrent(autoplay: true, at: lastPosition, recovering: true)
+    }
+    private func diagnostic(_ event: String, detail: String = "") {
+        // Do not write server URLs, query tokens, or song titles to diagnostics.
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(event) pos=\(pos) time=\(lastPosition) wants=\(wantsPlayback) status=\(audio.timeControlStatus.rawValue) \(detail)"
+        logger.notice("\(line, privacy: .public)")
+        logQueue.async {
+            guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
+            let url = directory.appendingPathComponent("playback.log")
+            do {
+                var data = (try? Data(contentsOf: url)) ?? Data()
+                data.append(Data((line + "\n").utf8))
+                if data.count > 256 * 1024 { data = Data(data.suffix(128 * 1024)) }
+                try data.write(to: url, options: .atomic)
+            } catch { self.logger.error("Cannot write playback log: \(error.localizedDescription, privacy: .public)") }
+        }
     }
     private func finishSleep() {
         // Pause before restoring normal volume so no full-volume tail escapes.

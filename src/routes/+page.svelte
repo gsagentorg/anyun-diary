@@ -104,7 +104,7 @@
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
       <div class="flex items-center gap-2">
         <img
-          src="/brand/avatar.jpg"
+          src="/brand/avatar.png"
           alt="安允日记"
           class="h-8 w-8 shrink-0 rounded-full border border-base-300 object-cover"
         />

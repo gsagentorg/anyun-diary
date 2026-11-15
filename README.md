@@ -240,3 +240,8 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 - [x] 前端视觉重构（见 `docs/frontend-refactor-plan.md`，已完成于 `refactor/frontend` 分支）
 - [ ] 合并 `refactor/frontend` 到 `main` 前重跑 Lighthouse 可访问性验收
+
+### 头像与 App 图标
+
+唯一源文件为 `static/brand/avatar.png`，必须是 **1024×1024、无透明通道的 RGB PNG**。页面直接引用该文件；替换头像时保持文件名和格式。
+`npm run build` 会先验证并直接复制该文件到 iOS AppIcon，不再维护 JPG 或单独转换图标。也可运行 `npm run icons` 立即同步。

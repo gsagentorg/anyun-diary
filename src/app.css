@@ -78,3 +78,8 @@ body {
     animation-iteration-count: 1 !important;
   }
 }
+
+/* Native shell: avoid accidental double-tap and form-focus zoom. */
+html.native-ios { touch-action: manipulation; }
+html.native-ios :is(input, textarea, select) { font-size: max(16px, 1em); }
+html.native-ios :is(button, [role="button"]) { -webkit-touch-callout: none; user-select: none; }

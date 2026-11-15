@@ -4,6 +4,8 @@ import { mkdtemp, mkdir, writeFile, rm, readdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { run, presign } from './migrate-audio.mjs';
+// Keep the dedicated catalog mocks in the migration regression entrypoint.
+await import('./test-catalog-migration.mjs');
 const dir=await mkdtemp(join(tmpdir(),'audio-migration-'));
 const name='中文 space.opus', audio=Buffer.from('OggShello streamed audio');
 let target=null,puts=0,mode='',requests=0,sourceGets=0,targetGets=0,events=[],conditional=false;

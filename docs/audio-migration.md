@@ -127,3 +127,27 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs transfer --configu
 PutBucketCors 是**整份替换**：本工具先读再合并，但 S3 无通用原子 CAS；并发管理员在 GET 与 PUT 之间修改仍可能被覆盖。执行期间必须暂停其它桶 CORS 管理操作。只保留标准 S3 SDK 可表达的配置；提供商私有扩展不在可保留承诺内，使用前人工核查。--dry-run 仍 GET，显示脱敏拟定规则（隐藏既有 origin/ID），不 PUT，不证明写权限；transfer dry-run 随后仍检查源 HEAD。
 
 CORS 不是用户鉴权、桶公开权限或防盗刷。它也不会自动启用 Web Audio：本任务**没有实现 audio.crossOrigin='anonymous' 的播放器 opt-in**；仍须独立修改并验证播放器、302 与最终音频响应的 CORS 链路，不能把桶配置成功当成 Web Audio 已恢复。
+
+## 动态目录原样迁移（显式 catalog 模式）
+
+此模式不读 bundled data.json，不走旧 audio/ 前缀，也不从 /api/catalog 重新序列化猜测源快照 hash。
+/api/catalog 只提供解析后的目录，没有 current/key 或原始字节；因此源使用独立认证 S3 GET，保留原快照 bytes 和 key。
+
+配置仓库外 env 的 SOURCE_S3_ENDPOINT、SOURCE_S3_REGION、SOURCE_S3_BUCKET、SOURCE_S3_ACCESS_KEY_ID、SOURCE_S3_SECRET_ACCESS_KEY、SOURCE_S3_PATH_STYLE（0/1，默认0）。命名及 endpoint 校验与目标一致；目标使用 AUDIO_S3_*，两端 KEY_PREFIX 均不用于此模式。仅注入占位模板中对应的实际值，不记录日志或入库。源只需 GET，目标需要 GET/PUT。
+
+~~~bash
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs catalog --dry-run
+node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-audio.mjs catalog --concurrency 4
+node scripts/test-catalog-migration.mjs
+~~~
+
+先认证 GET 源 catalog/current.json，校验 schemaVersion=1 与 catalogs/<sha256>.json；GET 原快照并按原 bytes 验 hash、复用正式 catalog schema 校验。仅接受 objects/<sha256>.opus，不接受旧文件名混入。
+目标已有对象始终完整 GET 验预期 hash，损坏即冲突、不覆盖；缺失音频通过流直接复制，流中及写后 GET 均验 hash 和 OggS。目标快照也先 GET 验 hash，缺失则写原始 bytes 并 GET 校验。全部成功后最后写 current，再独立 GET 验证指针。源始终只读，无 DELETE、无自动重试。
+
+最后指针 PUT 超时或网络失败时，不再 PUT，使用新的超时预算 GET current：已指向预期快照则确认成功，否则报告未提交或结果未决，须人工检查后再重跑。音频或快照阶段失败绝不发出 current PUT；但已上传的对象保留。current 是发布指针，不要求目标旧 current 内容等于新值。
+
+--dry-run 无任何 PUT，完整校验目标已有音频或源缺失待复制音频，验证源快照及目标已有快照；不证明目标写权限。catalog 模式始终强校验，--verify-full 无需添加；不支持 --source-api、--overwrite 或 CORS 配置。旧 transfer/pull/push-s3/verify/configure-cors 完全保留。
+
+音频按槽位并发、backpressure 流式复制，无音频临时文件；目录元数据每份上限64 MiB，超限失败。--timeout-ms 为每音频完整管线及各元数据/指针阶段期限。错误仅显示对象序号，无私有 URL/签名；重跑重新 GET 验证，不支持字节续传。
+
+B2 默认不发送条件头；--conditional-put 仍为显式 opt-in。GET 检查与 PUT 非原子，迁移期间必须独占目标 key 写入及 current 发布权，暂停源发布以固定迁移版本。并发写者不能靠本工具互斥，不应同时运行迁移和发布器。所有前述旧模式的大小检查说明不适用于 catalog。

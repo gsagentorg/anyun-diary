@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { validateCatalog, validatePointer } from '../src/lib/catalog-schema.js';
 import { readFile, stat, mkdir, rename, rm } from 'node:fs/promises';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -26,7 +27,7 @@ function number(v,label,max) { if(!/^[0-9]+$/.test(String(v)) || +v<1 || +v>max)
 function url(v,label) { let u; try{u=new URL(v);}catch{throw Error('Invalid '+label);} if(!['http:','https:'].includes(u.protocol)||u.username||u.password||u.search||u.hash) throw Error('Invalid '+label); return u; }
 function parse(args) {
   const command=args.shift(), o={command,concurrency:4,'timeout-ms':120000,out:'static/audio'};
-  if(!['transfer','pull','push-s3','verify','configure-cors'].includes(command)) throw Error('Command: transfer | pull | push-s3 | verify | configure-cors');
+  if(!['transfer','pull','push-s3','verify','configure-cors','catalog'].includes(command)) throw Error('Command: transfer | pull | push-s3 | verify | configure-cors | catalog');
   for(let i=0;i<args.length;i++) { const m=/^--([a-z-]+)(?:=(.*))?$/.exec(args[i]); if(!m)throw Error('Invalid option'); const [,k,v]=m;
     if(['dry-run','overwrite','source-api','verify-full','conditional-put','configure-cors'].includes(k)){if(v!==undefined)throw Error('Flag takes no value');o[k]=true;}
     else if(k==='cors-origin'){(o.origins??=[]).push(v??args[++i]);}
@@ -85,8 +86,60 @@ function meter(full=true){const h=full?createHash('sha256'):null;let bytes=0,fir
 async function digest(body,signal){const m=meter();await pipeline(body,m.stream,new Writable({write(c,e,cb){cb();}}),{signal});return m.result();}
 function contentLength(r){const l=r.headers.get('content-length');if(l===null||!/^[0-9]+$/.test(l)||!Number.isSafeInteger(+l))throw Error('Missing/invalid Content-Length');return +l;}
 const same=(a,b)=>a.bytes===b.bytes&&a.sha256===b.sha256;
+
+// Metadata has a fixed cap; audio stays in backpressured streams.
+async function migrateCatalog(o,env) {
+  if(o.overwrite||o['configure-cors']||o['source-api']||o.origins)throw Error('Unsupported catalog option');
+  function config(prefix){
+    const get=k=>env[prefix+k];
+    for(const k of ['ENDPOINT','REGION','BUCKET','ACCESS_KEY_ID','SECRET_ACCESS_KEY'])if(!get(k))throw Error('Missing '+prefix+k);
+    const ep=url(get('ENDPOINT'),'storage endpoint');
+    if(ep.pathname!=='/'||!/^[a-z0-9][a-z0-9.-]*$/.test(get('BUCKET'))||!/^[a-z0-9-]+$/.test(get('REGION'))||![undefined,'0','1'].includes(get('PATH_STYLE')))throw Error('Invalid catalog storage configuration');
+    return {ep:ep.origin,region:get('REGION'),bucket:get('BUCKET'),ak:get('ACCESS_KEY_ID'),sk:get('SECRET_ACCESS_KEY'),pathStyle:get('PATH_STYLE')==='1',prefix:''};
+  }
+  const source=config('SOURCE_S3_'),target=config('AUDIO_S3_');
+  const call=(cfg,method,key,signal,body,missing=false)=>request(presign({...cfg,method,key}),{method,...(body?{body,duplex:'half',headers:{'content-type':key.startsWith('objects/')?'audio/ogg':'application/json',...(o['conditional-put']&&key!=='catalog/current.json'?{'if-none-match':'*'}:{})}}:{})},signal,missing);
+  async function bounded(fn){const ac=new AbortController(),timer=setTimeout(()=>ac.abort(),o.timeout);try{return await fn(ac.signal);}finally{clearTimeout(timer);ac.abort();}}
+  async function bytes(response,signal){const chunks=[];let n=0;for await(const c of response.body){signal.throwIfAborted();n+=c.length;if(n>64*1024*1024)throw Error('Catalog metadata exceeds 64 MiB');chunks.push(c);}return Buffer.concat(chunks);}
+  const {pointer,payload,data}=await bounded(async signal=>{
+    const pointer=validatePointer(JSON.parse(await bytes(await call(source,'GET','catalog/current.json',signal),signal)));
+    const payload=await bytes(await call(source,'GET',pointer.key,signal),signal);
+    if(pointer.key!=='catalogs/'+hash(payload)+'.json')throw Error('Source snapshot integrity mismatch');
+    return {pointer,payload,data:validateCatalog(JSON.parse(payload))};
+  });
+  const keys=[...new Set(data.recordings.flatMap(r=>r.clips.map(c=>c.opus)))];
+  if(keys.some(k=>!/^objects\/[a-f0-9]{64}\.opus$/.test(k)))throw Error('Catalog mode requires content-hash keys');
+  let next=0;const failures=[];
+  await Promise.all(Array.from({length:Math.min(o.concurrency,keys.length)},async()=>{
+    while(next<keys.length){const i=next++,key=keys[i],expected=key.slice(8,-5);
+      try{await bounded(async signal=>{
+        const existing=await call(target,'GET',key,signal,undefined,true);
+        if(existing){if((await digest(existing.body,signal)).sha256!==expected)throw Error('Destination conflict');return;}
+        const response=await call(source,'GET',key,signal);
+        if(o['dry-run']){if((await digest(response.body,signal)).sha256!==expected)throw Error('Source integrity mismatch');return;}
+        const m=meter(),pump=pipeline(response.body,m.stream,{signal});pump.catch(()=>m.stream.destroy());
+        try{await (await call(target,'PUT',key,signal,m.stream)).body?.cancel();await pump;if(m.result().sha256!==expected)throw Error('Source integrity mismatch');}
+        catch(e){m.stream.destroy();await pump.catch(()=>{});throw e;}
+        if((await digest((await call(target,'GET',key,signal)).body,signal)).sha256!==expected)throw Error('Destination integrity mismatch');
+      });console.log('catalog object '+(i+1)+': verified');}catch{failures.push(i+1);console.error('catalog object '+(i+1)+': failed; details suppressed; no retry');}
+    }
+  }));
+  if(failures.length)throw Error('Catalog objects failed: '+failures.join(',')+'; pointer not written');
+  await bounded(async signal=>{
+    const existing=await call(target,'GET',pointer.key,signal,undefined,true);
+    if(existing){if(hash(await bytes(existing,signal))!==hash(payload))throw Error('Existing snapshot conflict');}
+    else if(!o['dry-run']){await (await call(target,'PUT',pointer.key,signal,payload)).body?.cancel();if(hash(await bytes(await call(target,'GET',pointer.key,signal),signal))!==hash(payload))throw Error('Snapshot integrity mismatch');}
+  });
+  if(o['dry-run']){console.log('catalog dry-run; no PUT');return;}
+  let uncertain=false;
+  try{await bounded(async signal=>{await (await call(target,'PUT','catalog/current.json',signal,Buffer.from(JSON.stringify(pointer)))).body?.cancel();});}catch{uncertain=true;}
+  try{await bounded(async signal=>{const actual=validatePointer(JSON.parse(await bytes(await call(target,'GET','catalog/current.json',signal),signal)));if(actual.key!==pointer.key)throw Error('mismatch');});}
+  catch{throw Error('Pointer '+(uncertain?'PUT outcome unresolved or not committed':'read-back mismatch')+'; inspect current before retrying');}
+  console.log('catalog verified'+(uncertain?' (uncertain PUT confirmed by read-back)':''));
+}
+
 export async function run(args=process.argv.slice(2),env=process.env,cwd=process.cwd()) {
-  const o=parse([...args]);const data=o.command==='configure-cors'?{recordings:[]}:JSON.parse(await readFile(join(cwd,'src/lib/data.json'),'utf8'));
+  const o=parse([...args]);if(o.command==='catalog')return migrateCatalog(o,env);const data=o.command==='configure-cors'?{recordings:[]}:JSON.parse(await readFile(join(cwd,'src/lib/data.json'),'utf8'));
   const names=[...new Set(data.recordings.flatMap(r=>r.clips.map(c=>c.opus).filter(Boolean)))];
   for(const n of names)if(typeof n!=='string'||!n.endsWith('.opus')||/[\\/\x00-\x1f\x7f]/.test(n)||n.includes('..'))throw Error('Unsafe catalog filename');
   let source,cfg;

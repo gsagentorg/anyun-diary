@@ -22,3 +22,20 @@
 
 使用 AVPlayerItem 的停滞、播放失败和错误日志通知：
 https://developer.apple.com/documentation/avfoundation/avplayeritem/playbackstallednotification
+
+## 消息与日志开销
+
+- 前台进度消息最多每 0.5 秒一次，不携带队列、歌词和历史列表；队列变化或回前台时发送完整状态。
+- 后台不推送 JS 事件；歌词、重试与定时停止继续在原生执行，回前台重新对账。
+- 锁屏元数据在歌词/播放状态变化时立即更新，无变化时每 5 秒校准进度。
+- 进度持久化从每 5 秒降至每 30 秒；暂停、切歌、进入后台等操作仍立即保存。
+- 关闭 iOS Capacitor 桥接报文打印，保留原生故障、重试、恢复与生命周期日志。
+
+## 控制台过滤
+
+普通 `setup/load/foreground/background/pause` 事件默认只写 `playback.log`，不输出到控制台。
+需要时在 Xcode Scheme 的环境变量添加 `ANYUN_VERBOSE_LOGS=1`，恢复这些调试输出。故障、重试和恢复继续输出，带 `[Playback]` 前缀。
+
+WebKit、PointerUI、Accessibility、Fig 等系统组件输出不由 App 的日志开关控制。
+在 Xcode 控制台按 Subsystem（App bundle ID）或 Category（`Playback`）过滤；也可搜索 `[Playback]`。
+过滤只改变显示，不修复系统报告的问题；如果同时出现白屏、无声或崩溃，需结合现象继续排查。

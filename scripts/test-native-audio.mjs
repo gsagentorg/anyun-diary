@@ -68,3 +68,18 @@ await assert.rejects(audio.play(), /interrupted/);
 await audio.play();
 assert.equal(errors.at(-1), 'interrupted', 'native errors are surfaced without poisoning later commands');
 console.log('native audio: serialization, stale events, background advance, foreground reconciliation, seek and recovery passed');
+
+const stableQueue = current.queue;
+const stableHistory = current.history;
+const { queue: omittedQueue, history: omittedHistory, redo: omittedRedo, played: omittedPlayed, ...progress } = state;
+receive({ ...progress, position: 61, sequence: ++state.sequence });
+assert.equal(audio.currentTime, 61, 'compact progress updates position');
+assert.equal(current.queue, stableQueue, 'compact progress retains the cached queue');
+assert.equal(current.history, stableHistory, 'compact progress retains history');
+receive({ ...progress, revision: 'unknown', position: 99, sequence: state.sequence + 100 });
+assert.equal(audio.currentTime, 61, 'delta from an unknown revision cannot corrupt the current snapshot');
+const priorErrors = errors.length;
+receive({ ...progress, error: 'offline', sequence: ++state.sequence });
+receive({ ...progress, error: 'offline', sequence: ++state.sequence });
+assert.equal(errors.length, priorErrors + 1, 'unchanged errors are emitted only once');
+console.log('native audio: compact progress, cached catalog, revision isolation and error deduplication passed');

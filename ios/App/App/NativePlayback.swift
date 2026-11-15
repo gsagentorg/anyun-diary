@@ -45,6 +45,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var resumeAfterInterruption = false
     private var wantsPlayback = false
     private var lastSave = Date.distantPast
+    private var lastProgressSent = Date.distantPast
+    private var catalogDirty = true
     private let audioSessionQueue = DispatchQueue(label: "anyun.audio-session")
     private var audioActivationToken = UUID()
     private var audioActivationPending = false
@@ -55,6 +57,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var lastPosition: Double = 0
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "anyun", category: "Playback")
     private let logQueue = DispatchQueue(label: "anyun.playback.log")
+    private let verboseDiagnostics = ProcessInfo.processInfo.environment["ANYUN_VERBOSE_LOGS"] == "1"
     private let savedKey = "anyun-native-playback-v1"
 
     public override func load() {
@@ -89,7 +92,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         timeObserver = audio.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
-            self?.tick(); self?.publish()
+            self?.tick(); self?.publish(progressOnly: true)
         }
         let sleepTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(sleepTimer, forMode: .common)
@@ -126,6 +129,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         notifications.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             guard let self else { return }
+            self.catalogDirty = true
             self.diagnostic("foreground")
             self.tick(); self.publish()
         })
@@ -154,6 +158,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("原生播放需要有效的 HTTPS 音频地址"); return
             }
             let previous = self.currentID
+            self.catalogDirty = true
             self.queue = items
             self.pos = call.getInt("pos") ?? -1
             self.history = call.getArray("history", Int.self) ?? []
@@ -344,7 +349,14 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private func diagnostic(_ event: String, detail: String = "") {
         // Do not write server URLs, query tokens, or song titles to diagnostics.
         let line = "\(ISO8601DateFormatter().string(from: Date())) \(event) pos=\(pos) time=\(lastPosition) wants=\(wantsPlayback) status=\(audio.timeControlStatus.rawValue) \(detail)"
-        logger.notice("\(line, privacy: .public)")
+        switch event {
+        case "setup", "load", "foreground", "background", "pause":
+            if verboseDiagnostics { logger.debug("[Playback] \(line, privacy: .public)") }
+        case "item-failed", "activation-failed":
+            logger.error("[Playback] \(line, privacy: .public)")
+        default:
+            logger.notice("[Playback] \(line, privacy: .public)")
+        }
         logQueue.async {
             guard let directory = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else { return }
             let url = directory.appendingPathComponent("playback.log")
@@ -378,36 +390,54 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         let run = { () -> MPRemoteCommandHandlerStatus in let result = work(); self.persist(); self.publish(); return result ? .success : .commandFailed }
         return Thread.isMainThread ? run() : DispatchQueue.main.sync(execute: run)
     }
-    private func snapshot() -> [String: Any] {
+    private func snapshot(includeCatalog: Bool = true, progressOnly: Bool = false) -> [String: Any] {
         let time = audio.currentTime().seconds
         let duration = audio.currentItem?.duration.seconds ?? 0
-        // Lyrics stay native; don't resend the entire catalog on every progress event.
-        let summary = queue.map { item in item.filter { $0.key != "lyrics" } }
-        return ["queue": summary, "pos": pos, "history": history, "redo": redo, "played": played,
+        var state: [String: Any] = ["pos": pos,
                 "shuffle": shuffle, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": time.isFinite ? time : 0, "duration": duration.isFinite ? duration : 0,
                 "playing": audio.timeControlStatus == .playing, "loading": audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
+        if !progressOnly {
+            state["history"] = history; state["redo"] = redo; state["played"] = played
+        }
+        if includeCatalog { state["queue"] = queue.map { item in item.filter { $0.key != "lyrics" } } }
+        return state
     }
-    private func publish() {
+    private func publish(progressOnly: Bool = false) {
         sequence += 1
-        let state = snapshot()
+        let state = snapshot(includeCatalog: false, progressOnly: true)
         if queue.indices.contains(pos) {
             let track = queue[pos]
             let title = track["title"] as? String ?? "安允日记"
             let lyric = NativeLyrics.currentLine(track["lyrics"] as? [[String: Any]] ?? [],
                 position: state["position"] as? Double ?? 0,
                 duration: (track["clipDuration"] as? NSNumber)?.doubleValue ?? 0)
-            infoCenter.nowPlayingInfo = [MPMediaItemPropertyTitle: lyric ?? title,
+            let metadata: [String: Any] = [MPMediaItemPropertyTitle: lyric ?? title,
                 MPMediaItemPropertyArtist: lyric == nil ? "安允日记" : title,
                 MPMediaItemPropertyAlbumTitle: track["album"] as? String ?? "安允日记",
                 MPNowPlayingInfoPropertyElapsedPlaybackTime: state["position"] ?? 0,
                 MPMediaItemPropertyPlaybackDuration: state["duration"] ?? 0,
                 MPNowPlayingInfoPropertyPlaybackRate: audio.rate]
+            let previous = infoCenter.nowPlayingInfo ?? [:]
+            let changed = metadata.contains { key, value in
+                if key == MPNowPlayingInfoPropertyElapsedPlaybackTime { return false }
+                return !NSDictionary(dictionary: [key: value]).isEqual(to: [key: previous[key] as Any])
+            }
+            let previousTime = previous[MPNowPlayingInfoPropertyElapsedPlaybackTime] as? Double ?? -10
+            if changed || abs((state["position"] as? Double ?? 0) - previousTime) >= 5 {
+                infoCenter.nowPlayingInfo = metadata
+            }
         } else { infoCenter.nowPlayingInfo = nil }
-        notifyListeners("state", data: state)
-        if Date().timeIntervalSince(lastSave) >= 5 { persist() }
+        // Background playback/lyrics stay native. Foreground refresh gets a full snapshot.
+        let now = Date()
+        if UIApplication.shared.applicationState == .active && (!progressOnly || now.timeIntervalSince(lastProgressSent) >= 0.5) {
+            notifyListeners("state", data: snapshot(includeCatalog: catalogDirty, progressOnly: progressOnly && !catalogDirty))
+            catalogDirty = false
+            lastProgressSent = now
+        }
+        if now.timeIntervalSince(lastSave) >= 30 { persist() }
     }
     private func persist() {
         lastSave = Date()

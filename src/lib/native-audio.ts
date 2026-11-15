@@ -11,11 +11,13 @@ export interface NativeState extends NativeConfig {
   revision: string; position: number; duration: number; playing: boolean; loading: boolean;
   error: string; sleepFired: boolean; sequence: number;
 }
+type CatalogFields = 'queue' | 'history' | 'redo' | 'played';
+export type NativeStateEvent = Omit<NativeState, CatalogFields> & Partial<Pick<NativeState, CatalogFields>>;
 export interface PlaybackBridge {
   configure(options: NativeConfig & { revision: string; replace?: boolean }): Promise<NativeState>;
   command(options: { action: string; value?: number }): Promise<NativeState>;
   getState(): Promise<NativeState>;
-  addListener(event: 'state', callback: (state: NativeState) => void): Promise<{ remove(): Promise<void> }>;
+  addListener(event: 'state', callback: (state: NativeStateEvent) => void): Promise<{ remove(): Promise<void> }>;
 }
 const bridge = registerPlugin<PlaybackBridge>('NativePlayback');
 
@@ -32,6 +34,9 @@ export class NativeAudio extends EventTarget {
   private revision = '';
   private sequence = -1;
   private disposed = false;
+  private lastState?: NativeState;
+  private lastError = "";
+  private wasLoading = false;
   private listener?: { remove(): Promise<void> };
   private onVisibility = () => {
     if (!document.hidden) void this.enqueue(() => this.driver.getState()).catch(() => {});
@@ -60,11 +65,16 @@ export class NativeAudio extends EventTarget {
     this.serial = result.catch(error => this.error(error));
     return result;
   }
-  private accept(state: NativeState) {
+  private accept(event: NativeStateEvent) {
+    // A delta is only meaningful after a complete snapshot of the same revision.
+    const complete = event.queue && event.history && event.redo && event.played;
+    if (!complete && this.lastState?.revision !== event.revision) return;
+    const state = { ...this.lastState, ...event } as NativeState;
     if (this.disposed) return;
     if (this.revision && state.revision !== this.revision) return;
     if (state.sequence < this.sequence) return;
     this.sequence = state.sequence;
+    this.lastState = state;
     const wasPaused = this.paused;
     const durationChanged = state.duration !== this.duration;
     const itemChanged = this.src !== (state.queue[state.pos]?.url ?? '');
@@ -77,9 +87,11 @@ export class NativeAudio extends EventTarget {
     if (durationChanged || itemChanged) this.dispatchEvent(new Event('loadedmetadata'));
     if (durationChanged) this.dispatchEvent(new Event('durationchange'));
     if (wasPaused !== this.paused) this.dispatchEvent(new Event(this.paused ? 'pause' : 'play'));
-    this.dispatchEvent(new Event(state.loading ? 'waiting' : 'canplay'));
+    if (this.wasLoading !== state.loading || itemChanged) this.dispatchEvent(new Event(state.loading ? 'waiting' : 'canplay'));
+    this.wasLoading = state.loading;
     this.dispatchEvent(new Event('timeupdate'));
-    if (state.error) this.error(new Error(state.error));
+    if (state.error && state.error !== this.lastError) this.error(new Error(state.error));
+    this.lastError = state.error;
   }
   dispose() {
     this.disposed = true;

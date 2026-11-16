@@ -1,8 +1,26 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { NativeAudio } from '../src/lib/native-audio.ts';
+// Source assertions only: this runner does not compile Swift or exercise iOS SDKs.
+const swift = readFileSync(new URL('../ios/App/App/NativePlayback.swift', import.meta.url), 'utf8');
+const restore = swift.slice(swift.indexOf('private func restoredQueue('), swift.indexOf('private func valid('));
+assert.ok(restore.indexOf('saved["queueJSON"]') < restore.indexOf('saved["queue"]'), 'valid JSON queue wins over legacy queue');
+assert.ok(restore.includes('JSONSerialization.jsonObject(with: data)') && restore.includes('valid(items) {'));
+assert.ok(restore.includes('if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }'), 'invalid/missing JSON falls back without remapping legacy identity or metadata');
+const validation = swift.slice(swift.indexOf('private func valid('), swift.indexOf('@objc func configure'));
+for (const field of ['monthId', '["audio"]', 'startAt']) assert.ok(!validation.includes(field), 'legacy queues need no invented audio metadata or date');
+assert.ok(swift.includes('let items = restoredQueue(saved)'));
+for (const key of ['pos', 'rate', 'shuffle', 'skipSame', 'history', 'redo', 'played', 'sleepRevision', 'sleepUntil', 'sleepStarted', 'sleepMode', 'afterTrack', 'position']) {
+  assert.ok(swift.slice(swift.indexOf('let items = restoredQueue(saved)'), swift.indexOf('private func restoredQueue(')).includes('saved["' + key + '"]'), 'restore retains ' + key);
+}
+const persist = swift.slice(swift.indexOf('private func persist()'));
+assert.ok(persist.includes('guard let data = try? JSONSerialization.data(withJSONObject: queue) else { return }'));
+assert.ok(persist.indexOf('guard let data') < persist.indexOf('saved.removeValue(forKey: "queue")'));
+assert.ok(persist.indexOf('saved["queueJSON"] = data') < persist.indexOf('UserDefaults.standard.set'), 'only persist a completely encoded migration');
 const listeners = new Map();
 globalThis.document = { hidden: false, addEventListener: (type, fn) => listeners.set(type, fn) };
-const queue = [{ id: 'a', url: 'https://audio.example/a.opus', title: 'A', key: 'A' }, { id: 'b', url: 'https://audio.example/b.opus', title: 'B', key: 'B' }];
+const fixture = id => ({ id, file:id+'.wav', opus:id+'.opus', title:id, startAt:1, duration:null, lyrics:[], monthId:'2026-01' });
+const queue = [{ audio: fixture('a'), id: 'entry-a', url: 'https://audio.example/a.opus', title: 'A', key: 'A' }, { audio: fixture('a'), id: 'entry-b', url: 'https://audio.example/b.opus', title: 'B', key: 'B' }];
 let config = { queue, pos: 0, shuffle: false, skipSame: true, history: [], redo: [], played: ['A'], rate: 1, sleepRevision: '', sleepUntil: null, sleepStarted: null, sleepMode: 'off', afterTrack: false };
 let state = { ...config, queue: [], pos: -1, revision: '', sequence: 0, position: 0, duration: 0, playing: false, loading: false, error: '', sleepFired: false };
 let receive;
@@ -31,6 +49,8 @@ let current;
 const errors = [];
 const audio = new NativeAudio(() => structuredClone(config), value => { current = value; }, message => errors.push(message), driver);
 await audio.ready;
+assert.equal(queue[0].audio.id, queue[1].audio.id);
+assert.notEqual(queue[0].id,queue[1].id);
 release = {};
 const loading = audio.sync(true);
 const playing = audio.play();
@@ -39,6 +59,7 @@ assert.deepEqual(calls, ['configure-start'], 'play must wait for queue delivery'
 release.resolve(); release = null;
 await Promise.all([loading, playing]);
 assert.equal(audio.paused, false);
+assert.equal(current.queue[0].audio.monthId,'2026-01');
 assert.deepEqual(calls, ['configure-start', 'configure-end', 'play']);
 const oldState = { ...current };
 config.pos = 1;

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import type { Recording, Clip } from './types';
+  import type { Audio } from './types';
   import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
-  import { player, playClip, adopt, buildRecTracks } from './player.svelte.ts';
-  import { buildLaneScale, grayLStar, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
+  import { player, playAudio, adopt, makeTrack } from './player.svelte.ts';
+  import { buildLaneScale, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
   import { theme } from './theme.svelte.ts';
   const grayL = (c: number) => theme.resolved === 'dark' ? lstarForRange(c, 1, 256, 72, 13) : lstarForRange(c, 1, 256);
   /** 三次贝塞尔缓动（等价 cubic-bezier(0.65,0,0.35,1)）：渐变 alpha 非线性推进 */
@@ -27,9 +27,9 @@
   import StateHint from './components/StateHint.svelte';
 
   let {
-    recordings,
+    audios,
     laneMode = 'compress',
-  }: { recordings: Recording[]; laneMode?: 'linear' | 'compress' } = $props();
+  }: { audios: Audio[]; laneMode?: 'linear' | 'compress' } = $props();
 
   const DAY = 86400;
   const CLUSTER_GAP = 600; // 与 lane-scale 默认 M 一致：>=10min 视为一簇间隔
@@ -44,12 +44,11 @@
   interface SongBlock {
     start: number; // 绝对 epoch
     end: number;
-    rec: Recording;
-    clip: Clip;
+    audio: Audio;
   }
   interface DayLane {
     dayStart: number;
-    recs: Recording[];
+    audios: Audio[];
     songs: SongBlock[];
     clipCount: number;
     songDur: number;
@@ -60,44 +59,30 @@
       timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
     });
 
-  // 按天合并：同一天的所有录像画进同一条泳道
+  // Audio 按上海自然日分泳道；分页仅限制 DOM，不截断任何一天的歌曲。
+  let dayPage = $state(0);
+  $effect(() => { void audios; dayPage = 0; });
   const lanes = $derived.by(() => {
-    const map = new Map<number, { recs: Recording[]; songs: SongBlock[] }>();
-    for (const rec of recordings) {
-      const dayStart = shDayStart(rec.start);
-      let lane = map.get(dayStart);
-      if (!lane) { lane = { recs: [], songs: [] }; map.set(dayStart, lane); }
-      lane.recs.push(rec);
-      for (const c of rec.clips ?? []) {
-        lane.songs.push({ start: rec.start + c.offsetStart, end: rec.start + c.offsetEnd, rec, clip: c });
-      }
+    const map = new Map<number, Audio[]>();
+    for (const audio of audios) {
+      const dayStart = shDayStart(audio.startAt);
+      const list = map.get(dayStart) ?? [];
+      list.push(audio); map.set(dayStart, list);
     }
-    const out = [];
-    for (const [dayStart, lane] of [...map.entries()].sort((a, b) => a[0] - b[0])) {
-      lane.songs.sort((a, b) => a.start - b.start);
-      // 重叠的歌块合并
-      const merged: SongBlock[] = [];
-      for (const s of lane.songs) {
-        const last = merged[merged.length - 1];
-        if (last && s.start <= last.end) last.end = Math.max(last.end, s.end);
-        else merged.push({ ...s });
-      }
-      out.push({
-        dayStart,
-        recs: lane.recs,
-        songs: merged,
-        clipCount: lane.recs.reduce((a, r) => a + (r.clips?.length ?? 0), 0),
-        songDur: lane.songs.reduce((a, s) => a + s.end - s.start, 0),
-      });
-    }
+    const out = [...map.entries()].sort((a,b) => b[0]-a[0]).map(([dayStart, list]) => ({
+      dayStart, audios: list,
+      songs: list.sort((a,b)=>a.startAt-b.startAt).map(audio => ({start: audio.startAt, end: Math.min(dayStart+DAY,audio.startAt+Math.max(1,audio.duration ?? 1)), audio})),
+      clipCount: list.length, songDur: list.reduce((sum,a)=>sum+(a.duration ?? 0),0),
+    }));
     return out;
   });
+  const visibleLanes = $derived(lanes.slice(dayPage * 7, dayPage * 7 + 7));
 
   function showSong(e: MouseEvent, b: SongBlock) {
-    const c = b.clip;
+    const c = b.audio;
     tip = {
       x: e.clientX, y: e.clientY,
-      html: `<b>${c.title || '（未识别）'}</b><br>${clock(b.start)}–${clock(b.end)}<br>${fmtDur(b.end - b.start)}`,
+      html: `${c.title || '（未识别）'} · ${clock(b.start)}–${clock(b.end)} · ${fmtDur(b.end - b.start)}`,
     };
   }
   function showBlank(e: MouseEvent, s: Seg) {
@@ -107,14 +92,10 @@
     };
   }
   function playSong(b: SongBlock) {
-    const idx = (b.rec.clips ?? []).findIndex((c) => c.file === b.clip.file);
-    if (idx >= 0) playClip(b.rec, idx);
+    playAudio(b.audio);
   }
   function playDay(lane: typeof lanes[number]) {
-    const tracks = lane.recs
-      .flatMap((r) => buildRecTracks(r))
-      .sort((a, b) => a.rec.start + a.clip.offsetStart - (b.rec.start + b.clip.offsetStart));
-    adopt(tracks, 0);
+    adopt(lane.audios.map(makeTrack), 0);
   }
 
   const xPct = (abs: number, dayStart: number) =>
@@ -161,7 +142,7 @@
   // compress 模式：先建全部泳道 scale（单一对象，供灰度 Map 键 c 值），再做页面级灰度归一化
   const laneScales = $derived(
     laneWidth > 0
-      ? lanes.map((lane) => ({
+      ? visibleLanes.map((lane) => ({
           lane,
           scale: buildLaneScale(
             lane.songs.map((s) => ({ start: s.start, end: s.end })),
@@ -183,6 +164,7 @@
   });
 </script>
 
+{#if lanes.length > 7}<nav class="mb-3 flex gap-4 text-sm" aria-label="泳道日期分页"><button disabled={dayPage===0} onclick={()=>dayPage--}>较新七天</button><span>{dayPage+1} / {Math.ceil(lanes.length/7)}</span><button disabled={(dayPage+1)*7>=lanes.length} onclick={()=>dayPage++}>较早七天</button></nav>{/if}
 <div class="overflow-x-auto">
   {#if lanes.length === 0}
     <StateHint kind="empty" />
@@ -190,7 +172,7 @@
   <div class="flex">
     <div class="w-24 shrink-0">
       {#if laneMode === 'linear'}<div class="mb-1 h-5"></div>{/if}
-      {#each lanes as lane (lane.dayStart)}
+      {#each visibleLanes as lane (lane.dayStart)}
         {@const dc = dateCard(lane.dayStart)}
         <div class="mb-2 flex flex-col justify-center {laneMode === 'linear' ? 'h-10' : 'h-12'}">
           <div class="flex items-center gap-1">
@@ -224,8 +206,8 @@
             {#each lane.songs as b, bi (bi)}
               {@const x1 = xPct(b.start, lane.dayStart)}
               {@const x2 = xPct(b.end, lane.dayStart)}
-              {@const hue = hueOf(b.clip.title)}
-              {@const active = player.track?.clip.file === b.clip.file}
+              {@const hue = hueOf(b.audio.title)}
+              {@const active = player.track?.audio.id === b.audio.id}
               <div
                 class="absolute top-2.5 h-5 rounded-sm transition hover:brightness-110"
                 class:ring-2={active}
@@ -274,8 +256,8 @@
                 {@const rect = rects[bi]}
                 {@const visW = rect.width}
                 {@const visLeft = rect.left}
-                {@const hue = hueOf(b.clip.title)}
-                {@const active = player.track?.clip.file === b.clip.file}
+                {@const hue = hueOf(b.audio.title)}
+                {@const active = player.track?.audio.id === b.audio.id}
                 <div
                   class="absolute top-0 h-12 cursor-pointer"
                   style:left={visLeft - HIT_PAD + 'px'} style:width={visW + HIT_PAD * 2 + 'px'}
@@ -296,7 +278,7 @@
                       <span
                         class="pointer-events-none block truncate px-1 text-2xs leading-5 text-white"
                         style:text-shadow="0 1px 2px rgb(0 0 0 / 0.45)"
-                        >{visibleTitle(b.clip.title, visW)}</span
+                        >{visibleTitle(b.audio.title, visW)}</span
                       >
                     {/if}
                   </div>
@@ -328,6 +310,6 @@
 {#if tip}
   <div class="pointer-events-none fixed z-50 max-w-xs rounded-lg border bg-base-100 p-2 text-xs shadow-lg"
     style:left={tip.x + 12 + 'px'} style:top={tip.y + 12 + 'px'}>
-    {@html tip.html}
+    {tip.html}
   </div>
 {/if}

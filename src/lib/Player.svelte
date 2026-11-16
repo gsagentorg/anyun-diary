@@ -179,6 +179,15 @@
     progress = a.currentTime;
   }
 
+  function onSeekKey(e: KeyboardEvent) {
+    if (!duration || !['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+    e.preventDefault();
+    const a = getAudio();
+    a.currentTime = e.key === 'Home' ? 0 : e.key === 'End' ? duration
+      : Math.max(0, Math.min(duration, a.currentTime + (['ArrowLeft', 'ArrowDown'].includes(e.key) ? -5 : 5)));
+    progress = a.currentTime;
+  }
+
   function onSeekDown(e: PointerEvent) {
     if (!duration) return;
     const el = e.currentTarget as HTMLElement;
@@ -357,7 +366,7 @@
     void sleep.until;
     void sleep.afterTrack;
     void foldCount;
-    void player.track?.clip.title;
+    void player.track?.audio.title;
     void player.loading;
     recalc();
   });
@@ -370,15 +379,15 @@
   // 副信息：日期 + 切片绝对起止时间（替代内部录像文件名）
   const whenLabel = $derived.by(() => {
     const t = player.track;
-    if (!t) return '';
-    const md = dateCard(t.rec.start).md;
-    const a = clock(t.rec.start + t.clip.offsetStart);
-    const b = clock(t.rec.start + t.clip.offsetEnd);
+    if (!t || t.audio.startAt == null) return '';
+    const md = dateCard(t.audio.startAt).md;
+    const a = clock(t.audio.startAt);
+    const b = clock(t.audio.startAt + (t.audio.duration ?? 0));
     return `${md} ${a}–${b}`;
   });
 
-  const total = $derived(player.playlist.length || (player.track ? (player.track.rec.clips?.length ?? 0) : 0));
-  const pos = $derived(player.pos >= 0 ? player.pos : (player.track?.index ?? 0));
+  const total = $derived(player.playlist.length);
+  const pos = $derived(player.pos >= 0 ? player.pos : (0));
   const pct = $derived(duration > 0 ? Math.min(100, (progress / duration) * 100) : 0);
 </script>
 
@@ -574,18 +583,18 @@
           <div class="flex items-baseline gap-2">
             <span
               bind:this={titleEl}
-              class="truncate leading-5 text-sm font-medium {hasLyrics(t.clip) ? 'cursor-pointer' : ''}"
+              class="truncate leading-5 text-sm font-medium {hasLyrics(t.audio) ? 'cursor-pointer' : ''}"
               aria-live="polite"
               role="button"
               tabindex="0"
-              title={hasLyrics(t.clip) ? '点击看歌词 · ' + (t.clip.title || '（未识别）') : t.clip.title || '（未识别）'}
-              onclick={() => { if (hasLyrics(t.clip)) player.lyricsOpen = true; }}
+              title={hasLyrics(t.audio) ? '点击看歌词 · ' + (t.audio.title || '（未识别）') : t.audio.title || '（未识别）'}
+              onclick={() => { if (hasLyrics(t.audio)) player.lyricsOpen = true; }}
               onkeydown={(e) => {
                 if (e.key !== 'Enter' && e.key !== ' ') return;
                 e.preventDefault();
-                if (hasLyrics(t.clip)) player.lyricsOpen = true;
+                if (hasLyrics(t.audio)) player.lyricsOpen = true;
               }}
-            >{t.clip.title || '（未识别）'}</span>
+            >{t.audio.title || '（未识别）'}</span>
             {#if sleep.until != null || sleep.afterTrack}
               <span class="shrink-0 text-2xs text-accent tabular-nums flex items-center gap-0.5"><MoonStar class="h-3 w-3" />{sleepLabel()}</span>
             {/if}
@@ -610,6 +619,7 @@
           aria-label="进度" aria-valuemin="0"
           aria-valuenow={Math.round(progress)}
           aria-valuemax={duration ? Math.round(duration) : undefined}
+          onkeydown={onSeekKey}
           onpointerdown={onSeekDown}
           onpointermove={onSeekMove}
           onpointerup={onSeekUp}

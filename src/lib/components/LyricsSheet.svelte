@@ -24,9 +24,9 @@
       timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
     });
 
-  const clip = $derived(player.track?.clip ?? null);
+  const clip = $derived(player.track?.audio ?? null);
   const lines = $derived(clip?.lyrics ?? []);
-  const clipDur = $derived(clip ? clip.offsetEnd - clip.offsetStart : Infinity);
+  const clipDur = $derived(clip ? (clip.duration ?? Infinity) : Infinity);
   const idx = $derived(lyricDisplayIndexAt(clip?.lyrics, posAudio, clipDur));
   /** 同刻多行（合唱/同唱）与收尾超界行（展示层折叠到结尾）：整组快速闪过，每行短暂停留；滚动锚定组首防抖（owner 2026-11-07） */
   const FLASH_MS = 450;
@@ -120,12 +120,12 @@
   open={player.lyricsOpen}
   onClose={() => (player.lyricsOpen = false)}
   side="right"
-  title={player.track?.clip.title || '（未识别）'}
+  title={player.track?.audio.title || '（未识别）'}
   scroll={false}
 >
   {#if player.track}
     {@const t = player.track}
-    {#if hasLyrics(t.clip)}
+    {#if hasLyrics(t.audio)}
       <div class="relative h-full">
         <div
           bind:this={boxEl}
@@ -167,7 +167,7 @@
       <div class="flex h-full min-h-0 flex-col items-center justify-center gap-1">
         <span class="text-sm opacity-60">暂无歌词</span>
         <span class="text-2xs tabular-nums opacity-40">
-          {dateCard(t.rec.start).md} {clock(t.rec.start + t.clip.offsetStart)}
+          {#if t.audio.startAt != null}{dateCard(t.audio.startAt).md} {clock(t.audio.startAt)}{/if}
         </span>
       </div>
     {/if}

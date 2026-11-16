@@ -1,67 +1,38 @@
 <script lang="ts">
-  import { theme, toggleTheme } from '$lib/theme.svelte.ts';
-  import { onMount } from 'svelte';
-  import { setPlayerCatalog } from '$lib/player.svelte.ts';
-  onMount(() => {
-    void fetchIndex();
-    const timer = setInterval(() => void fetchIndex(), 30_000);
-    return () => clearInterval(timer);
-  });
-  $effect(() => {
-    if (backend.recordings) setPlayerCatalog(backend.recordings);
-  });
-  import Timeline from '$lib/Timeline.svelte';
-  import DayStrip from '$lib/DayStrip.svelte';
-  import Heatmap from '$lib/Heatmap.svelte';
-  import { player } from '$lib/player.svelte.ts';
-  import SearchPanel from '$lib/components/SearchPanel.svelte';
-  import Playlist from '$lib/Playlist.svelte';
-  import QueueOverlay from '$lib/components/QueueOverlay.svelte';
-  import LyricsSheet from '$lib/components/LyricsSheet.svelte';
-  import BackendSheet from '$lib/components/BackendSheet.svelte';
-  import { backend, fetchIndex, isNativeApp } from '$lib/backend.svelte';
-  import { validRange } from '$lib/playlist-core';
-  import { page } from '$app/state';
-  import { browser } from '$app/environment';
-  import { ListMusic, Sun, Moon, Monitor, Search } from 'lucide-svelte';
-  import Chip from '$lib/components/Chip.svelte';
-  import * as publicEnv from '$env/static/public';
-
-  const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
-  let current = $state(0);
-  let searchOpen = $state(false);
-
-  // 状态记忆：视图 / 面板开合 / 生成日期（刷新保留；分享链接显式带范围时以 URL 为准）
-  const VIEW_KEY = 'anyun-view-v1';
-  $effect(() => {
-    if (!browser) return;
-    let v: { view?: unknown; plOpen?: unknown; rangeFrom?: unknown; rangeTo?: unknown } = {};
-    try {
-      const raw = localStorage.getItem(VIEW_KEY);
-      if (raw) v = JSON.parse(raw) as typeof v;
-    } catch {
-      /* 忽略 */
-    }
-    if (typeof v.view === 'number' && v.view >= 0 && v.view < variants.length) current = v.view;
-    if (typeof v.plOpen === 'boolean') plOpen = v.plOpen;
-    if (typeof v.rangeFrom === 'string') rangeFrom = v.rangeFrom;
-    if (typeof v.rangeTo === 'string') rangeTo = v.rangeTo;
-    const uFrom = page.url.searchParams.get('from') ?? '';
-    const uTo = page.url.searchParams.get('to') ?? '';
-    if (uFrom && uTo && validRange(uFrom, uTo)) {
-      rangeFrom = uFrom;
-      rangeTo = uTo;
-    }
-  });
-  $effect(() => {
-    if (!browser) return;
-    try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ view: current, plOpen, rangeFrom, rangeTo }));
-    } catch {
-      /* 配额/隐私模式静默 */
-    }
-  });
-
+import {onMount,untrack,tick} from 'svelte';
+import {page} from '$app/state';
+import {player,setPlayerCatalog} from '$lib/player.svelte.ts';
+import {backend,initBackend,fetchIndex,loadMonth,currentMonthId,isNativeApp} from '$lib/backend.svelte';
+import {monthBounds,shiftMonthId} from '$lib/month.js';
+import {browseWindow} from '$lib/supply.js';
+import {theme,toggleTheme} from '$lib/theme.svelte.ts';
+import * as publicEnv from '$env/static/public';
+import Chip from '$lib/components/Chip.svelte';
+let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
+let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false),previous=$state(false);
+let endAt=$state(Math.floor(Date.now()/1000)+1);
+const startAt=$derived(browseWindow(selected,endAt).startAt);
+const laneMode=$derived(page.url.searchParams.get('lane')==='linear'?'linear':'compress');
+const months=$derived((backend.manifest?.months??[]).filter(m=>m.available).sort((a,b)=>b.startAt-a.startAt));
+const refs=$derived(months.filter(m=>(m.id===selected||m.id===shiftMonthId(selected,-1))&&m.endAt>startAt&&m.startAt<endAt));
+const visibleRefs=$derived(previous?refs:refs.filter(m=>m.id===selected));
+const audios=$derived(visibleRefs.flatMap(m=>backend.months[m.id]??[]).filter(a=>a.startAt>=startAt&&a.startAt<endAt));
+const missing=$derived(refs.filter(m=>!backend.months[m.id]));
+function choose(id:string){selected=id;endAt=id===currentMonthId()?Math.floor(Date.now()/1000)+1:monthBounds(id).endAt;previous=false;}
+onMount(()=>{
+ try{const v=JSON.parse(localStorage.getItem('anyun-view-v1')??'{}');if(Number.isInteger(v.view)&&v.view>=0&&v.view<3)view=v.view;if(typeof v.plOpen==='boolean')playlistOpen=v.plOpen;rangeFrom=typeof v.rangeFrom==='string'?v.rangeFrom:'';rangeTo=typeof v.rangeTo==='string'?v.rangeTo:'';}catch{}
+ const from=page.url.searchParams.get('from')??'',to=page.url.searchParams.get('to')??'';
+ if(/^\d{4}-\d{2}-\d{2}$/.test(from)&&/^\d{4}-\d{2}-\d{2}$/.test(to)&&from<=to){rangeFrom=from;rangeTo=to;}
+ ready=true;initBackend();const timer=setInterval(()=>void fetchIndex(),30000);return()=>clearInterval(timer);
+});
+$effect(()=>{if(ready)try{localStorage.setItem('anyun-view-v1',JSON.stringify({view,plOpen:playlistOpen,rangeFrom,rangeTo}));}catch{}});
+$effect(()=>{const snapshot=Object.values(backend.months).flat();untrack(()=>setPlayerCatalog(snapshot));});
+$effect(()=>{void backend.generation;untrack(()=>choose(currentMonthId()));});
+$effect(()=>{const ids=visibleRefs.map(m=>m.id);untrack(()=>{for(const id of ids)if(!backend.months[id]&&!backend.loading[id]&&!backend.errors[id])void loadMonth(id).catch(()=>{});});});
+async function older(){previous=true;await tick();for(const ref of refs)if(!backend.months[ref.id]&&!backend.loading[ref.id])void loadMonth(ref.id).catch(()=>{});}
+function scroll(e:Event){const el=e.currentTarget as HTMLElement;if(el.scrollTop+el.clientHeight>=el.scrollHeight-40){if(!previous)void older();else if(missing.length===0&&el.scrollTop>0)shift(1);}}
+function shift(delta:number){const i=months.findIndex(m=>m.id===selected);if(months[i+delta]){choose(months[i+delta].id);}}
+function share(){const url=new URL(location.href);if(rangeFrom&&rangeTo){url.searchParams.set('from',rangeFrom);url.searchParams.set('to',rangeTo);}else{url.searchParams.delete('from');url.searchParams.delete('to');}history.replaceState(history.state,'',url);}
   // 直播间状态
   type LiveInfo = {
     live: boolean | null;
@@ -95,84 +66,9 @@
     return () => clearInterval(id);
   });
 
-  // 首页与播放器恢复共享同一份经校验的运行时目录
-  const recordings = $derived(backend.recordings ?? []);
 
-  // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
-  let plOpen = $state(true);
-  let rangeFrom = $state('');
-  let rangeTo = $state('');
-  const laneMode = $derived(
-    (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
-  );
-</script>
-
-<div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 {player.track ? 'pb-32' : ''}">
-  <header
-    class="sticky top-0 z-30 -mx-4 mb-4 border-b border-base-300 bg-base-100/85 px-4 backdrop-blur sm:-mx-6 sm:mb-6 sm:px-6 lg:-mx-8 lg:px-8"
-  >
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
-      <div class="flex items-center gap-2">
-        <img
-          src="/brand/avatar.jpg"
-          alt="安允日记"
-          class="h-8 w-8 shrink-0 rounded-full border border-base-300 object-cover"
-        />
-        <div class="min-w-0">
-          <h1 class="text-lg font-bold tracking-tight leading-none">安允日记</h1>
-          <p class="mt-1 hidden text-xs opacity-60 lg:block">
-            直播歌单时间线 · 数据由文件名 + 切片元数据自动生成
-          </p>
-        </div>
-      </div>
-
-      <div class="ml-auto flex flex-wrap items-center gap-2">
-        <div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="视图切换">
-          {#each variants as v, i}
-            <button
-              role="tab"
-              aria-selected={i === current}
-              class="rounded-full border px-3 py-1 text-sm transition {i === current
-                ? 'border-accent text-accent'
-                : 'border-base-300 opacity-60 hover:opacity-100'}"
-              onclick={() => (current = i)}
-            >
-              {v}
-            </button>
-          {/each}
-        </div>
-        <button
-          class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
-          onclick={() => (searchOpen = true)}
-          aria-label="搜索"
-          title="搜索"
-        >
-          <Search class="h-4 w-4" />
-        </button>
-        <button
-          class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
-          onclick={toggleTheme}
-          aria-label={theme.mode === 'light' ? '浅色模式' : theme.mode === 'dark' ? '深色模式' : '跟随系统'}
-          title={theme.mode === 'light' ? '浅色模式' : theme.mode === 'dark' ? '深色模式' : '跟随系统'}
-        >
-          {#if theme.mode === 'dark'}<Sun class="h-4 w-4" />
-          {:else if theme.mode === 'light'}<Moon class="h-4 w-4" />
-          {:else}<Monitor class="h-4 w-4" />{/if}
-        </button>
-        <button
-          class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {plOpen
-            ? 'border-accent text-accent'
-            : ''}"
-          onclick={() => (plOpen = !plOpen)}
-          aria-expanded={plOpen}
-        >
-          <ListMusic class="h-4 w-4" /> 播放列表
-        </button>
-      </div>
-    </div>
-  </header>
-
-  <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
+</script><svelte:head><title>安允日记</title></svelte:head>
+<main class="mx-auto max-w-[1600px] px-4 py-6 pb-32"><header class="mb-5 flex flex-wrap items-center gap-3"><h1 class="mr-auto text-xl font-bold">安允日记</h1>{#each ['泳道时间轴','日卡片','热力图'] as label,i}<button class="rounded-full border px-3 py-1" aria-pressed={view===i} onclick={()=>view=i}>{label}</button>{/each}<button onclick={()=>searchOpen=true}>搜索</button><button onclick={()=>playlistOpen=!playlistOpen}>按日期生成</button><button onclick={toggleTheme}>主题：{theme.mode}</button>{#if isNativeApp()}<button onclick={()=>backend.prompt=true}>后端设置</button>{/if}</header>
   {#if LIVE_URL}
   <section class="lg:w-[38%]" aria-label="直播间">
     {#if liveInfo && liveInfo.live === true}
@@ -231,35 +127,27 @@
   </section>
   {/if}
 
-  <div class="lg:flex-1">
-    {#if plOpen}
-      <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
-        <Playlist {recordings} bind:open={plOpen} bind:from={rangeFrom} bind:to={rangeTo} />
-      </div>
-    {:else}
-      <button
-        class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm transition hover:border-accent"
-        onclick={() => (plOpen = true)}
-        aria-expanded={plOpen}
-      >
-        <span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4" /> 播放列表</span>
-        <span class="text-xs opacity-60">展开</span>
-      </button>
-    {/if}
-  </div>
-  </div>
 
-  {#if backend.error}<p role="alert">{backend.error}</p>{:else if !backend.recordings}<p role="status">正在加载目录…</p>{/if}
-  <QueueOverlay />
-  <LyricsSheet />
-  <BackendSheet />
-  <SearchPanel bind:open={searchOpen} {recordings} />
-
-  {#if current === 0}
-    <Timeline recordings={recordings} laneMode={laneMode} />
-  {:else if current === 1}
-    <DayStrip recordings={recordings} />
-  {:else}
-    <Heatmap recordings={recordings} />
-  {/if}
-</div>
+{#if playlistOpen}{#await import('$lib/Playlist.svelte')}<p>加载日期面板…</p>{:then module}<module.default bind:open={playlistOpen} bind:from={rangeFrom} bind:to={rangeTo}/><button class="my-2 text-xs text-accent" onclick={share}>将日期范围写入分享链接</button>{/await}{/if}
+{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>void fetchIndex()}>重试目录</button></p>{:else if !backend.manifest}<div role="status" aria-label="正在加载目录" class="animate-pulse space-y-4">{#each Array(5) as _}<div class="h-16 rounded bg-base-200"></div>{/each}</div>{:else}
+<nav class="my-4 flex items-center justify-between gap-3" aria-label="月份"><button disabled={months.findIndex(m=>m.id===selected)<=0} onclick={()=>shift(-1)}>较新月份</button><select aria-label="浏览月份" value={selected} onchange={(e)=>choose(e.currentTarget.value)}>{#each months as month (month.id)}<option value={month.id}>{month.id}（{month.count}首）</option>{/each}</select><button disabled={months.findIndex(m=>m.id===selected)>=months.length-1} onclick={()=>shift(1)}>较早月份</button></nav>
+<section class="max-h-[70vh] min-h-48 overflow-auto rounded-lg border border-base-300 p-3" onscroll={scroll} aria-label="按自然月滚动浏览">
+<p class="mb-3 text-xs opacity-60">{new Date(startAt*1000).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})} — {new Date((endAt-1)*1000).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'})}</p>
+{#if audios.length}
+{#if view===0}{#await import('$lib/Timeline.svelte')}<p>加载时间轴…</p>{:then module}<module.default {audios} {laneMode}/>{/await}
+{:else if view===1}{#await import('$lib/DayStrip.svelte')}<p>加载日卡片…</p>{:then module}<module.default {audios}/>{/await}
+{:else}{#await import('$lib/Heatmap.svelte')}<p>加载热力图…</p>{:then module}<module.default {audios}/>{/await}{/if}
+{:else if visibleRefs.length&&visibleRefs.every(m=>backend.months[m.id])}<p>此自然月窗口暂无音频。</p>
+{:else if !refs.length}<p>当前窗口尚未发布或不可查询，请选择可用月份。</p>{/if}
+{#each visibleRefs as ref (ref.id)}
+{#if backend.loading[ref.id]}<div role="status" class="animate-pulse space-y-3 py-4"><div class="h-12 rounded bg-base-200"></div><p>正在加载 {ref.id}…</p></div>
+{:else if backend.errors[ref.id]}<p role="alert">{ref.id}：{backend.errors[ref.id]} <button onclick={()=>void loadMonth(ref.id).catch(()=>{})}>重试此月</button></p>{/if}
+{/each}
+{#if !previous&&refs.some(m=>m.id!==selected)}<button class="my-4 w-full rounded border border-base-300 p-3" onclick={older}>继续滚动加载前月</button>{/if}
+{#if previous&&missing.length===0}<button class="my-4 w-full rounded border border-base-300 p-3 text-sm" disabled={months.findIndex(m=>m.id===selected)>=months.length-1} onclick={()=>shift(1)}>此窗口已完整加载 · 浏览更早月份</button>{/if}
+</section>{/if}
+{#if searchOpen}{#await import('$lib/components/SearchPanel.svelte') then module}<module.default bind:open={searchOpen}/>{/await}{/if}
+{#if backend.prompt}{#await import('$lib/components/BackendSheet.svelte') then module}<module.default/>{/await}{/if}
+{#if player.queueOpen}{#await import('$lib/components/QueueOverlay.svelte') then module}<module.default/>{/await}{/if}
+{#if player.lyricsOpen}{#await import('$lib/components/LyricsSheet.svelte') then module}<module.default/>{/await}{/if}
+</main>

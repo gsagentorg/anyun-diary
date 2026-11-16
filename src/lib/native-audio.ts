@@ -1,7 +1,8 @@
+import type { Audio } from './types';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
 export const usesNativeAudio = () => typeof window !== 'undefined' && Capacitor.getPlatform() === 'ios';
-export interface NativeQueueItem { id: string; url: string; title: string; key: string; lyrics?: { t: number; text: string }[]; clipDuration?: number; album?: string; }
+export interface NativeQueueItem { id: string; audio?: Audio; url: string; title: string; key: string; lyrics?: { t: number; text: string }[]; clipDuration?: number; album?: string; }
 export interface NativeConfig {
   queue: NativeQueueItem[]; pos: number; shuffle: boolean; skipSame: boolean;
   history: number[]; redo: number[]; played: string[]; rate: number;
@@ -92,9 +93,11 @@ export class NativeAudio extends EventTarget {
   }
   sync(replace = false) {
     const config = this.config();
-    const revision = `${Date.now()}-${Math.random()}`;
-    this.revision = revision;
-    return this.enqueue(() => this.driver.configure({ ...config, revision, replace }));
+    const revision = Date.now() + '-' + Math.random();
+    return this.enqueue(() => {
+      this.revision = revision;
+      return this.driver.configure({ ...config, revision, replace });
+    });
   }
   command(action: string, value?: number) { return this.enqueue(() => this.driver.command({ action, value })); }
   load() { void this.sync(true).catch(() => {}); }

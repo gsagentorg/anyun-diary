@@ -1,50 +1,12 @@
-export interface Clip {
-  file: string;
-  opus: string;
-  offsetStart: number;
-  offsetEnd: number;
-  seg: string | null;
-  title: string;
-  /** 歌词行（lrc 解析产物，t=相对切片开头的秒） */
-  lyrics?: LyricLine[] | null;
-}
-
-/** 歌词行（lrc 解析产物，t=相对切片开头的秒） */
-export interface LyricLine {
-  t: number;
-  text: string;
-}
-export interface Segment {
-  start: number;
-  end: number;
-}
-
-export interface Recording {
-  file: string;
-  start: number; // epoch s (Asia/Shanghai)
-  duration: number | null;
-  segments: Segment[];
-  clips: Clip[];
-}
-
-export interface DiaryData {
-  generatedAt: number;
-  timezone: string;
-  recordings: Recording[];
-}
-
-/** 播放列表成员：切片 + 所属录像上下文 */
-export interface Track {
-  clip: Clip;
-  rec: Recording;
-  /** 与播放列表的关系：同一录像内的切片序号 */
-  index: number;
-}
-
-/** 生成一个录像内的所有轨道（保持切片顺序） */
-export function buildRecTracks(rec: Recording): Track[] {
-  return (rec.clips ?? []).map((clip, index) => ({ clip, rec, index }));
-}
+export interface LyricLine { t: number; text: string }
+export interface Audio { id: string; file: string; opus: string; title: string; startAt: number; duration: number | null; lyrics: LyricLine[]; monthId: string }
+/** Native legacy snapshots have no known calendar identity. */
+export type PlaybackAudio = Omit<Audio, 'startAt' | 'monthId'> & { startAt?: number; monthId?: string; legacyNative?: true };
+export interface Track { queueEntryId: string; nativeQueueId?: string; audio: PlaybackAudio }
+export interface MonthEntry { id: string; startAt: number; endAt: number; count: number; revision: string; key: string; available: boolean }
+export interface MonthManifest { schemaVersion: 2; timezone: 'Asia/Shanghai'; generatedAt: number; revision: string; months: MonthEntry[] }
+export interface AudioMonth { schemaVersion: 2; id: string; revision: string; audios: Audio[] }
+export function createTrack(audio: Audio, queueEntryId: string): Track { return { queueEntryId, audio: { ...audio, lyrics: audio.lyrics.map(l => ({ ...l })) } }; }
 
 export const fmtOffset = (s: number) => {
   const m = Math.floor(s / 60), sec = Math.floor(s % 60);
@@ -102,13 +64,9 @@ export function hueOf(title: string): number {
 import { backend, isNativeApp } from './backend.svelte';
 import { env as _env } from '$env/dynamic/public';
 export const AUDIO_BASE = ((_env && _env.PUBLIC_AUDIO_BASE) as string | undefined ?? '').replace(/\/+$/, '');
-/** 存储档位：local（同源/直链）| s3（经 /api/audio-url 预签） */
-export const AUDIO_STORAGE = ((_env && (_env.PUBLIC_AUDIO_STORAGE as string | undefined)) ?? 'local');
-
-/** 切片音频 URL（文件名含空格/中文，需编码）；s3 档返回端点 URL，服务端 302 到预签地址 */
+/** Audio keys use the same route on web and the runtime-selected native backend. */
 export function audioUrl(opus: string): string {
-  const base = isNativeApp() ? backend.base : '';
-  if (opus.startsWith('objects/') || AUDIO_STORAGE === 's3') return base + '/api/audio-url?f=' + encodeURIComponent(opus);
-  if (isNativeApp()) return base + '/audio/' + encodeURIComponent(opus);
-  return `${AUDIO_BASE}/audio/` + encodeURIComponent(opus);
+  if (/^https?:\/\//.test(opus)) return opus;
+  const base = isNativeApp() ? backend.base : AUDIO_BASE;
+  return base + '/api/' + opus.split('/').map(encodeURIComponent).join('/');
 }

@@ -1,20 +1,20 @@
 <script lang="ts">
-  import type { Recording } from './types';
+  import type { Audio } from './types';
   import { shDayStart } from './playlist-core';
   import { fmtDur, dateCard } from './types';
-  import { adopt, buildRecTracks } from './player.svelte.ts';
+  import { adopt, makeTrack } from './player.svelte.ts';
   import { theme } from './theme.svelte.ts';
   import StateHint from './components/StateHint.svelte';
   import { browser } from '$app/environment';
 
-  let { recordings }: { recordings: Recording[] } = $props();
+  let { audios }: { audios: Audio[] } = $props();
 
   interface Cell {
     day: number;       // 当天 0 点 epoch
     hour: number;      // 0-23
     seconds: number;   // 该小时唱歌总秒数
     count: number;     // 歌数
-    dayRecs: Recording[];
+    dayAudios: Audio[];
   }
 
   const md = (epoch: number) =>
@@ -59,13 +59,13 @@
     to = '';
   }
 
-  // 按范围过滤（录像按上海日界归天；空串 = 不限）
+  // 仅筛选已加载音频（上海日界；空串 = 当前已加载窗口）
   const filtered = $derived.by(() => {
     const fromDay = from ? shDayStart(Date.parse(from + 'T00:00:00+08:00') / 1000) : null;
     const toDay = to ? shDayStart(Date.parse(to + 'T00:00:00+08:00') / 1000) : null;
-    if (fromDay === null && toDay === null) return recordings;
-    return recordings.filter((r) => {
-      const d = shDayStart(r.start);
+    if (fromDay === null && toDay === null) return audios;
+    return audios.filter((r) => {
+      const d = shDayStart(r.startAt);
       if (fromDay !== null && d < fromDay) return false;
       if (toDay !== null && d > toDay) return false;
       return true;
@@ -81,55 +81,57 @@
     const buckets = DUR_LABELS.map((label) => ({ label, count: 0, seconds: 0 }));
     let count = 0;
     let seconds = 0;
-    for (const rec of filtered) {
-      for (const c of rec.clips ?? []) {
-        const dur = c.offsetEnd - c.offsetStart;
-        if (dur <= 0) continue;
-        count += 1;
-        seconds += dur;
-        let bi = DUR_BOUNDS.findIndex((b) => dur < b);
-        if (bi < 0) bi = DUR_BOUNDS.length;
-        buckets[bi].count += 1;
-        buckets[bi].seconds += dur;
-      }
+    let unknown = 0;
+    for (const audio of filtered) {
+      const dur = audio.duration;
+      if (dur === null || dur <= 0) { unknown++; continue; }
+      count++; seconds += dur;
+      let bi = DUR_BOUNDS.findIndex((bound) => dur < bound);
+      if (bi < 0) bi = DUR_BOUNDS.length;
+      buckets[bi].count++; buckets[bi].seconds += dur;
     }
-    return { count, seconds, avg: count > 0 ? seconds / count : 0, buckets };
+    return { count, seconds, unknown, avg: count > 0 ? seconds / count : 0, buckets };
   });
 
   // 聚合：天 × 小时 → 唱歌秒数（切片跨小时时按占比拆分）
   const { days, cells, maxSeconds } = $derived.by(() => {
     const cellMap = new Map<string, Cell>();
-    const daySet = new Map<number, Recording[]>();
-    for (const rec of filtered) {
-      const day = shDayStart(rec.start);
-      const arr = daySet.get(day) ?? [];
-      arr.push(rec);
-      daySet.set(day, arr);
-      for (const c of rec.clips ?? []) {
-        let s = rec.start + c.offsetStart;
-        const end = rec.start + c.offsetEnd;
-        while (s < end) {
-          const day = shDayStart(s);
-          const hour = Math.min(23, Math.max(0, Math.floor((s - day) / 3600)));
-          const hourEnd = day + (hour + 1) * 3600;
-          const seg = Math.min(end, hourEnd) - s;
-          const key = day + '|' + hour;
-          const cell = cellMap.get(key) ?? { day, hour, seconds: 0, count: 0, dayRecs: [] };
-          cell.seconds += seg;
-          cell.count += 1;
-          cellMap.set(key, cell);
-          s = hourEnd;
-        }
+    const daySet = new Map<number, Audio[]>();
+    const addDay = (day: number, audio: Audio) => {
+      const list = daySet.get(day) ?? [];
+      if (!list.some((a) => a.id === audio.id)) list.push(audio);
+      daySet.set(day, list);
+    };
+    for (const audio of filtered) {
+      addDay(shDayStart(audio.startAt), audio);
+      let s = audio.startAt;
+      const end = s + (audio.duration ?? 0);
+      while (s < end) {
+        const day = shDayStart(s);
+        addDay(day, audio);
+        const hour = Math.floor((s - day) / 3600);
+        const hourEnd = day + (hour + 1) * 3600;
+        const key = day + '|' + hour;
+        const cell = cellMap.get(key) ?? { day, hour, seconds: 0, count: 0, dayAudios: [] };
+        cell.seconds += Math.min(end, hourEnd) - s;
+        cell.count++;
+        cellMap.set(key, cell);
+        s = hourEnd;
       }
     }
     const days = [...daySet.keys()].sort((a, b) => a - b);
     const cells = [...cellMap.values()];
-    for (const c of cells) c.dayRecs = daySet.get(c.day) ?? [];
+    for (const c of cells) c.dayAudios = daySet.get(c.day) ?? [];
     const maxSeconds = Math.max(1, ...cells.map((c) => c.seconds));
     return { days, cells, maxSeconds };
   });
 
-  const cellAt = (day: number, hour: number) => cells.find((c) => c.day === day && c.hour === hour);
+  let page = $state(0);
+  const pageSize = 31;
+  $effect(() => { void audios; void from; void to; page = 0; tip = null; });
+  const visibleDays = $derived(days.slice(page * pageSize, (page + 1) * pageSize));
+  const cellIndex = $derived(new Map(cells.map((c) => [c.day + '|' + c.hour, c])));
+  const cellAt = (day: number, hour: number) => cellIndex.get(day + '|' + hour);
 
   let tip = $state<{ x: number; y: number; html: string } | null>(null);
   function show(e: MouseEvent, c: Cell) {
@@ -147,9 +149,9 @@
   }
 
   function playDay(c: Cell) {
-    const tracks = c.dayRecs
-      .flatMap((r) => buildRecTracks(r))
-      .sort((a, b) => a.rec.start + a.clip.offsetStart - (b.rec.start + b.clip.offsetStart));
+    const tracks = [...c.dayAudios]
+      .sort((a, b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
+      .map(makeTrack);
     if (tracks.length) adopt(tracks, 0);
   }
 </script>
@@ -174,7 +176,7 @@
     type="button"
     class="rounded border border-base-300 px-2 py-1 text-2xs transition hover:border-accent"
     onclick={clearRange}
-  >全部</button>
+  >已加载全部</button>
   <button
     type="button"
     class="rounded border border-base-300 px-2 py-1 text-2xs transition hover:border-accent"
@@ -190,8 +192,8 @@
 <!-- 统计：活跃天数 / 次数 / 总时长 / 平均（总体） -->
 <div class="mt-2 flex flex-wrap gap-1.5 text-2xs">
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">活跃 {days.length} 天</span>
-  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">共 {stats.count} 首</span>
-  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">总时长 {fmtDur(stats.seconds)}</span>
+  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">共 {filtered.length} 首</span>
+  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">已知总时长 {fmtDur(stats.seconds)}</span>
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">平均 {stats.count > 0 ? fmtDur(stats.avg) : '–'}/首</span>
 </div>
 
@@ -204,7 +206,7 @@
       <div class="flex">
         <div class="w-10 shrink-0"></div>
         <div class="flex flex-1 gap-1">
-          {#each days as day (day)}
+          {#each visibleDays as day (day)}
             {@const dc = dateCard(day)}
             <div class="flex min-w-0 flex-1 flex-col items-center">
               <span class="text-2xs font-semibold tabular-nums">{dc.md}</span>
@@ -225,21 +227,22 @@
         </div>
 
         <div class="flex flex-1 gap-1">
-          {#each days as day (day)}
+          {#each visibleDays as day (day)}
             <div class="flex flex-1 flex-col gap-1">
               {#each Array(24) as _, h}
                 {@const c = cellAt(day, h)}
-                <div
+                <button
+                  type="button"
+                  disabled={!c}
+                  aria-label={c ? `${md(c.day)} ${c.hour}时：${c.count}首，${fmtDur(c.seconds)}；装载当天播放列表` : `${md(day)} ${h}时无已知时长音频`}
                   class="h-3.5 w-full rounded-sm transition hover:ring-1 ring-accent"
                   style:background={bg(c)}
-                  role={c ? 'button' : undefined}
-                  tabindex={c ? 0 : undefined}
                   onclick={c ? () => playDay(c) : undefined}
                   title={c ? "用这一天的歌替换播放列表" : undefined}
                   onkeydown={(e) => { if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); playDay(c); } }}
                   onmousemove={(e) => c && show(e, c)}
                   onmouseleave={() => (tip = null)}
-                ></div>
+                ></button>
               {/each}
             </div>
           {/each}
@@ -265,6 +268,14 @@
 </div>
 
 {#if days.length > 0}
+  {#if days.length > pageSize}
+    <nav class="flex items-center gap-4 py-3 text-xs" aria-label="热力图日期分页">
+      <button disabled={page === 0} onclick={() => { page--; tip = null; }}>上一页</button>
+      <span>{page + 1} / {Math.ceil(days.length / pageSize)}</span>
+      <button disabled={(page + 1) * pageSize >= days.length} onclick={() => { page++; tip = null; }}>下一页</button>
+    </nav>
+  {/if}
+  {#if stats.unknown}<p class="mt-2 text-xs opacity-60">{stats.unknown} 首时长未知，不计入小时热力、平均和时长分层。</p>{/if}
   <!-- 平均时长：按时长分层 -->
   <div class="mt-3 overflow-x-auto">
     <table class="w-full min-w-[420px] text-left text-2xs">

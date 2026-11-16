@@ -7,25 +7,20 @@
     "dev": "vite dev --host",
     "build": "vite build",
     "preview": "vite preview",
-    "data": "python3 scripts/build_data.py",
-    "audio": "bash scripts/to-opus.sh",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:data && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:blob && npm run test:storage && npm run test:catalog && npm run test:native-audio && npm run test:backend",
-    "test:data": "python3 scripts/test_build_data.py",
+    "test": "npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:native-audio && npm run test:architecture && npm run test:interactions",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
     "test:shuffle": "vite-node scripts/test-shuffle.mjs",
     "test:lane-scale": "vite-node scripts/test-lane-scale.mjs",
     "test:session": "vite-node scripts/test-session.mjs",
     "test:sleep": "vite-node scripts/test-sleep.mjs",
-    "audio:upload": "node scripts/upload-blob.mjs",
-    "audio:migrate": "node scripts/upload-blob.mjs --from-remote",
-    "test:blob": "node --test scripts/test-upload-blob.mjs",
-    "test:storage": "vite-node scripts/test-storage.mjs",
     "data:publish": "node scripts/publish-data.mjs",
     "test:native-audio": "vite-node scripts/test-native-audio.mjs",
-    "test:backend": "vite-node scripts/test-backend.mjs",
-    "test:catalog": "python3 scripts/test_derive_catalog.py && vite-node scripts/test-catalog.mjs"
+    "test:architecture": "node scripts/test-architecture.mjs",
+    "test:months": "node --test src/lib/month-supply.test.js src/lib/month-cache.test.js",
+    "test:catalog": "python3 scripts/test_derive_catalog.py && node scripts/test-month-storage.mjs && vite-node scripts/test-month-search.mjs",
+    "test:interactions": "node scripts/test-interactions.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",
@@ -33,13 +28,13 @@
     "@sveltejs/adapter-vercel": "^5.10.3",
     "@sveltejs/vite-plugin-svelte": "^6.2.0",
     "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.6.6",
     "@vercel/blob": "^2.8.2",
     "svelte": "^5.38.0",
     "svelte-check": "^4.4.0",
     "tailwindcss": "^4.3.3",
     "vite": "^7.3.0",
-    "vite-node": "3.2.4",
-    "@types/node": "^26.6.6"
+    "vite-node": "3.2.4"
   },
   "dependencies": {
     "@capacitor/cli": "^8.6.0",
@@ -47,8 +42,7 @@
     "@capacitor/ios": "^8.6.0",
     "@vercel/analytics": "^2.0.1",
     "bits-ui": "^2.5.0",
-    "lucide-svelte": "^0.545.0",
-    "@aws-sdk/client-s3": "^3.1168.0"
+    "lucide-svelte": "^0.545.0"
   },
   "allowScripts": {
     "esbuild@0.28.2": true

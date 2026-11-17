@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {loadMonth} from './backend.svelte';
   import type { Audio } from './types';
   import { fmtDay, fmtDur, hueOf } from './types';
   import { shDayStart } from './playlist-core';
@@ -20,15 +21,17 @@
 
   const clock = (t: number) => new Date(t*1000).toLocaleTimeString('zh-CN', {timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false});
   function toggle(day: number) { expanded = expanded === day ? null : day; }
-  function replace(songs: Audio[]) { adopt(songs.map(makeTrack), 0); }
+  async function full(audio:Audio){return (await loadMonth(audio.monthId)).find(a=>a.id===audio.id)??audio;}
+  async function replace(songs: Audio[]) { adopt((await Promise.all(songs.map(full))).map(makeTrack), 0); }
+  async function play(audio:Audio){playAudio(await full(audio));}
 </script>
 
-<div class="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
+<div data-day-grid class="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
   {#if days.length === 0}
     <div class="sm:col-span-2 xl:col-span-3"><StateHint kind="empty" /></div>
   {/if}
   {#each days as [day,songs] (day)}
-    <section class="block w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition hover:border-accent" class:border-accent={expanded === day}>
+    <section data-day={day} data-month-id={songs[0]?.monthId} class="block w-full rounded-lg border border-base-300 bg-base-100 p-4 text-left transition hover:border-accent" class:border-accent={expanded === day}>
       <div class="flex items-baseline justify-between gap-2">
         <button class="text-left text-base font-bold" aria-expanded={expanded === day} onclick={() => toggle(day)}>{fmtDay(day)}</button>
         <div class="flex flex-wrap items-center justify-end gap-2">
@@ -43,7 +46,7 @@
           {#each songs as audio, i (audio.id)}
             {@const active = player.track?.audio.id === audio.id}
             <li>
-              <button class="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-base-200" class:bg-accent={active} class:text-accent-content={active} onclick={() => playAudio(audio)}>
+              <button class="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-base-200" class:bg-accent={active} class:text-accent-content={active} onclick={() => void play(audio)}>
                 <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hueOf(audio.title)} var(--color-song-hue-sat) var(--color-song-hue-light))"></span>
                 <span class="w-10 shrink-0 text-2xs tabular-nums opacity-50">{clock(audio.startAt)}</span>
                 <span class="min-w-0 flex-1 truncate text-sm font-medium">{i+1}. {audio.title || '（未识别）'}</span>

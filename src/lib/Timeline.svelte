@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {loadMonth} from './backend.svelte';
   import type { Audio } from './types';
   import { fmtDur, dateCard, hueOf } from './types';
   import { shDayStart } from './playlist-core';
@@ -91,11 +92,11 @@
       html: '空 ' + fmtDur(s.minutes * 60) + ' · 压至 1/' + Math.round(s.c ?? 1),
     };
   }
-  function playSong(b: SongBlock) {
-    playAudio(b.audio);
+  async function playSong(b: SongBlock) {
+    const full=await loadMonth(b.audio.monthId);playAudio(full.find(a=>a.id===b.audio.id)??b.audio);
   }
-  function playDay(lane: typeof lanes[number]) {
-    adopt(lane.audios.map(makeTrack), 0);
+  async function playDay(lane: typeof lanes[number]) {
+    const full=await loadMonth(lane.audios[0].monthId);adopt(lane.audios.map(audio=>makeTrack(full.find(a=>a.id===audio.id)??audio)), 0);
   }
 
   const xPct = (abs: number, dayStart: number) =>
@@ -155,7 +156,7 @@
   );
 </script>
 
-<div class="overflow-x-auto">
+<div data-timeline-container class="overflow-x-auto">
   {#if lanes.length === 0}
     <StateHint kind="empty" />
   {:else}

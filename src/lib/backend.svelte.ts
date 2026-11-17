@@ -4,12 +4,15 @@ import type { Audio } from './types';
 import { createMonthSupply } from './supply.js';
 import { monthIdAt, subtractCalendarMonths } from './month.js';
 export interface MonthRef { id:string; startAt:number; endAt:number; count:number; revision:string; key:string; available:boolean }
-export interface Manifest { schemaVersion:2; timezone:string; generatedAt:number; revision:string; months:MonthRef[] }
+export interface Manifest { queryMonthLimit?:number; schemaVersion:2; timezone:string; generatedAt:number; revision:string; months:MonthRef[] }
 const KEY='anyun-backend-v1';
-export const backend=$state({base:(env?.PUBLIC_AUDIO_BASE??'').replace(/\/+$/,''),prompt:false,manifest:null as Manifest|null,months:{} as Record<string,Audio[]>,errors:{} as Record<string,string>,loading:{} as Record<string,boolean>,error:'',pending:false,generation:0});
+export const backend=$state({base:(env?.PUBLIC_AUDIO_BASE??'').replace(/\/+$/,''),prompt:false,manifest:null as Manifest|null,months:{} as Record<string,Audio[]>,summaries:{} as Record<string,Audio[]>,errors:{} as Record<string,string>,loading:{} as Record<string,boolean>,error:'',pending:false,generation:0});
 export const MAX_CACHED_MONTHS=3;
 const monthRecency=new Map<string,true>();
-function touchMonth(id:string){monthRecency.delete(id);monthRecency.set(id,true);while(monthRecency.size>MAX_CACHED_MONTHS){const oldest=monthRecency.keys().next().value!;monthRecency.delete(oldest);delete backend.months[oldest];delete backend.errors[oldest];delete backend.loading[oldest];}}
+const pins=new Map<string,number>();
+function trimMonths(){for(const id of monthRecency.keys()){if(monthRecency.size<=Math.max(MAX_CACHED_MONTHS,pins.size))break;if(pins.has(id))continue;monthRecency.delete(id);delete backend.months[id];delete backend.errors[id];delete backend.loading[id];}}
+export function pinMonth(id:string){pins.set(id,(pins.get(id)??0)+1);let released=false;return()=>{if(released)return;released=true;const n=(pins.get(id)??1)-1;if(n)pins.set(id,n);else pins.delete(id);trimMonths();};}
+function touchMonth(id:string){monthRecency.delete(id);monthRecency.set(id,true);trimMonths();}
 export function inspectMonthCache(){return {cachedMonths:Object.keys(backend.months).length,maxCachedMonths:MAX_CACHED_MONTHS,ids:[...monthRecency.keys()],supply:supply.inspect()};}
 const requests=new Set<AbortController>();
 const inflight=new Map<string,Promise<Audio[]>>();
@@ -19,7 +22,7 @@ export function isNativeApp(){return typeof window!=='undefined'&&Capacitor.isNa
 export function apiBase(){return isNativeApp()?backend.base:'';}
 export function requestController(){const c=new AbortController();requests.add(c);return c;}
 export function releaseController(c:AbortController){requests.delete(c);}
-export function resetCatalog(){supply.clear();for(const c of requests)c.abort();requests.clear();inflight.clear();backend.generation++;supply=createSupply();backend.manifest=null;backend.months={};monthRecency.clear();backend.errors={};backend.loading={};backend.error='';}
+export function resetCatalog(){supply.clear();for(const c of requests)c.abort();requests.clear();inflight.clear();backend.generation++;supply=createSupply();backend.manifest=null;backend.months={};backend.summaries={};monthRecency.clear();backend.errors={};backend.loading={};backend.error='';}
 export function saveBackendBase(url:string){if(!isNativeApp())return;resetCatalog();backend.base=url.trim().replace(/\/+$/,'');backend.prompt=false;try{localStorage.setItem(KEY,backend.base);}catch{}void fetchIndex();}
 export function dismissBackendPrompt(){backend.prompt=false;}
 export function currentMonthId(now=Date.now()){return monthIdAt(now/1000);}
@@ -30,7 +33,7 @@ export async function loadMonth(id:string,signal?:AbortSignal):Promise<Audio[]>{
  if(inflight.has(id)&&!signal)return inflight.get(id)!;
  const ref=backend.manifest?.months.find(m=>m.id===id);if(!ref?.available)throw Error('该月份超出可查询范围或尚未发布');
  const generation=backend.generation,c=requestController();const abort=()=>c.abort();signal?.addEventListener('abort',abort,{once:true});if(signal?.aborted)c.abort();backend.loading[id]=true;delete backend.errors[id];
- const task=(async()=>{try{const m=await supply.month(id,{signal:c.signal});if(!m)throw Error('月份不可用');if(generation!==backend.generation||c.signal.aborted)throw new DOMException('Aborted','AbortError');backend.months[id]=m.audios;touchMonth(id);return m.audios as Audio[];}catch(e){if(!c.signal.aborted&&generation===backend.generation)backend.errors[id]=e instanceof Error?e.message:'月份加载失败';throw e;}finally{releaseController(c);signal?.removeEventListener('abort',abort);if(generation===backend.generation){backend.loading[id]=false;inflight.delete(id);}}})();inflight.set(id,task);return task;
+ const task=(async()=>{try{const m=await supply.month(id,{signal:c.signal});if(!m)throw Error('月份不可用');if(generation!==backend.generation||c.signal.aborted)throw new DOMException('Aborted','AbortError');backend.months[id]=m.audios;backend.summaries[id]=m.audios.map((a:Audio)=>({...a,lyrics:[]}));touchMonth(id);return m.audios as Audio[];}catch(e){if(!c.signal.aborted&&generation===backend.generation)backend.errors[id]=e instanceof Error?e.message:'月份加载失败';throw e;}finally{releaseController(c);signal?.removeEventListener('abort',abort);if(generation===backend.generation){backend.loading[id]=false;inflight.delete(id);}}})();inflight.set(id,task);return task;
 }
 export async function audiosInRange(from:number,to:number,signal?:AbortSignal):Promise<Audio[]>{if(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)throw Error('日期范围无效');return supply.range({startAt:from,endAt:to,signal}) as Promise<Audio[]>;}
 export function loadRollingWindow(endAt:number,signal?:AbortSignal):Promise<Audio[]>{return audiosInRange(subtractCalendarMonths(endAt,1),endAt,signal);}

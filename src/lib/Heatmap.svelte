@@ -2,12 +2,14 @@
   import type { Audio } from './types';
   import { shDayStart } from './playlist-core';
   import { fmtDur, dateCard } from './types';
+  import {loadMonth} from './backend.svelte';
   import { adopt, makeTrack } from './player.svelte.ts';
   import { theme } from './theme.svelte.ts';
   import StateHint from './components/StateHint.svelte';
+  import {onMount} from 'svelte';
   import { browser } from '$app/environment';
 
-  let { audios }: { audios: Audio[] } = $props();
+  let { audios, gridOnly=false, controlsOnly=false, onOlder=()=>{}, from=$bindable(''), to=$bindable('') }: { audios: Audio[]; gridOnly?:boolean; controlsOnly?:boolean; onOlder?:()=>void; from?:string; to?:string } = $props();
 
   interface Cell {
     day: number;       // 当天 0 点 epoch
@@ -24,10 +26,9 @@
 
   // 范围选择：独立于歌单生成的 range；本地记忆（anyun-heat-range-v1），刷新保留
   const HEAT_KEY = 'anyun-heat-range-v1';
-  let from = $state('');
-  let to = $state('');
+
   $effect(() => {
-    if (!browser) return;
+    if (!browser || gridOnly) return;
     try {
       const raw = localStorage.getItem(HEAT_KEY);
       if (raw) {
@@ -119,18 +120,20 @@
         s = hourEnd;
       }
     }
-    const days = [...daySet.keys()].sort((a, b) => a - b);
+    const days = [...daySet.keys()].sort((a, b) => b - a);
     const cells = [...cellMap.values()];
     for (const c of cells) c.dayAudios = daySet.get(c.day) ?? [];
     const maxSeconds = Math.max(1, ...cells.map((c) => c.seconds));
     return { days, cells, maxSeconds };
   });
 
-  let page = $state(0);
-  const pageSize = 31;
-  $effect(() => { void audios; void from; void to; page = 0; tip = null; });
-  const visibleDays = $derived(days.slice(page * pageSize, (page + 1) * pageSize));
-  const cellIndex = $derived(new Map(cells.map((c) => [c.day + '|' + c.hour, c])));
+  let scroller=$state<HTMLDivElement>();let left=$state(0),width=$state(1000);
+  const columnWidth=48;
+  const firstColumn=$derived(Math.max(0,Math.floor(left/columnWidth)-8));
+  const visibleDays=$derived(days.slice(firstColumn,firstColumn+Math.ceil(width/columnWidth)+16));
+  function olderSentinel(node:HTMLElement){const observer=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))onOlder();},{root:scroller??null,rootMargin:'0px'});observer.observe(node);return {destroy:()=>observer.disconnect()};}
+  function heatScroll(){left=scroller?.scrollLeft??0;}
+  onMount(()=>{width=scroller?.clientWidth??1000;});  const cellIndex = $derived(new Map(cells.map((c) => [c.day + '|' + c.hour, c])));
   const cellAt = (day: number, hour: number) => cellIndex.get(day + '|' + hour);
 
   let tip = $state<{ x: number; y: number; html: string } | null>(null);
@@ -148,14 +151,16 @@
     return `${hsl} / ${0.15 + 0.8 * r})`;
   }
 
-  function playDay(c: Cell) {
-    const tracks = [...c.dayAudios]
+  async function playDay(c: Cell) {
+    const full=await loadMonth(c.dayAudios[0].monthId);
+    const tracks = full.filter(a=>shDayStart(a.startAt)===c.day)
       .sort((a, b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
       .map(makeTrack);
     if (tracks.length) adopt(tracks, 0);
   }
 </script>
 
+{#if !gridOnly}
 <!-- 范围选择（独立于歌单生成的日期；带本地记忆） -->
 <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
   <span class="opacity-55">范围</span>
@@ -197,18 +202,21 @@
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">平均 {stats.count > 0 ? fmtDur(stats.avg) : '–'}/首</span>
 </div>
 
-<div class="mt-3 overflow-x-auto">
+{/if}
+{#if !controlsOnly}
+<div class="mt-3 overflow-x-auto" bind:this={scroller} onscroll={heatScroll} bind:clientWidth={width} data-heat-scroll>
   {#if days.length === 0}
     <StateHint kind="no-data" />
   {:else}
-    <div class="min-w-[640px]">
+    <div style:width={Math.max(640,days.length*columnWidth+80)+'px'}>
       <!-- 列头：MM/DD + 周几 -->
       <div class="flex">
         <div class="w-10 shrink-0"></div>
         <div class="flex flex-1 gap-1">
+          <div style:width={firstColumn*columnWidth+'px'} class="shrink-0"></div>
           {#each visibleDays as day (day)}
             {@const dc = dateCard(day)}
-            <div class="flex min-w-0 flex-1 flex-col items-center">
+            <div class="flex w-11 shrink-0 flex-col items-center">
               <span class="text-2xs font-semibold tabular-nums">{dc.md}</span>
               <span class="text-2xs opacity-55">{dc.wd}</span>
             </div>
@@ -218,7 +226,7 @@
 
       <!-- 主体：每列一天，每行一小时 -->
       <div class="mt-1 flex">
-        <div class="flex w-10 shrink-0 flex-col gap-1">
+        <div class="sticky left-0 z-10 flex w-10 shrink-0 flex-col gap-1 bg-base-100">
           {#each Array(24) as _, h}
             <div class="flex h-3.5 items-center justify-end pr-1 text-2xs tabular-nums opacity-55">
               {String(h).padStart(2, '0')}
@@ -227,8 +235,9 @@
         </div>
 
         <div class="flex flex-1 gap-1">
+          <div style:width={firstColumn*columnWidth+'px'} class="shrink-0"></div>
           {#each visibleDays as day (day)}
-            <div class="flex flex-1 flex-col gap-1">
+            <div class="flex w-11 shrink-0 flex-col gap-1">
               {#each Array(24) as _, h}
                 {@const c = cellAt(day, h)}
                 <button
@@ -249,6 +258,7 @@
         </div>
       </div>
 
+      <div use:olderSentinel class="ml-auto h-1 w-1" aria-label="继续加载热力历史"></div>
       <!-- 图例 -->
       <div class="mt-4 flex items-center gap-2 pl-10">
         <span class="text-2xs opacity-55">少</span>
@@ -267,14 +277,8 @@
   {/if}
 </div>
 
-{#if days.length > 0}
-  {#if days.length > pageSize}
-    <nav class="flex items-center gap-4 py-3 text-xs" aria-label="热力图日期分页">
-      <button disabled={page === 0} onclick={() => { page--; tip = null; }}>上一页</button>
-      <span>{page + 1} / {Math.ceil(days.length / pageSize)}</span>
-      <button disabled={(page + 1) * pageSize >= days.length} onclick={() => { page++; tip = null; }}>下一页</button>
-    </nav>
-  {/if}
+{/if}
+{#if !gridOnly && days.length > 0}
   {#if stats.unknown}<p class="mt-2 text-xs opacity-60">{stats.unknown} 首时长未知，不计入小时热力、平均和时长分层。</p>{/if}
   <!-- 平均时长：按时长分层 -->
   <div class="mt-3 overflow-x-auto">

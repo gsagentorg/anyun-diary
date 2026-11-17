@@ -59,9 +59,9 @@
       timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
     });
 
-  // Audio 按上海自然日分泳道；分页仅限制 DOM，不截断任何一天的歌曲。
-  let dayPage = $state(0);
-  $effect(() => { void audios; dayPage = 0; });
+  // Audio 按上海自然日分泳道；月块视窗负责懒渲染，不截断当天歌曲。
+
+
   const lanes = $derived.by(() => {
     const map = new Map<number, Audio[]>();
     for (const audio of audios) {
@@ -76,7 +76,7 @@
     }));
     return out;
   });
-  const visibleLanes = $derived(lanes.slice(dayPage * 7, dayPage * 7 + 7));
+  const visibleLanes = $derived(lanes);
 
   function showSong(e: MouseEvent, b: SongBlock) {
     const c = b.audio;
@@ -164,7 +164,6 @@
   });
 </script>
 
-{#if lanes.length > 7}<nav class="mb-3 flex gap-4 text-sm" aria-label="泳道日期分页"><button disabled={dayPage===0} onclick={()=>dayPage--}>较新七天</button><span>{dayPage+1} / {Math.ceil(lanes.length/7)}</span><button disabled={(dayPage+1)*7>=lanes.length} onclick={()=>dayPage++}>较早七天</button></nav>{/if}
 <div class="overflow-x-auto">
   {#if lanes.length === 0}
     <StateHint kind="empty" />

@@ -22,7 +22,7 @@ async function capturePositions(name){
  for(const [position,fraction] of [['top',0],['middle',.5],['bottom',1]]){
   await page.evaluate(v=>scrollTo(0,(document.documentElement.scrollHeight-innerHeight)*v),fraction);await page.waitForTimeout(650);if(fraction===1){await page.evaluate(()=>scrollTo(0,document.documentElement.scrollHeight));await page.waitForTimeout(650);}
   if(name==='heatmap'){assert.equal(await page.locator('[data-heat-controls]').count(),1);assert.equal(await page.locator('[data-heat-legend]').count(),1);await page.locator('[data-heat-scroll]').evaluate((el,v)=>el.scrollLeft=(el.scrollWidth-el.clientWidth)*v,fraction);await page.waitForTimeout(300);}
-  if(name==='timeline'){assert.equal(await page.locator('[data-timeline-legend]').count(),1,'one shared legend across >=3 months');assert.equal(await page.locator('[data-continuous-browse] [data-timeline-legend]').count(),0);const box=await page.locator('[data-timeline-legend]').boundingBox();assert.ok(box&&box.y>=0&&box.y+box.height<=900,'legend remains available while scrolling');}
+  if(name==='timeline'){assert.equal(await page.locator('[data-timeline-legend]').count(),1,'one shared legend across >=3 months');assert.equal(await page.locator('[data-continuous-browse] [data-timeline-legend]').count(),1);assert.ok(await page.locator('[data-timeline-legend]').evaluate(el=>!el.closest('header')&&el.previousElementSibling?.getAttribute('aria-hidden')==='true'),'legend follows complete virtual chart, not header/window');}
   await page.screenshot({path:dir+'/'+name+'-'+position+'.png'});
  }
 }

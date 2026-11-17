@@ -8,15 +8,19 @@ import {theme,toggleTheme} from '$lib/theme.svelte.ts';
 import * as publicEnv from '$env/static/public';
 import Chip from '$lib/components/Chip.svelte';
 import ContinuousBrowse from '$lib/ContinuousBrowse.svelte';
-import TimelineLegend from '$lib/components/TimelineLegend.svelte';
 import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
 import {ListMusic,Sun,Moon,Monitor,Search} from 'lucide-svelte';
 const viewScroll=[0,0,0];
-let scrollRestore=0;
+let cancelRestore=()=>{};
 async function switchView(next:number){
- if(next===view)return;viewScroll[view]=window.scrollY;view=next;const token=++scrollRestore,target=viewScroll[next];await tick();
- const root=document.documentElement,previous=root.style.overflowAnchor;root.style.overflowAnchor='none';const until=performance.now()+1200;
- let stable=0,lastHeight=0;const cleanup=()=>{root.style.overflowAnchor=previous;window.removeEventListener('wheel',cancel);window.removeEventListener('pointerdown',cancel);window.removeEventListener('keydown',cancel);};const cancel=()=>{scrollRestore++;cleanup();};window.addEventListener('wheel',cancel,{once:true,passive:true});window.addEventListener('pointerdown',cancel,{once:true});window.addEventListener('keydown',cancel,{once:true});const restore=()=>{if(token!==scrollRestore){cleanup();return;}window.scrollTo(0,target);const height=root.scrollHeight;stable=height===lastHeight&&Math.abs(window.scrollY-target)<2?stable+1:0;lastHeight=height;if(performance.now()<until&&stable<15)requestAnimationFrame(restore);else cleanup();};requestAnimationFrame(restore);
+ if(next===view)return;cancelRestore();viewScroll[view]=window.scrollY;view=next;const target=viewScroll[next];await tick();
+ // Dynamic view imports can grow the document after tick; observe layout rather than retrying every frame.
+ const restore=()=>window.scrollTo(0,target);
+ const observer=new ResizeObserver(restore);
+ const cleanup=()=>{observer.disconnect();for(const event of ['wheel','pointerdown','keydown'])window.removeEventListener(event,cleanup);};
+ cancelRestore=cleanup;
+ for(const event of ['wheel','pointerdown','keydown'])window.addEventListener(event,cleanup,{once:true,passive:true});
+ observer.observe(document.body);restore();
 }
 let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
 let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false);
@@ -138,7 +142,6 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
         </button>
       </div>
     </div>
-    {#if view===0}<TimelineLegend {laneMode}/>{/if}
   </header>
 
   <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
@@ -210,7 +213,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {#if backend.manifest}
 {#if view===2&&months.length&&!Object.keys(backend.summaries).length}
 {#if backend.errors[months[0].id]}<p role="alert">{backend.errors[months[0].id]} <button onclick={()=>void loadMonth(months[0].id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label="正在加载热力数据…"/>{/if}
-{:else if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){const ref=months[revealed++];void loadMonth(ref.id).catch(()=>{});}}}/>{/await}
+{:else if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){revealed++;}}}/>{/await}
 {:else}{#if Object.keys(backend.summaries).length}<ContinuousBrowse {view} {laneMode} {startAt} {endAt} bind:expanded={expandedDay}/>{/if}
 {#each refs as ref (ref.id)}{#if !backend.summaries[ref.id]}{#if backend.errors[ref.id]}<p role="alert">{backend.errors[ref.id]} <button onclick={()=>void loadMonth(ref.id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label={"正在加载 "+ref.id+"…"}/>{/if}{/if}{/each}
 {#if revealed<months.length}{#key revealed}<div use:continueHistory class="h-8" aria-label="继续加载历史月份"></div>{/key}{/if}{/if}

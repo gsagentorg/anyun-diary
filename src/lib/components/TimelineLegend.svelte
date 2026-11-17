@@ -13,7 +13,7 @@ const grayL=(c:number)=>theme.resolved==='dark'?lstarForRange(c,1,256,72,13):lst
       lgEnd[0] + ', ' + lgEnd[1] + ', ' + lgEnd[2] + '))',
   });
 </script>
-  <div data-timeline-legend aria-label="泳道图例" class="flex flex-wrap items-center gap-x-4 gap-y-1 py-2 text-xs">
+  <div data-timeline-legend aria-label="泳道图例" class="mt-4 flex flex-wrap items-center gap-4 pl-24 text-xs">
     <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-sm bg-accent"></span> 歌（点击播放）</span>
     {#if laneMode === 'compress'}
 <span class="flex flex-wrap items-center gap-1">

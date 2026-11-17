@@ -1,3 +1,4 @@
+import {assertQueueBudget} from './queue-budget.js';
 import type { Audio as DiaryAudio, PlaybackAudio, Track } from './types';
 import { audioUrl, dateCard } from './types';
 export function setPlayerCatalog(audios: DiaryAudio[]) {
@@ -297,7 +298,7 @@ function playCurrent() {
   const a = getAudio(); // Resume a suspended gain graph within the track-selection gesture.
   a.src = audioUrl(t.audio.opus);
   a.load();
-  a.play().catch(() => {});
+  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;player.error=e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试'; });
   updateMediaSession(t);
   scheduleSessionSave();
 }
@@ -392,9 +393,10 @@ export function reportPlaybackState(duration: number, position: number) {
   }
 }
 
+function allowQueueChange(list:Track[],replace=false){try{assertQueueBudget(player.playlist,list,{replace});return true;}catch(e){player.error=e instanceof Error?e.message:'队列超过安全预算';return false;}}
 /** 采纳一个播放列表并从第 i 项开始播放 */
 export function adopt(list: Track[], i: number) {
-  if (!list[i]) return;
+  if (!list[i]||!allowQueueChange(list,true)) return;
   nativeQueueMapped = true;
   player.playlist = list;
   player.pos = i;
@@ -413,7 +415,7 @@ export function insertRange(tracks: Track[]): number {
 
 /** 把一组曲目插到队列最前面并切到 list[i]（默认第一首）；既有队列整体后移保留，随机回退栈同步平移 */
 export function prependAt(list: Track[], i = 0) {
-  if (!list[i]) return;
+  if (!list[i]||!allowQueueChange(list)) return;
   list = list.map(t => makeTrack(t.audio));
   const n = list.length;
   player.history = player.history.map((h) => h + n);
@@ -549,11 +551,12 @@ function stepTo(i: number) {
 export function playAudio(audio: DiaryAudio) {
   const hit = player.playlist.findIndex(t => t.audio.id === audio.id);
   if (hit >= 0) { if (hit !== player.pos) recordVisit(); player.pos = hit; playCurrent(); return; }
+  const candidate=makeTrack(audio);if(!allowQueueChange([candidate]))return;
   const at = player.pos < 0 ? 0 : player.pos + 1;
   recordVisit();
   player.history = player.history.map(h => h >= at ? h + 1 : h);
   player.shuffleRedo = player.shuffleRedo.map(h => h >= at ? h + 1 : h);
-  player.playlist = [...player.playlist.slice(0, at), makeTrack(audio), ...player.playlist.slice(at)];
+  player.playlist = [...player.playlist.slice(0, at), candidate, ...player.playlist.slice(at)];
   player.pos = at; playCurrent();
 }
 let entrySequence = 0;

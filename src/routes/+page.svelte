@@ -1,5 +1,5 @@
 <script lang="ts">
-import {onMount,untrack} from 'svelte';
+import {onMount,untrack,tick} from 'svelte';
 import {page} from '$app/state';
 import {player,setPlayerCatalog} from '$lib/player.svelte.ts';
 import {backend,initBackend,fetchIndex,loadMonth,currentMonthId,isNativeApp} from '$lib/backend.svelte';
@@ -8,7 +8,16 @@ import {theme,toggleTheme} from '$lib/theme.svelte.ts';
 import * as publicEnv from '$env/static/public';
 import Chip from '$lib/components/Chip.svelte';
 import LazyMonth from '$lib/LazyMonth.svelte';
+import TimelineLegend from '$lib/components/TimelineLegend.svelte';
+import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
 import {ListMusic,Sun,Moon,Monitor,Search} from 'lucide-svelte';
+const viewScroll=[0,0,0];
+let scrollRestore=0;
+async function switchView(next:number){
+ if(next===view)return;viewScroll[view]=window.scrollY;view=next;const token=++scrollRestore,target=viewScroll[next];await tick();
+ const root=document.documentElement,previous=root.style.overflowAnchor;root.style.overflowAnchor='none';const until=performance.now()+1200;
+ let stable=0,lastHeight=0;const cleanup=()=>{root.style.overflowAnchor=previous;window.removeEventListener('wheel',cancel);window.removeEventListener('pointerdown',cancel);window.removeEventListener('keydown',cancel);};const cancel=()=>{scrollRestore++;cleanup();};window.addEventListener('wheel',cancel,{once:true,passive:true});window.addEventListener('pointerdown',cancel,{once:true});window.addEventListener('keydown',cancel,{once:true});const restore=()=>{if(token!==scrollRestore){cleanup();return;}window.scrollTo(0,target);const height=root.scrollHeight;stable=height===lastHeight&&Math.abs(window.scrollY-target)<2?stable+1:0;lastHeight=height;if(performance.now()<until&&stable<15)requestAnimationFrame(restore);else cleanup();};requestAnimationFrame(restore);
+}
 let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
 let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false);
 let endAt=$state(Math.floor(Date.now()/1000)+1);
@@ -25,7 +34,7 @@ onMount(()=>{
  try{const v=JSON.parse(localStorage.getItem('anyun-view-v1')??'{}');if(Number.isInteger(v.view)&&v.view>=0&&v.view<3)view=v.view;if(typeof v.plOpen==='boolean')playlistOpen=v.plOpen;rangeFrom=typeof v.rangeFrom==='string'?v.rangeFrom:'';rangeTo=typeof v.rangeTo==='string'?v.rangeTo:'';}catch{}
  const from=page.url.searchParams.get('from')??'',to=page.url.searchParams.get('to')??'';
  if(/^\d{4}-\d{2}-\d{2}$/.test(from)&&/^\d{4}-\d{2}-\d{2}$/.test(to)&&from<=to){rangeFrom=from;rangeTo=to;}
- ready=true;initBackend();const timer=setInterval(()=>void fetchIndex(),30000);return()=>clearInterval(timer);
+ ready=true;initBackend();const refresh=()=>{if(document.visibilityState==='hidden')return;endAt=Math.floor(Date.now()/1000)+1;selected=currentMonthId();void fetchIndex();};const timer=setInterval(refresh,30000);document.addEventListener('visibilitychange',refresh);window.addEventListener('pageshow',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);window.removeEventListener('pageshow',refresh);};
 });
 $effect(()=>{if(ready)try{localStorage.setItem('anyun-view-v1',JSON.stringify({view,plOpen:playlistOpen,rangeFrom,rangeTo}));}catch{}});
 $effect(()=>{const snapshot=Object.values(backend.months).flat();untrack(()=>setPlayerCatalog(snapshot));});
@@ -93,7 +102,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
               class="rounded-full border px-3 py-1 text-sm transition {i === view
                 ? 'border-accent text-accent'
                 : 'border-base-300 opacity-60 hover:opacity-100'}"
-              onclick={() => (view = i)}
+              onclick={() => void switchView(i)}
             >
               {v}
             </button>
@@ -128,6 +137,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
         </button>
       </div>
     </div>
+    {#if view===0}<TimelineLegend {laneMode}/>{/if}
   </header>
 
   <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
@@ -194,10 +204,15 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {#if playlistOpen}<div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">{#await import('$lib/Playlist.svelte') then module}<module.default bind:open={playlistOpen} bind:from={rangeFrom} bind:to={rangeTo}/>{/await}</div>
 {:else}<button class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm" onclick={()=>playlistOpen=true}><span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4"/> 播放列表</span><span class="text-xs opacity-60">展开</span></button>{/if}
 </div></div>
-{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>void fetchIndex()}>重试目录</button></p>{:else if !backend.manifest}<p role="status">正在加载目录…</p>{/if}
-{#if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){const ref=months[revealed++];void loadMonth(ref.id).catch(()=>{});}}}/>{/await}
+{#if player.error&&!player.track}<p role="alert" class="text-xs text-warning">{player.error}</p>{/if}
+{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>void fetchIndex()}>重试目录</button></p>{:else if !backend.manifest}<BrowseSkeleton/>{/if}
+{#if backend.manifest}
+{#if view===2&&months.length&&!Object.keys(backend.summaries).length}
+{#if backend.errors[months[0].id]}<p role="alert">{backend.errors[months[0].id]} <button onclick={()=>void loadMonth(months[0].id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label="正在加载热力数据…"/>{/if}
+{:else if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){const ref=months[revealed++];void loadMonth(ref.id).catch(()=>{});}}}/>{/await}
 {:else}{#each refs as ref (ref.id)}<LazyMonth {ref} {view} {laneMode} {startAt} {endAt} {heatFrom} {heatTo} bind:expanded={()=>expandedDays[ref.id]??null,(value)=>expandedDays[ref.id]=value}/>{/each}
 {#if revealed<months.length}{#key revealed}<div use:continueHistory class="h-8" aria-label="继续加载历史月份"></div>{/key}{/if}{/if}
+{/if}
 {#if searchOpen}{#await import('$lib/components/SearchPanel.svelte') then module}<module.default bind:open={searchOpen}/>{/await}{/if}
 {#if backend.prompt}{#await import('$lib/components/BackendSheet.svelte') then module}<module.default/>{/await}{/if}
 {#if player.queueOpen}{#await import('$lib/components/QueueOverlay.svelte') then module}<module.default/>{/await}{/if}

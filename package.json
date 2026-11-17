@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:native-audio && npm run test:architecture && npm run test:interactions",
+    "test": "npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:native-audio && npm run test:architecture && npm run test:interactions && node scripts/test-queue-budget.mjs",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
     "test:shuffle": "vite-node scripts/test-shuffle.mjs",

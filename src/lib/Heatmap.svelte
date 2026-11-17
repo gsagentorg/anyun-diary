@@ -161,6 +161,7 @@
 </script>
 
 {#if !gridOnly}
+<div class="sticky top-[72px] z-20 bg-base-100/95 py-2" data-heat-controls>
 <!-- 范围选择（独立于歌单生成的日期；带本地记忆） -->
 <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs">
   <span class="opacity-55">范围</span>
@@ -194,6 +195,7 @@
   >近30天</button>
 </div>
 
+<p class="mt-1 text-2xs opacity-60">统计范围：已加载音频（日期筛选不代表全目录）</p>
 <!-- 统计：活跃天数 / 次数 / 总时长 / 平均（总体） -->
 <div class="mt-2 flex flex-wrap gap-1.5 text-2xs">
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">活跃 {days.length} 天</span>
@@ -202,6 +204,22 @@
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">平均 {stats.count > 0 ? fmtDur(stats.avg) : '–'}/首</span>
 </div>
 
+      <!-- 图例 -->
+      <div data-heat-legend class="mt-2 flex flex-wrap items-center gap-2">
+        <span class="text-2xs opacity-55">少</span>
+        <div
+          class="h-2 w-24 rounded-full"
+          style:background={
+            theme.resolved === 'dark'
+              ? 'linear-gradient(90deg, hsl(258 90% 72% / 0.15), hsl(258 90% 72% / 0.95))'
+              : 'linear-gradient(90deg, hsl(258 80% 60% / 0.15), hsl(258 80% 60% / 0.95))'
+          }
+        ></div>
+        <span class="text-2xs opacity-55">多</span>
+        <span class="ml-2 text-2xs opacity-55">点击格子装载当天播放列表</span>
+      </div>
+
+</div>
 {/if}
 {#if !controlsOnly}
 <div class="mt-3 overflow-x-auto" bind:this={scroller} onscroll={heatScroll} bind:clientWidth={width} data-heat-scroll>
@@ -259,20 +277,6 @@
       </div>
 
       <div use:olderSentinel class="ml-auto h-1 w-1" aria-label="继续加载热力历史"></div>
-      <!-- 图例 -->
-      <div class="mt-4 flex items-center gap-2 pl-10">
-        <span class="text-2xs opacity-55">少</span>
-        <div
-          class="h-2 w-24 rounded-full"
-          style:background={
-            theme.resolved === 'dark'
-              ? 'linear-gradient(90deg, hsl(258 90% 72% / 0.15), hsl(258 90% 72% / 0.95))'
-              : 'linear-gradient(90deg, hsl(258 80% 60% / 0.15), hsl(258 80% 60% / 0.95))'
-          }
-        ></div>
-        <span class="text-2xs opacity-55">多</span>
-        <span class="ml-2 text-2xs opacity-55">点击格子装载当天播放列表</span>
-      </div>
     </div>
   {/if}
 </div>

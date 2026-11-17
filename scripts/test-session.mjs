@@ -26,6 +26,14 @@ ViteNodeRunner.prototype.dependencyRequest = function(id,fsPath,callstack) {
 const m=await import('../src/lib/player.svelte.ts');
 const audio=id=>({id,file:id+'.wav',opus:id+'.opus',title:id,startAt:1700000000,duration:100,lyrics:[],monthId:'2023-11'});
 const [a,b,c]=['a','b','c'].map(audio);
+// Every queue-growth path shares the byte guard; failure preserves current/history.
+const oversized={...a,id:'large',lyrics:[{t:0,text:'字'.repeat(1100000)}]};
+for(const change of [()=>m.adopt([m.makeTrack(oversized)],0),()=>m.prependTracks([oversized]),()=>m.playAudio(oversized)]){
+ const before=JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history});change();assert.equal(JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history}),before);assert.match(m.player.error,/缩小日期范围/);
+}
+const medium={...a,id:'medium',lyrics:[{t:0,text:'字'.repeat(600000)}]};m.adopt([m.makeTrack(medium)],0);
+const once=JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history});m.prependTracks([medium]);assert.equal(JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history}),once,'repeated insertion also rejects atomically');
+m.player.playlist=[];m.player.pos=-1;m.player.track=null;m.player.history=[];m.player.shuffleRedo=[];m.player.error='';
 m.playAudio(a);m.playAudio(b);m.playAudio(a);
 assert.deepEqual(m.player.playlist.map(t=>t.audio.id),['a','b']);assert.equal(m.player.pos,0);
 m.prependTracks([a,c]);assert.deepEqual(m.player.playlist.map(t=>t.audio.id),['a','c','a','b']);assert.equal(m.player.pos,0);

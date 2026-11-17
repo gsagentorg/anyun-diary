@@ -1,5 +1,6 @@
 <script lang="ts">
 import {onMount} from 'svelte';
+import BrowseSkeleton from './components/BrowseSkeleton.svelte';
 import {backend,loadMonth,pinMonth,type MonthRef} from './backend.svelte';
 let {ref,view,laneMode,startAt,endAt,heatFrom,heatTo,expanded=$bindable<number|null>(null)}:{ref:MonthRef;view:number;laneMode:'linear'|'compress';startAt:number;endAt:number;heatFrom:string;heatTo:string;expanded?:number|null}=$props();
 let host:HTMLElement;let active=$state(false),height=$state(180);
@@ -9,8 +10,7 @@ onMount(()=>{let release:(()=>void)|undefined;const observer=new IntersectionObs
 <section bind:this={host} data-month={ref.id} style:min-height={!active?height+'px':undefined}>
 {#if active}
 {#if backend.errors[ref.id]}<p role="alert">{backend.errors[ref.id]} <button onclick={()=>void loadMonth(ref.id).catch(()=>{})}>重试此月</button></p>
-{:else if !backend.months[ref.id]}<p role="status">正在加载 {ref.id}…</p>
-{:else if view===0}{#await import('./Timeline.svelte') then m}<m.default {audios} {laneMode}/>{/await}
+{:else if !backend.months[ref.id]}<BrowseSkeleton label={"正在加载 "+ref.id+"…"}/>{:else if view===0}{#await import('./Timeline.svelte') then m}<m.default {audios} {laneMode}/>{/await}
 {:else if view===1}{#await import('./DayStrip.svelte') then m}<m.default {audios} bind:expanded/>{/await}
 {:else}{#await import('./Heatmap.svelte') then m}<m.default {audios} gridOnly from={heatFrom} to={heatTo}/>{/await}{/if}
 {/if}

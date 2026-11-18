@@ -2,6 +2,24 @@ import Foundation
 
 /// Matches the web metadata rule: latest timestamp, first line of a simultaneous group.
 enum NativeLyrics {
+    static let bundled: [String: [[String: Any]]] = {
+        guard let url = Bundle.main.url(forResource: "native-lyrics", withExtension: "json", subdirectory: "public"),
+              let data = try? Data(contentsOf: url),
+              let catalog = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] else { return [:] }
+        return catalog
+    }()
+
+    /// Repair older persisted queues and incomplete JS metadata without changing playback.
+    static func hydrate(_ items: [[String: Any]], catalog: [String: [[String: Any]]] = bundled) -> [[String: Any]] {
+        items.map { item in
+            guard (item["lyrics"] as? [[String: Any]])?.isEmpty != false,
+                  let id = item["id"] as? String, let lines = catalog[id], !lines.isEmpty else { return item }
+            var hydrated = item
+            hydrated["lyrics"] = lines
+            return hydrated
+        }
+    }
+
     static func currentLine(_ lyrics: [[String: Any]], position: Double, duration: Double) -> String? {
         guard position.isFinite, !lyrics.isEmpty else { return nil }
         let limit = duration.isFinite && duration > 0 ? duration : Double.infinity

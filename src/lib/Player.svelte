@@ -4,6 +4,7 @@
   import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
+  import { usesNativeAudio } from './native-audio';
   import { SLEEP_MODES, isSleepMode, MIN_SLEEP_MINUTES, MIN_SLEEP_SECONDS, sleepCurvePath, sleepCurvePoint, sleepMinutesFromHandle, sleepProgress, sleepSecondsFromHandle, sleepStage } from './sleep-curves';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
@@ -93,7 +94,7 @@
     };
     const onDurChange = () => {
       duration = Number.isFinite(a.duration) ? a.duration : 0;
-      player.loading = false;
+      if (!usesNativeAudio()) player.loading = false;
     };
     const onCanPlay = () => {
       duration = Number.isFinite(a.duration) ? a.duration : 0;
@@ -102,7 +103,7 @@
     const onWaiting = () => (player.loading = true);
     const onPlaying = () => (player.loading = false);
     const onEnded = () => onTrackEnded();
-    const onErr = () => (player.loading = false);
+    const onErr = () => { if (!usesNativeAudio()) player.loading = false; };
     a.addEventListener('play', onPlay);
     a.addEventListener('timeupdate', onTime);
     a.addEventListener('loadedmetadata', onMeta);
@@ -552,8 +553,14 @@
 {#if player.track}
   {@const t = player.track}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
+    {#if player.error}
+      <div class="absolute inset-x-0 bottom-full border-t border-base-300 bg-base-100/95">
+        <div class="mx-auto min-w-0 max-w-6xl px-3 py-1.5 sm:px-4">
+          <p class="line-clamp-2 break-all text-xs text-warning" role="alert" title={player.error}>{player.error}</p>
+        </div>
+      </div>
+    {/if}
     <div class="mx-auto flex min-h-14 max-w-6xl flex-nowrap items-center gap-2 px-3 py-1 sm:gap-3 sm:px-4" bind:this={barEl}>
-      {#if player.error}<span class="text-xs text-warning" role="alert">{player.error}</span>{/if}
       <!-- 左区：播放/暂停 + 曲目信息 -->
       <div class="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
         <button

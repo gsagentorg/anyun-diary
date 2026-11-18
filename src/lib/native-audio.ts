@@ -39,11 +39,11 @@ export class NativeAudio extends EventTarget {
   private wasLoading = false;
   private listener?: { remove(): Promise<void> };
   private onVisibility = () => {
-    if (!document.hidden) void this.enqueue(() => this.driver.getState()).catch(() => {});
+    if (!document.hidden) void this.driver.getState().then(state => this.accept(state)).catch(() => {});
   };
   private serial: Promise<unknown> = Promise.resolve();
   readonly ready: Promise<NativeState>;
-  constructor(private config: () => NativeConfig, private update: (state: NativeState) => void, private fail: (message: string) => void, private driver: PlaybackBridge = bridge) {
+  constructor(private config: () => NativeConfig, private update: (state: NativeState) => void, private fail: (message: string, loading?: boolean) => void, private driver: PlaybackBridge = bridge) {
     super();
     this.ready = this.driver.addListener('state', state => this.accept(state)).then(listener => {
       this.listener = listener;
@@ -56,8 +56,8 @@ export class NativeAudio extends EventTarget {
     this.serial = this.ready.catch(error => this.error(error));
     document.addEventListener('visibilitychange', this.onVisibility);
   }
-  private error(error: unknown) {
-    this.fail(error instanceof Error ? error.message : String(error));
+  private error(error: unknown, loading = false) {
+    this.fail(error instanceof Error ? error.message : String(error), loading);
     this.dispatchEvent(new Event('error'));
   }
   private enqueue(work: () => Promise<NativeState>): Promise<void> {
@@ -72,7 +72,7 @@ export class NativeAudio extends EventTarget {
     const state = { ...this.lastState, ...event } as NativeState;
     if (this.disposed) return;
     if (this.revision && state.revision !== this.revision) return;
-    if (state.sequence < this.sequence) return;
+    if (state.sequence <= this.sequence) return;
     this.sequence = state.sequence;
     this.lastState = state;
     const wasPaused = this.paused;
@@ -90,7 +90,7 @@ export class NativeAudio extends EventTarget {
     if (this.wasLoading !== state.loading || itemChanged) this.dispatchEvent(new Event(state.loading ? 'waiting' : 'canplay'));
     this.wasLoading = state.loading;
     this.dispatchEvent(new Event('timeupdate'));
-    if (state.error && state.error !== this.lastError) this.error(new Error(state.error));
+    if (state.error && state.error !== this.lastError) this.error(new Error(state.error), state.loading);
     this.lastError = state.error;
   }
   dispose() {
@@ -99,10 +99,14 @@ export class NativeAudio extends EventTarget {
     void this.listener?.remove();
   }
   sync(replace = false) {
-    const config = this.config();
-    const revision = `${Date.now()}-${Math.random()}`;
-    this.revision = revision;
-    return this.enqueue(() => this.driver.configure({ ...config, revision, replace }));
+    return this.enqueue(() => {
+      // Keep accepting native progress while earlier commands are pending.
+      // Read the latest UI state only when this configuration is actually sent.
+      const config = this.config();
+      const revision = `${Date.now()}-${Math.random()}`;
+      this.revision = revision;
+      return this.driver.configure({ ...config, revision, replace });
+    });
   }
   command(action: string, value?: number) { return this.enqueue(() => this.driver.command({ action, value })); }
   load() { void this.sync(true).catch(() => {}); }

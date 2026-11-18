@@ -24,7 +24,7 @@
     "test:storage": "vite-node scripts/test-storage.mjs",
     "test:native-audio": "vite-node scripts/test-native-audio.mjs",
     "icons": "node scripts/sync-app-icon.mjs",
-    "prebuild": "npm run icons"
+    "prebuild": "npm run icons && node scripts/sync-native-lyrics.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",

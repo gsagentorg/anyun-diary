@@ -8,3 +8,6 @@ cap/
 static/audio/
 scripts/__pycache__/
 RUNBOOK.md
+
+# Generated from src/lib/data.json before build.
+static/native-lyrics.json

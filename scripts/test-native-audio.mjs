@@ -9,6 +9,7 @@ let receive;
 const calls = [];
 let release;
 let failNext = false;
+let commandGate;
 const driver = {
   async addListener(_, fn) { receive = fn; return { remove: async () => {} }; },
   async getState() { return { ...state }; },
@@ -20,6 +21,7 @@ const driver = {
   },
   async command({ action, value }) {
     calls.push(action);
+    if (commandGate) await new Promise(resolve => { commandGate.resolve = resolve; });
     if (failNext) { failNext = false; throw new Error('interrupted'); }
     if (action === 'play') state.playing = true;
     if (action === 'pause') state.playing = false;
@@ -29,7 +31,8 @@ const driver = {
 };
 let current;
 const errors = [];
-const audio = new NativeAudio(() => structuredClone(config), value => { current = value; }, message => errors.push(message), driver);
+const errorLoading = [];
+const audio = new NativeAudio(() => structuredClone(config), value => { current = value; }, (message, loading) => { errors.push(message); errorLoading.push(loading); }, driver);
 await audio.ready;
 release = {};
 const loading = audio.sync(true);
@@ -83,3 +86,39 @@ receive({ ...progress, error: 'offline', sequence: ++state.sequence });
 receive({ ...progress, error: 'offline', sequence: ++state.sequence });
 assert.equal(errors.length, priorErrors + 1, 'unchanged errors are emitted only once');
 console.log('native audio: compact progress, cached catalog, revision isolation and error deduplication passed');
+
+receive({ ...progress, error: 'reconnecting', loading: true, playing: false, position: 61, duration: 120, sequence: ++state.sequence });
+assert.equal(errorLoading.at(-1), true, 'recoverable errors retain the native loading state');
+assert.equal(audio.paused, false, 'recovery remains pausable without toggling the play button');
+receive({ ...progress, error: '', loading: false, playing: true, position: 62, duration: 120, sequence: ++state.sequence });
+assert.equal(current.error, '');
+assert.equal(audio.currentTime, 62);
+console.log('native audio: recoverable error keeps loading and clears on recovered state passed');
+
+commandGate = {};
+const blocked = audio.command('pause');
+await new Promise(resolve => setTimeout(resolve, 0));
+const queuedSync = audio.sync();
+state = { ...state, playing: true, loading: false, position: 83, sequence: ++state.sequence };
+receive(state);
+assert.equal(audio.currentTime, 83, 'pending configuration must not reject native recovery events');
+state = { ...state, position: 84, sequence: ++state.sequence };
+const configCalls = calls.filter(call => call === 'configure-start').length;
+listeners.get('visibilitychange')();
+await new Promise(resolve => setTimeout(resolve, 0));
+assert.equal(audio.currentTime, 84, 'foreground reads bypass blocked mutation commands');
+assert.equal(calls.filter(call => call === 'configure-start').length, configCalls, 'foreground must not configure or restart native playback');
+config.pos = 0;
+commandGate.resolve(); commandGate = null;
+await Promise.all([blocked, queuedSync]);
+assert.equal(current.pos, 0, 'queued sync reads current configuration at dispatch, not enqueue time');
+const resumed = { ...state, playing: true, loading: false, position: 85, sequence: ++state.sequence };
+receive(resumed);
+receive({ ...resumed, playing: false, position: 0, sequence: resumed.sequence - 1 });
+assert.equal(audio.currentTime, 85, 'late foreground response cannot rewind newer native progress');
+assert.equal(audio.paused, false);
+console.log('native audio: deferred sync, native recovery, foreground reconciliation and stale responses passed');
+
+receive({ ...resumed, playing: false, position: 0 });
+assert.equal(audio.currentTime, 85, 'duplicate event/command response is applied only once');
+assert.equal(audio.paused, false);

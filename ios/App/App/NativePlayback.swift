@@ -50,6 +50,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private let audioSessionQueue = DispatchQueue(label: "anyun.audio-session")
     private var audioActivationToken = UUID()
     private var audioActivationPending = false
+    private var recoveringPlayback = false
+    private var lastKnownDuration: Double = 0
     private var recoveryAttempts = 0
     private var lastProgressAt = Date()
     private var failureDetectedAt: Date?
@@ -135,7 +137,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         })
         notifications.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.diagnostic("background"); self?.persist(); self?.publish() })
         if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let items = saved["queue"] as? [[String: Any]], valid(items) {
-            queue = items; pos = saved["pos"] as? Int ?? -1
+            queue = NativeLyrics.hydrate(items); pos = saved["pos"] as? Int ?? -1
             rate = (saved["rate"] as? NSNumber)?.floatValue ?? 1
             shuffle = saved["shuffle"] as? Bool ?? false
             skipSame = saved["skipSame"] as? Bool ?? true
@@ -158,8 +160,9 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 call.reject("原生播放需要有效的 HTTPS 音频地址"); return
             }
             let previous = self.currentID
+            let previousRate = self.rate
             self.catalogDirty = true
-            self.queue = items
+            self.queue = NativeLyrics.hydrate(items)
             self.pos = call.getInt("pos") ?? -1
             self.history = call.getArray("history", Int.self) ?? []
             self.redo = call.getArray("redo", Int.self) ?? []
@@ -175,7 +178,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.tick()
             if call.getBool("replace") == true || previous != self.currentID {
                 self.loadCurrent(autoplay: false)
-            } else if self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
+            } else if self.rate != previousRate && self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
             self.tick(); self.persist(); self.publish()
             call.resolve(self.snapshot())
         }
@@ -204,11 +207,18 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentID: String { queue.indices.contains(pos) ? queue[pos]["id"] as? String ?? "" : "" }
     private var expired: Bool { sleepState.until.map { Date().timeIntervalSince1970 * 1000 >= $0 } ?? false }
     private func loadCurrent(autoplay: Bool, at: Double = 0, recovering: Bool = false) {
-        if !recovering { recoveryAttempts = 0 }
+        if !recovering { recoveryAttempts = 0; lastKnownDuration = 0 }
+        if recovering, let duration = audio.currentItem?.duration.seconds, duration.isFinite, duration > 0 { lastKnownDuration = duration }
+        recoveringPlayback = recovering
         lastPosition = at; lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
         diagnostic(recovering ? "reload" : "load")
+        if !recovering && queue.indices.contains(pos) {
+            let count = (queue[pos]["lyrics"] as? [[String: Any]])?.count ?? 0
+            diagnostic("lyrics-ready", detail: "lines=\(count)")
+        }
         audioActivationToken = UUID(); audioActivationPending = false
-        errorMessage = ""; wantsPlayback = false; audio.pause(); itemObserver = nil
+        if !recovering { errorMessage = "" }
+        wantsPlayback = false; audio.pause(); itemObserver = nil
         guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String, let url = URL(string: raw) else {
             audio.replaceCurrentItem(with: nil); publish(); return
         }
@@ -218,7 +228,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 guard let self, item === self.audio.currentItem else { return }
                 if item.status == .failed {
                     self.failureDetectedAt = Date(); self.retryAt = nil
-                    self.errorMessage = item.error?.localizedDescription ?? "原生音频加载失败"
+                    if self.wantsPlayback { self.recoveringPlayback = true }
+                    if self.errorMessage.isEmpty { self.errorMessage = item.error?.localizedDescription ?? "原生音频加载失败" }
                     let error = item.error as NSError?
                     self.diagnostic("item-failed", detail: "domain=\(error?.domain ?? "") code=\(error?.code ?? 0)")
                 }
@@ -243,7 +254,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         if duration.isFinite && duration > 0 && audio.currentTime().seconds >= duration { seek(0) }
         tick()
         if sleepState.fired { return true }
-        errorMessage = ""; wantsPlayback = true
+        if !recovering { errorMessage = "" }
+        wantsPlayback = true
         audioActivationPending = true
         let token = UUID()
         audioActivationToken = token
@@ -284,6 +296,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private func pause() {
         diagnostic("pause")
         audioActivationToken = UUID(); audioActivationPending = false
+        recoveringPlayback = false
         wantsPlayback = false; audio.pause(); publish()
     }
     private func seek(_ seconds: Double) {
@@ -332,7 +345,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         if position.isFinite && position > lastPosition + 0.05 {
             lastPosition = position
             lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
-            if recoveryAttempts > 0 { diagnostic("recovered") }
+            if recoveringPlayback { diagnostic("recovered"); recoveringPlayback = false; errorMessage = "" }
             recoveryAttempts = 0
             return
         }
@@ -371,6 +384,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private func finishSleep() {
         // Pause before restoring normal volume so no full-volume tail escapes.
         audioActivationToken = UUID(); audioActivationPending = false
+        recoveringPlayback = false
         wantsPlayback = false; resumeAfterInterruption = false; audio.pause()
         sleepState.finish()
         audio.volume = 1; persist(); publish()
@@ -393,10 +407,14 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private func snapshot(includeCatalog: Bool = true, progressOnly: Bool = false) -> [String: Any] {
         let time = audio.currentTime().seconds
         let duration = audio.currentItem?.duration.seconds ?? 0
+        if duration.isFinite && duration > 0 { lastKnownDuration = duration }
+        let recovering = recoveringPlayback && wantsPlayback
+        let displayTime = recovering ? max(lastPosition, time.isFinite ? time : 0) : (time.isFinite ? time : 0)
+        let displayDuration = recovering ? lastKnownDuration : (duration.isFinite ? duration : 0)
         var state: [String: Any] = ["pos": pos,
                 "shuffle": shuffle, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
-                "position": time.isFinite ? time : 0, "duration": duration.isFinite ? duration : 0,
-                "playing": audio.timeControlStatus == .playing, "loading": audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                "position": displayTime, "duration": displayDuration,
+                "playing": audio.timeControlStatus == .playing, "loading": recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
         if !progressOnly {

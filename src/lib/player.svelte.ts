@@ -197,7 +197,7 @@ const gAudio = globalThis as typeof globalThis & {
 
 function ensureAudio(): HTMLAudioElement {
   if (usesNativeAudio()) {
-    nativeAudio ??= new NativeAudio(nativeConfig, applyNativeState, message => { player.error = message; player.loading = false; });
+    nativeAudio ??= new NativeAudio(nativeConfig, applyNativeState, (message, loading = false) => { player.error = message; player.loading = loading; });
     return nativeAudio as unknown as HTMLAudioElement;
   }
   if (!gAudio.__anyunAudio) {
@@ -667,8 +667,7 @@ export function initSession() {
     void nativeAudio!.ready.then(state => {
       if (state.queue.length || player.playlist.length) {
         player.sessionRestored = true; gAudio.__anyunSessionInit = true;
-        // Refresh metadata for queues persisted by an earlier native build.
-        if (state.queue.length === player.playlist.length && state.queue.every((item, i) => item.id === player.playlist[i].clip.file)) syncNative();
+        // Native restoration hydrates lyrics itself. Startup only reads native state.
       } else initSession();
     }).catch(() => {});
     return;

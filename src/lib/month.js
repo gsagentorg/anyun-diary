@@ -1,4 +1,5 @@
-export const MONTH_BOUNDARY_DAY = 7;
+export const DATA_PERIOD_START_DAY = 7;
+export const MONTH_BOUNDARY_DAY = DATA_PERIOD_START_DAY;
 export const MONTH_TIMEZONE = 'Asia/Shanghai';
 const OFFSET = 28800;
 export function shiftMonthId(id, delta) {

@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
-import {publishMonths} from '../src/lib/server/publisher.mjs';
+import {publishMonths,digest} from '../src/lib/server/publisher.mjs';
 import {monthBounds} from '../src/lib/server/months.mjs';
 import {readCatalog,readMonth} from '../src/lib/server/catalog.ts';
 import {searchAudiosAsync,searchAudios} from '../src/lib/search.ts';
 import {createSearchLimiter,searchStream} from '../src/lib/server/search-stream.ts';
 const map=new Map();const store={async read(k){return map.has(k)?new Response(map.get(k)):new Response(null,{status:404});},async write(k,b){map.set(k,b)},async remove(k){map.delete(k)}};
 const now=Date.parse('2026-11-17T00:00:00+08:00')/1000;
-const audio={id:'fixture',file:'fixture.opus',opus:'audio/fixture.opus',title:'Hello World',startAt:monthBounds('2026-11').startAt,duration:10,lyrics:[{t:0,text:'Blue sky'}],monthId:'2026-11'};
+map.set('audio/'+digest('OggSfixture')+'.opus','OggSfixture');
+const audio={id:'fixture',file:'fixture.opus',opus:'audio/'+digest('OggSfixture')+'.opus',title:'Hello World',startAt:monthBounds('2026-11').startAt,duration:10,lyrics:[{t:0,text:'Blue sky'}],monthId:'2026-11'};
 const manifest=await publishMonths([audio],store,{now});assert.equal((await readCatalog(store)).revision,manifest.revision);assert.equal((await readMonth(store,manifest.months[0])).audios.length,1);
 assert.equal(searchAudios([audio],'title:HELLO lyrics:blue date:11-07 time:00:00').length,1);assert.equal(searchAudios([audio],'hello missing').length,0);assert.equal(searchAudios([audio],'unknown:x').length,0);assert.equal(searchAudios([audio],'time:24:00').length,0);
 const parse=async stream=>(await new Response(stream).text()).trim().split('\n').map(x=>JSON.parse(x));

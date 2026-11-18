@@ -1,0 +1,10 @@
+import {env} from '$env/dynamic/private';
+import {json} from '@sveltejs/kit';
+import {createHash} from 'node:crypto';
+import {configuredStore} from '$lib/server/storage.mjs';
+import {validatePointer} from '$lib/catalog-schema.js';
+import {readCatalog} from '$lib/server/catalog';
+import {maxQueryMonths,monthId} from '$lib/server/months.mjs';
+import type {RequestHandler} from './$types';
+export const prerender=false;
+export const GET:RequestHandler=async({request})=>{try{const store=configuredStore(env),signal=AbortSignal.any([request.signal,AbortSignal.timeout(15000)]);const r=await store.read('current.json',{signal});let releaseId:string;if(r.ok)releaseId=validatePointer(await r.json()).releaseId;else if(r.status===404)releaseId=(await readCatalog(store,signal)).revision;else throw Error('Current unavailable');const queryMonthLimit=maxQueryMonths(env.MAX_QUERY_MONTHS),period=monthId(Date.now()/1000);const etag='"'+createHash('sha256').update(JSON.stringify([releaseId,queryMonthLimit,period])).digest('hex')+'"';const headers={'etag':etag,'cache-control':'private, no-cache','vary':'If-None-Match'};if(request.headers.get('if-none-match')===etag)return new Response(null,{status:304,headers});return json({schemaVersion:2,releaseId,queryMonthLimit,period},{headers});}catch{return json({error:'Current unavailable'},{status:503});}};

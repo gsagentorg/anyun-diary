@@ -30,4 +30,4 @@ export function validateMonth(v,expected) {
   return v;
 }
 export const validateCatalog = validateMonth;
-export function validatePointer(v) { if(!v||v.schemaVersion!==2||!safeKey(v.key)) fail('pointer'); return v; }
+export function validatePointer(v) { if(!v||v.schemaVersion!==2||! /^[a-f0-9]{64}$/.test(v.releaseId)||v.key!=='releases/'+v.releaseId+'/manifest.json') fail('pointer'); return v; }

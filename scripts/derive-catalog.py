@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from tagged_audio import SEG_NAME_RE, hms_ms, catalog_epoch_ms_of, read_tags, apply_song_fmt, parse_lrc
 
-MONTH_BOUNDARY_DAY = int(re.search(r'MONTH_BOUNDARY_DAY = ([0-9]+)', (Path(__file__).parent.parent / 'src/lib/month.js').read_text()).group(1))
+MONTH_BOUNDARY_DAY = int(re.search(r'DATA_PERIOD_START_DAY = ([0-9]+)', (Path(__file__).parent.parent / 'src/lib/month.js').read_text()).group(1))
 
 def month_id(epoch):
     d = datetime.fromtimestamp(epoch, timezone(timedelta(hours=8)))

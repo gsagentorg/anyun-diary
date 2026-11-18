@@ -67,6 +67,6 @@ export const AUDIO_BASE = ((_env && _env.PUBLIC_AUDIO_BASE) as string | undefine
 /** Audio keys use the same route on web and the runtime-selected native backend. */
 export function audioUrl(opus: string): string {
   if (/^https?:\/\//.test(opus)) return opus;
-  const base = isNativeApp() ? backend.base : AUDIO_BASE;
+  const base = isNativeApp() ? backend.base : '';
   return base + '/api/' + opus.split('/').map(encodeURIComponent).join('/');
 }

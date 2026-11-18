@@ -1,4 +1,5 @@
 import {assertQueueBudget} from './queue-budget.js';
+import {attachAudioRenewal} from './audio-renewal';
 import type { Audio as DiaryAudio, PlaybackAudio, Track } from './types';
 import { audioUrl, dateCard } from './types';
 export function setPlayerCatalog(audios: DiaryAudio[]) {
@@ -229,6 +230,7 @@ function ensureAudio(): HTMLAudioElement {
   if (!gAudio.__anyunAudio) {
     const a = new Audio();
     a.preload = 'metadata';
+    attachAudioRenewal(a,()=>player.track?.queueEntryId??'',message=>{player.error=message;player.loading=false;});
     a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
     a.addEventListener('play', () => {

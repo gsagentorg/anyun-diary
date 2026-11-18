@@ -16,10 +16,12 @@
     "test:session": "vite-node scripts/test-session.mjs",
     "test:sleep": "vite-node scripts/test-sleep.mjs",
     "data:publish": "node scripts/publish-data.mjs",
+    "data:rollback": "node scripts/rollback-data.mjs",
+    "test:s3": "node scripts/test-s3-storage.mjs && node scripts/test-s3-legacy.mjs",
     "test:native-audio": "vite-node scripts/test-native-audio.mjs",
     "test:architecture": "node scripts/test-architecture.mjs",
-    "test:months": "node --test src/lib/month-supply.test.js src/lib/month-cache.test.js",
-    "test:catalog": "python3 scripts/test_derive_catalog.py && node scripts/test-month-storage.mjs && vite-node scripts/test-month-search.mjs",
+    "test:months": "node --test src/lib/month-supply.test.js src/lib/month-cache.test.js src/lib/release-supply.test.js",
+    "test:catalog": "npm run test:s3 && vite-node scripts/test-audio-renewal.mjs && node scripts/test-audio-delivery.mjs && vite-node scripts/test-s3-application.mjs && python3 scripts/test_derive_catalog.py && node scripts/test-month-storage.mjs && vite-node scripts/test-month-search.mjs",
     "test:interactions": "node scripts/test-interactions.mjs"
   },
   "devDependencies": {
@@ -37,6 +39,8 @@
     "vite-node": "3.2.4"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1171.0",
+    "@aws-sdk/s3-request-presigner": "^3.1171.0",
     "@capacitor/cli": "^8.6.0",
     "@capacitor/core": "^8.6.0",
     "@capacitor/ios": "^8.6.0",

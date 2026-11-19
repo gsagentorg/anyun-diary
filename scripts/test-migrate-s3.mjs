@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 // Offline coverage for scripts/migrate-s3.mjs. No network, no real S3/B2.
 import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';
+import {mkdtemp,readdir,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,resolve} from 'node:path';
+import {Readable} from 'node:stream';
 import {createServer} from 'node:http';
 import {createHash} from 'node:crypto';
 import {localStore} from '../src/lib/server/storage.mjs';
 import {digest} from '../src/lib/server/publisher.mjs';
 import {monthBounds} from '../src/lib/server/months.mjs';
-import {parseArgs,targetOptions,createS3Backend,createLocalSource,sourceFromEnv,run} from './migrate-s3.mjs';
+import {parseArgs,targetOptions,createS3Backend,createLocalSource,sourceFromEnv,createAudioCache,resolveCacheDir,run} from './migrate-s3.mjs';
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 const NOW=Date.UTC(2026,10,19,0,0,0)/1000;
@@ -20,7 +21,30 @@ const sourceEnv=(prefix)=>prefix===''
 
 const TARGET_ENV={TARGET_S3_ENDPOINT:'https://s3.fixture-region.backblazeb2.test',TARGET_S3_REGION:'us-west-004',TARGET_S3_BUCKET:'fixture-target',TARGET_S3_ACCESS_KEY_ID:'fixture-target-key',TARGET_S3_SECRET_ACCESS_KEY:'fixture-target-secret',TARGET_S3_FORCE_PATH_STYLE:'false'};
 
+const bodyToBuffer=async body=>{
+  if(Buffer.isBuffer(body))return body;
+  if(body&&typeof body.getReader==='function'){
+    const reader=body.getReader();
+    const chunks=[];
+    for(;;){const {done,value}=await reader.read();if(done)break;chunks.push(Buffer.from(value));}
+    return Buffer.concat(chunks);
+  }
+  if(body&&typeof body[Symbol.asyncIterator]==='function'){
+    const chunks=[];
+    for await(const chunk of body)chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+  if(body&&typeof body.pipe==='function')return await new Promise((resolveBody,reject)=>{
+    const chunks=[];
+    body.on('data',chunk=>chunks.push(chunk));
+    body.on('error',reject);
+    body.on('end',()=>resolveBody(Buffer.concat(chunks)));
+  });
+  return Buffer.from(body);
+};
+
 function fakeClient({objects=new Map(),calls=[],latency=0,fail=null,getBytes=null,active={current:0,max:0}}={}){
+  const toBodyBuffer=bodyToBuffer;
   return {async send(command){
     const name=command.constructor.name;
     const input=command.input;
@@ -45,7 +69,7 @@ function fakeClient({objects=new Map(),calls=[],latency=0,fail=null,getBytes=nul
         const value=getBytes?getBytes(input.Key,objects.get(input.Key)):objects.get(input.Key);
         return {Body:{transformToByteArray:async()=>value}};
       }
-      if(name==='PutObjectCommand'){objects.set(input.Key,Buffer.from(input.Body));return {};}
+      if(name==='PutObjectCommand'){objects.set(input.Key,await toBodyBuffer(input.Body));return {};}
       if(name==='DeleteObjectCommand'){objects.delete(input.Key);return {};}
       throw Error('Unexpected command '+name);
     }finally{active.current--;}
@@ -407,16 +431,20 @@ function startMockApi(catalog,{flip=[],headLengthless=false,catalogStatus=200,ca
   };
 }
 
-async function runHttp(argv,{catalog,mock,targetObjects=new Map(),envExtra={},targetClientOptions={},deps={}}={}){
+async function runHttp(argv,{catalog,mock,targetObjects=new Map(),envExtra={},targetClientOptions={},deps={},cacheDir}={}){
   const base=await mock.start();
+  // Every run gets its own cache dir so tests never touch the real default
+  // ($TMPDIR/anyun-migrate-s3) shared location.
+  const dir=cacheDir??await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
   const calls=[];
   const targetClient=fakeClient({objects:targetObjects,calls,...targetClientOptions});
-  const env={SOURCE_AUDIO_BASE:base,...TARGET_ENV,TARGET_S3_PREFIX:'backup/',...envExtra};
+  const env={SOURCE_AUDIO_BASE:base,...TARGET_ENV,TARGET_S3_PREFIX:'backup/',MIGRATE_CACHE_DIR:dir,...envExtra};
   try{
     const summary=await run(argv,env,{s3Client:targetClient,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{},...deps});
-    return {summary,calls,targetObjects,base};
+    return {summary,calls,targetObjects,base,cacheDir:dir};
   }finally{
     await mock.stop();
+    await rm(dir,{recursive:true,force:true});
   }
 }
 
@@ -429,7 +457,7 @@ function fakeBlobBackend(objects){
   };
   const fetcher=async url=>response(new URL(url).pathname.replace(/^\//,''));
   const sdk={
-    put:async(key,bytes)=>{puts.push(key);objects.set(key,Buffer.from(bytes));},
+    put:async(key,bytes)=>{puts.push(key);objects.set(key,await bodyToBuffer(bytes));},
     del:async url=>{objects.delete(new URL(url).pathname.replace(/^\//,''));},
     get:async key=>objects.get(key)
   };
@@ -591,17 +619,174 @@ test('http source timeout fails without retry',async()=>{
   assert.equal(mock.requests.filter(r=>r.path==='/api/current').length,1);
 });
 
+// ---------- audio temp-file cache (HTTP source chain) ----------
+
+test('audio cache lifecycle: .part download, rename, reuse, corrupt re-download, cleanup',async()=>{
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  const body=Buffer.concat([Buffer.from('OggS'),Buffer.alloc(1000,7)]);
+  const hash=sha256(body);
+  const cache=createAudioCache({dir});
+  try{
+    // download: writes .part, renames to the hash-named file, streams the digest
+    const entry=await cache.acquire(hash,{size:body.length,download:()=>Readable.from([Buffer.concat([body])])});
+    assert.equal(entry.reused,false);
+    assert.equal(entry.digest,hash);
+    assert.equal(entry.size,body.length);
+    assert.equal((await stat(cache.pathFor(hash))).size,body.length);
+    assert.equal((await readdir(dir)).filter(name=>name.endsWith('.part')).length,0);
+    assert(cache.stats().peakBytes>=body.length);
+    // no release here: an interrupted run leaves the file behind
+    // reuse: same hash already complete (size+digest verified) - no download.
+    // A fresh cache over the same directory reuses it.
+    let downloads=0;
+    const resumed=createAudioCache({dir});
+    const reusedEntry=await resumed.acquire(hash,{size:body.length,download:()=>{downloads++;return Readable.from([body]);}});
+    assert.equal(reusedEntry.reused,true);
+    assert.equal(downloads,0);
+    assert.equal(resumed.stats().reused,1);
+    await resumed.release(hash);
+    // corrupt cache (right name, wrong bytes) - re-downloaded
+    await writeFile(cache.pathFor(hash),Buffer.from('corrupted'));
+    const redownloaded=await cache.acquire(hash,{size:body.length,download:()=>{downloads++;return Readable.from([body]);}});
+    assert.equal(redownloaded.reused,false);
+    assert.equal(downloads,1);
+    assert.equal(redownloaded.digest,hash);
+    await cache.release(hash);
+    // a failed download leaves no .part and reports a source failure
+    const failing=sha256(Buffer.from('other audio'));
+    await assert.rejects(cache.acquire(failing,{size:5,download:()=>new Readable({read(){this.push(Buffer.from('partial'));this.destroy(Error('boom'));}})}),/Source audio download failed/);
+    assert.equal((await readdir(dir)).filter(name=>name.endsWith('.part')).length,0);
+    // clear(): the dedicated directory does not outlive the cache
+    await writeFile(cache.pathFor(hash),body);
+    await cache.clear();
+    await assert.rejects(readdir(dir),{code:'ENOENT'});
+    // clear() on a missing directory is a no-op
+    await cache.clear();
+  }finally{await rm(dir,{recursive:true,force:true});}
+});
+
+test('http audio downloads through the cache and uploads streamed from the file',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'Big',bytes:300000}]}]});
+  const audioBody=[...catalog.objects.values()].find(value=>value.length>300000);
+  const mock=startMockApi(catalog);
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  const {summary,calls,cacheDir}=await runHttp(['--window-days','0','--months','0'],{catalog,mock,cacheDir:dir});
+  assert.equal(cacheDir,dir);
+  assert.equal(summary.cache.downloads,1);
+  assert.equal(summary.cache.reused,0);
+  assert.equal(summary.cache.peakBytes,audioBody.length);
+  const audioPut=calls.find(call=>call.name==='PutObjectCommand'&&call.input.Key.endsWith('.opus'));
+  assert(audioPut);
+  // streamed upload: the Body is a file stream, never an in-memory buffer
+  assert(typeof audioPut.input.Body.pipe==='function');
+  assert(!Buffer.isBuffer(audioPut.input.Body));
+  // the dedicated directory is emptied and removed when the run exits
+  await assert.rejects(readdir(dir),{code:'ENOENT'});
+});
+
+test('a resumed run reuses the cached audio without re-downloading',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const audioKey=[...catalog.objects.keys()].find(key=>key.endsWith('.opus'));
+  const body=catalog.objects.get(audioKey);
+  const hash=audioKey.split('/').pop().slice(0,-5);
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  await writeFile(join(dir,hash+'.opus'),body);
+  const mock=startMockApi(catalog);
+  const {summary,targetObjects}=await runHttp(['--window-days','0','--months','0'],{catalog,mock,cacheDir:dir});
+  assert.equal(summary.cache.reused,1);
+  assert.equal(summary.cache.downloads,0);
+  // no audio GET hit the source (the HEAD size probe is plan-time and allowed)
+  assert(!mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)));
+  const uploaded=[...targetObjects.keys()].find(key=>key.endsWith('.opus'));
+  assert.deepEqual(targetObjects.get(uploaded),body);
+});
+
+test('objects already present at the target are skipped without downloading to the cache',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const first=await runHttp(['--window-days','0','--months','0'],{catalog,mock:startMockApi(catalog)});
+  const mock=startMockApi(catalog);
+  const second=await runHttp(['--window-days','0','--months','0'],{catalog,mock,targetObjects:first.targetObjects});
+  assert.equal(second.summary.uploaded,0);
+  assert.equal(second.summary.cache.downloads,0);
+  assert.equal(second.summary.cache.reused,0);
+  assert(!mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)));
+});
+
+test('verify-full re-reads the target and the cache file without a second source download',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const {summary}=await runHttp(['--window-days','0','--months','0','--verify-full'],{catalog,mock});
+  assert.equal(summary.verifyFull,true);
+  assert.equal(summary.cache.downloads,1);
+  const audioDownloads=mock.requests.filter(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path));
+  assert.equal(audioDownloads.length,1);
+});
+
+test('a failed run still clears the cache directory',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  await assert.rejects(runHttp(['--window-days','0','--months','0','--concurrency','1'],{
+    catalog,mock,cacheDir:dir,
+    targetClientOptions:{fail:(name,input)=>name==='PutObjectCommand'&&input.Key.endsWith('.opus')?{$metadata:{httpStatusCode:500}}:null}
+  }),/HTTP 500/);
+  await assert.rejects(readdir(dir),{code:'ENOENT'});
+});
+
+test('insufficient cache disk space aborts with --cache-dir guidance',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New',bytes:500000}]}]});
+  const mock=startMockApi(catalog);
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  const targetObjects=new Map();
+  const statfsFake=async()=>({bsize:4096,bfree:100000,bavail:10,blocks:100000});
+  await assert.rejects(runHttp(['--window-days','0','--months','0'],{
+    catalog,mock,cacheDir:dir,targetObjects,deps:{statfs:statfsFake}
+  }),/Insufficient cache disk space.*--cache-dir/);
+  // no pointer switch ever happened
+  assert(![...targetObjects.keys()].some(key=>key.endsWith('current.json')));
+});
+
+test('cache directory options validate and resolve with CLI precedence',async()=>{
+  assert.throws(()=>parseArgs(['--cache-dir']),/--cache-dir/);
+  assert.throws(()=>parseArgs(['--cache-dir','  ']),/--cache-dir/);
+  assert.equal(parseArgs(['--cache-dir','/tmp/m']).cacheDir,'/tmp/m');
+  assert.equal(resolveCacheDir({}),join(tmpdir(),'anyun-migrate-s3'));
+  assert.equal(resolveCacheDir({MIGRATE_CACHE_DIR:'/var/cache/m'}),'/var/cache/m');
+  assert.equal(resolveCacheDir({MIGRATE_CACHE_DIR:'/var/cache/m'},'/cli/dir'),resolve('/cli/dir'));
+  assert.throws(()=>resolveCacheDir({MIGRATE_CACHE_DIR:'  '}),/Invalid cache directory/);
+  assert.throws(()=>createAudioCache({}),/Invalid cache directory/);
+  assert.throws(()=>createAudioCache({dir:'/tmp/x',reserveBytes:-1}),/Invalid cache reserve/);
+});
+
+test('corrupt cached audio is re-downloaded and the target still receives the correct bytes',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const audioKey=[...catalog.objects.keys()].find(key=>key.endsWith('.opus'));
+  const body=catalog.objects.get(audioKey);
+  const hash=audioKey.split('/').pop().slice(0,-5);
+  const dir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  await writeFile(join(dir,hash+'.opus'),Buffer.from('corrupt but plausible'));
+  const mock=startMockApi(catalog);
+  const {summary,targetObjects}=await runHttp(['--window-days','0','--months','0'],{catalog,mock,cacheDir:dir});
+  assert.equal(summary.cache.downloads,1);
+  assert.equal(summary.cache.reused,0);
+  assert(mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)));
+  const uploaded=[...targetObjects.keys()].find(key=>key.endsWith('.opus'));
+  assert.deepEqual(targetObjects.get(uploaded),body);
+});
+
 test('blob target receives the full object set through the blob store',async()=>{
   const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
   const mock=startMockApi(catalog);
   const base=await mock.start();
   const blob=fakeBlobBackend(new Map());
+  const cacheDir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
   try{
     const summary=await run(['--window-days','0','--months','0'],{
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
       BLOB_BASE_URL:'https://blob.fixture.invalid',
-      BLOB_READ_WRITE_TOKEN:'fixture-token'
+      BLOB_READ_WRITE_TOKEN:'fixture-token',
+      MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
     assert.equal(summary.uploaded,summary.objects);
     const keys=[...blob.objects.keys()].sort();
@@ -618,13 +803,15 @@ test('blob target receives the full object set through the blob store',async()=>
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
       BLOB_BASE_URL:'https://blob.fixture.invalid',
-      BLOB_READ_WRITE_TOKEN:'fixture-token'
+      BLOB_READ_WRITE_TOKEN:'fixture-token',
+      MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
     assert.equal(again.uploaded,0);
     assert.equal(again.skipped,again.objects);
     assert.equal(blob.puts.length,0);
   }finally{
     await mock.stop();
+    await rm(cacheDir,{recursive:true,force:true});
   }
 });
 
@@ -633,22 +820,26 @@ test('blob target rejects --prune and same-base source/target is rejected',async
   const mock=startMockApi(catalog);
   const base=await mock.start();
   const blob=fakeBlobBackend(new Map());
+  const cacheDir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
   try{
     await assert.rejects(run(['--window-days','0','--months','0','--prune'],{
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
       BLOB_BASE_URL:'https://blob.fixture.invalid',
-      BLOB_READ_WRITE_TOKEN:'fixture-token'
+      BLOB_READ_WRITE_TOKEN:'fixture-token',
+      MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}}),/unsupported for Blob targets/);
     await assert.rejects(run(['--window-days','0','--months','0'],{
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
       BLOB_BASE_URL:base+'',
-      BLOB_READ_WRITE_TOKEN:'fixture-token'
+      BLOB_READ_WRITE_TOKEN:'fixture-token',
+      MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}}),/same location/);
     assert.equal(blob.puts.length,0);
   }finally{
     await mock.stop();
+    await rm(cacheDir,{recursive:true,force:true});
   }
 });
 

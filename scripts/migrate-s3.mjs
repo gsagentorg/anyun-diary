@@ -6,7 +6,11 @@
 // objects are never written, renamed, or deleted. Output never includes
 // credentials or URLs.
 import {createHash} from 'node:crypto';
-import {readdir,stat} from 'node:fs/promises';
+import {createReadStream,createWriteStream} from 'node:fs';
+import {mkdir,readdir,rmdir,stat,statfs,unlink,rename} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {Readable,Transform} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {S3Client,ListObjectsV2Command,GetObjectCommand,HeadObjectCommand,PutObjectCommand,DeleteObjectCommand} from '@aws-sdk/client-s3';
@@ -25,11 +29,14 @@ const DEFAULT_CONCURRENCY=5;
 const DEFAULT_WINDOW_DAYS=30;
 const DEFAULT_RETRIES=4;
 const DEFAULT_TIMEOUT_MS=120000;
+const DEFAULT_CACHE_DIR_NAME='anyun-migrate-s3';
+const DEFAULT_CACHE_RESERVE_BYTES=512*1024*1024;
+const CACHE_FILE_NAME=/^[a-f0-9]{64}\.opus(\.part)?$/;
 
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 export function parseArgs(argv=process.argv.slice(2)){
-  const options={dryRun:false,prune:false,verifyFull:false,windowDays:undefined,months:undefined,concurrency:DEFAULT_CONCURRENCY,budgetMb:DEFAULT_BUDGET_MB,timeoutMs:DEFAULT_TIMEOUT_MS,now:undefined,help:false};
+  const options={dryRun:false,prune:false,verifyFull:false,windowDays:undefined,months:undefined,concurrency:DEFAULT_CONCURRENCY,budgetMb:DEFAULT_BUDGET_MB,timeoutMs:DEFAULT_TIMEOUT_MS,cacheDir:undefined,now:undefined,help:false};
   const numeric=(flag,value,min,max)=>{
     if(!/^\d+$/.test(value??''))throw Error(`${flag} requires an integer`);
     const n=Number(value);
@@ -47,6 +54,11 @@ export function parseArgs(argv=process.argv.slice(2)){
     else if(arg==='--concurrency')options.concurrency=numeric(arg,argv[++i],1,16);
     else if(arg==='--budget-mb')options.budgetMb=numeric(arg,argv[++i],1,1048576);
     else if(arg==='--timeout-ms')options.timeoutMs=numeric(arg,argv[++i],1,3600000);
+    else if(arg==='--cache-dir'){
+      const value=argv[++i];
+      if(typeof value!=='string'||!value.trim())throw Error(`${arg} requires a non-empty directory path`);
+      options.cacheDir=value.trim();
+    }
     else if(arg==='--now')options.now=numeric(arg,argv[++i],0,Number.MAX_SAFE_INTEGER);
     else throw Error('Unknown argument. Use --help.');
   }
@@ -121,6 +133,124 @@ async function bodyBytes(body){
   return Buffer.from(body);
 }
 
+// Streaming SHA-256 over any body shape (SDK Readable, web ReadableStream, or
+// byte-array facade). Peak memory stays at chunk size, never file size.
+export async function digestBody(body){
+  const hash=createHash('sha256');
+  if(!body)hash.update(Buffer.alloc(0));
+  else if(typeof body[Symbol.asyncIterator]==='function')for await(const chunk of body)hash.update(chunk);
+  else if(typeof body.transformToByteArray==='function')hash.update(Buffer.from(await body.transformToByteArray()));
+  else if(typeof body.getReader==='function'){
+    const reader=body.getReader();
+    for(;;){const {done,value}=await reader.read();if(done)break;hash.update(Buffer.from(value));}
+  }
+  else hash.update(Buffer.from(body));
+  return hash.digest('hex');
+}
+
+function hashFileStream(path){
+  return new Promise((resolveDone,reject)=>{
+    const hash=createHash('sha256');
+    createReadStream(path)
+      .on('data',chunk=>hash.update(chunk))
+      .on('error',reject)
+      .on('end',()=>resolveDone(hash.digest('hex')));
+  });
+}
+
+// Dedicated temp-directory cache for HTTP-source audio. Files land as
+// <hash>.opus.part, are renamed after the streamed download, and are named by
+// content hash so an interrupted run can reuse complete files (size+digest
+// verified) instead of re-downloading. The whole directory is cleared when the
+// run exits (run()'s finally), including failure paths.
+export function resolveCacheDir(env,cliValue){
+  const raw=cliValue??env?.MIGRATE_CACHE_DIR;
+  if(raw===undefined||raw===null)return join(tmpdir(),DEFAULT_CACHE_DIR_NAME);
+  if(typeof raw!=='string'||!raw.trim())throw Error('Invalid cache directory');
+  return resolve(raw.trim());
+}
+
+export function createAudioCache({dir,statfsFn=statfs,reserveBytes=DEFAULT_CACHE_RESERVE_BYTES}={}){
+  if(!dir||typeof dir!=='string')throw Error('Invalid cache directory');
+  const root=resolve(dir);
+  if(!Number.isFinite(reserveBytes)||reserveBytes<0)throw Error('Invalid cache reserve');
+  let ensured=null;
+  let liveBytes=0;
+  let peakBytes=0;
+  let downloads=0;
+  let reused=0;
+  const live=new Map();
+  const ensure=async()=>{
+    if(!ensured)ensured=mkdir(root,{recursive:true}).then(()=>{}).catch(error=>{ensured=null;throw error;});
+    return ensured;
+  };
+  const pathFor=hash=>join(root,`${hash}.opus`);
+  const freeBytes=async()=>{
+    let info;
+    try{info=await statfsFn(root);}
+    catch(error){throw Error(`Cache disk space check failed (${error?.code??error?.message??'unknown'})`);}
+    const free=Number(info?.bavail)*Number(info?.bsize);
+    if(!Number.isFinite(free)||free<0)throw Error('Cache disk space check failed (unavailable)');
+    return free;
+  };
+  return {
+    dir:root,
+    pathFor,
+    digestFile:hash=>hashFileStream(pathFor(hash)),
+    async acquire(hash,{size,download}={}){
+      if(!SHA256.test(hash))throw Error('Invalid cache key');
+      await ensure();
+      // Reuse only a complete file whose size and digest both match the audio
+      // identity; anything else is treated as corrupt and re-downloaded.
+      try{
+        const info=await stat(pathFor(hash));
+        if(info.isFile()&&(size===undefined||size===null||info.size===size)&&await hashFileStream(pathFor(hash))===hash){
+          reused++;
+          liveBytes+=info.size;
+          peakBytes=Math.max(peakBytes,liveBytes);
+          live.set(hash,info.size);
+          return {path:pathFor(hash),size:info.size,digest:hash,reused:true};
+        }
+      }catch(error){if(error.code!=='ENOENT')throw error;}
+      const expected=Number.isInteger(size)&&size>=0?size:0;
+      const free=await freeBytes();
+      if(free-reserveBytes-liveBytes<expected)throw Error(`Insufficient cache disk space: need ${expected} bytes plus ${reserveBytes} reserve, ${free-liveBytes} free; use --cache-dir on a larger volume or reduce --concurrency`);
+      const part=join(root,`${hash}.opus.part`);
+      const hasher=createHash('sha256');
+      let written=0;
+      const stream=await download();
+      try{
+        await pipeline(stream,new Transform({transform(chunk,_enc,callback){hasher.update(chunk);written+=chunk.length;callback(null,chunk);}}),createWriteStream(part));
+        await rename(part,pathFor(hash));
+      }catch(error){
+        await unlink(part).catch(()=>{});
+        const reason=error?.name==='TimeoutError'||error?.name==='AbortError'?'timeout':(error?.code??error?.name??'network');
+        throw Error(`Source audio download failed (${reason})`);
+      }
+      downloads++;
+      liveBytes+=written;
+      peakBytes=Math.max(peakBytes,liveBytes);
+      live.set(hash,written);
+      return {path:pathFor(hash),size:written,digest:hasher.digest('hex'),reused:false};
+    },
+    async release(hash){
+      const counted=live.get(hash)??0;
+      live.delete(hash);
+      liveBytes-=counted;
+      try{await unlink(pathFor(hash));}
+      catch(error){if(error.code!=='ENOENT')throw error;}
+    },
+    async clear(){
+      let entries;
+      try{entries=await readdir(root);}
+      catch(error){if(error.code==='ENOENT')return;throw error;}
+      await Promise.all(entries.filter(name=>CACHE_FILE_NAME.test(name)).map(name=>unlink(join(root,name)).catch(error=>{if(error.code!=='ENOENT')throw error;})));
+      await rmdir(root).catch(error=>{if(error.code!=='ENOENT'&&error.code!=='ENOTEMPTY')throw error;});
+    },
+    stats(){return {downloads,reused,peakBytes};}
+  };
+}
+
 // Target/backend over physical keys. The label only affects sanitized errors.
 // The default client disables SDK-internal retries; explicit retries (when
 // enabled) are reported through the summary instead of happening silently.
@@ -144,12 +274,16 @@ export function createS3Backend(options,client=new S3Client({...options.clientOp
       try{return await bodyBytes((await client.send(new GetObjectCommand({...base,Key:key}))).Body);}
       catch(error){throw sdkError(`${label} read`,error);}
     },
+    async getStream(key){
+      try{return (await client.send(new GetObjectCommand({...base,Key:key}))).Body;}
+      catch(error){throw sdkError(`${label} read`,error);}
+    },
     async head(key){
       try{return {size:Number((await client.send(new HeadObjectCommand({...base,Key:key}))).ContentLength)||0};}
       catch(error){if(notFound(error))return null;throw sdkError(`${label} head`,error);}
     },
-    async put(key,bytes,contentType,cacheControl){
-      try{await client.send(new PutObjectCommand({...base,Key:key,Body:bytes,ContentType:contentType,CacheControl:cacheControl}));}
+    async put(key,body,contentType,cacheControl){
+      try{await client.send(new PutObjectCommand({...base,Key:key,Body:body,ContentType:contentType,CacheControl:cacheControl}));}
       catch(error){throw sdkError(`${label} write`,error);}
     },
     async delete(key){
@@ -199,8 +333,16 @@ export function createBlobBackend({baseUrl,token,access='public',fetcher=fetch,s
       if(!response.ok)throw Error(`target read failed (HTTP ${response.status})`);
       return Buffer.from(await response.arrayBuffer());
     },
-    async put(key,bytes,contentType){
-      try{await store.write(validKey(key),bytes,contentType);}
+    async getStream(key){
+      let response;
+      try{response=await store.read(validKey(key));}
+      catch(error){throw sanitize('target read',error);}
+      if(response.status===404){const error=new Error('target read failed (HTTP 404)');error.status=404;throw error;}
+      if(!response.ok){await response.body?.cancel().catch(()=>{});throw Error(`target read failed (HTTP ${response.status})`);}
+      return response.body;
+    },
+    async put(key,body,contentType){
+      try{await store.write(validKey(key),body,contentType);}
       catch(error){throw sanitize('target write',error);}
     },
     async delete(key){
@@ -332,6 +474,15 @@ export function createHttpSource({base,fetcher=fetch,timeoutMs=DEFAULT_TIMEOUT_M
         return Buffer.from(await response.arrayBuffer());
       }
       throw Error('Unsupported source key');
+    },
+    // Streaming variant for the audio path only: returns the undecoded web
+    // stream so the temp-file cache can pipe it to disk without buffering.
+    readStream:async key=>{
+      validKey(key);
+      const audio=key.match(/^audio\/([a-f0-9]{64})\.opus$/);
+      if(!audio)throw Error('Unsupported source key');
+      const response=await request(`api/audio/${audio[1]}.opus`);
+      return response.body;
     },
     probeSize:async key=>{
       if(!/^audio\/[a-f0-9]{64}\.opus$/.test(key))throw Error('Unsupported source key');
@@ -634,7 +785,54 @@ async function pool(items,limit,worker){
 // compared with --verify-full), uploads are unconditional PUTs, 429/5xx and
 // network errors never retry automatically, and lengths are checked through
 // HEAD. Other sources keep the hash-aware resume engine.
-async function syncObject(object,{source,target,retries,sleep,stats,verifyFull}){
+//
+// HTTP-source audio never buffers whole files in memory: it downloads through
+// the temp-dir cache (.part then rename), uploads by streaming the cached file
+// into the target Body, and verifies by streaming digests. Objects already
+// present at the target are skipped before any download starts.
+async function syncCachedAudio(object,{source,target,cache,verifyFull,op}){
+  const hash=object.logicalKey.slice(6,-5);
+  const targetDigest=async()=>{
+    const body=await op(()=>target.getStream(object.targetKey));
+    try{return await digestBody(body);}
+    finally{await body?.cancel?.().catch(()=>{});}
+  };
+  const existing=await op(()=>target.head(object.targetKey));
+  if(existing){
+    if(!verifyFull)return 'skipped';
+    if(await targetDigest()===hash)return 'skipped';
+    throw Error('Destination differs; existing object not uploaded');
+  }
+  const entry=await cache.acquire(hash,{
+    size:object.size,
+    download:async()=>{
+      if(typeof source.readStream==='function')return Readable.fromWeb(await source.readStream(object.logicalKey));
+      return Readable.from([await source.read(object.logicalKey)]);
+    }
+  });
+  try{
+    if(entry.digest!==hash)throw Error('Source audio integrity mismatch');
+    if(entry.size!==object.size)throw Error('Source length mismatch');
+    // Stream the cached file into the target; the S3 SDK Body accepts a Node
+    // Readable and the Blob SDK accepts its web-stream form.
+    const nodeStream=createReadStream(entry.path);
+    nodeStream.on('error',()=>{}); // the target put surfaces failures; an orphaned stream must never crash the process
+    const uploadBody=target.storage==='blob'?Readable.toWeb(nodeStream):nodeStream;
+    try{await op(()=>target.put(object.targetKey,uploadBody,object.contentType,object.cacheControl));}
+    catch(error){nodeStream.destroy();throw error;}
+    const head=await op(()=>target.head(object.targetKey));
+    if(head&&head.size!==null&&head.size!==entry.size)throw Error('Destination length mismatch');
+    if(verifyFull){
+      // The verification read comes from the cache file, never a second
+      // source download.
+      const fileDigest=await cache.digestFile(hash);
+      if(await targetDigest()!==fileDigest)throw Error('Destination integrity mismatch');
+    }
+    return 'uploaded';
+  }finally{await cache.release(hash);}
+}
+
+async function syncObject(object,{source,target,retries,sleep,stats,verifyFull,cache}){
   const v1Mode=source.storage==='http';
   const op=operation=>{
     if(!v1Mode)return withRetry(operation,{retries,sleep,stats});
@@ -649,6 +847,7 @@ async function syncObject(object,{source,target,retries,sleep,stats,verifyFull})
     return Buffer.from(await withRetry(()=>source.read(object.logicalKey),{retries,sleep,stats}));
   };
   const expectedHash=object.kind==='audio'?object.logicalKey.slice(6,-5):null;
+  if(expectedHash&&cache&&source.storage==='http')return syncCachedAudio(object,{source,target,cache,verifyFull,op});
 
   const existing=await op(()=>target.head(object.targetKey));
   if(existing){
@@ -699,7 +898,7 @@ async function pruneTarget(plan,target,{retries,sleep,stats}){
   return extraKeys.size;
 }
 
-export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENCY,dryRun=false,prune=false,verifyFull=false,retries=DEFAULT_RETRIES,sleep=defaultSleep,stats={retries:0}}={}){
+export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENCY,dryRun=false,prune=false,verifyFull=false,retries=DEFAULT_RETRIES,sleep=defaultSleep,stats={retries:0},cache=null}={}){
   if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error('Invalid concurrency');
   const summary={
     ok:true,
@@ -724,17 +923,18 @@ export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENC
 
   const objects=plan.objects.filter(object=>object.kind!=='pointer');
   await pool(objects,concurrency,async object=>{
-    const result=await syncObject(object,{source,target,retries,sleep,stats,verifyFull});
+    const result=await syncObject(object,{source,target,retries,sleep,stats,verifyFull,cache});
     if(result==='uploaded')summary.uploaded++;else summary.skipped++;
   });
 
   const pointer=plan.objects.find(object=>object.kind==='pointer');
   if(!pointer)throw Error('Migration plan has no pointer');
-  const pointerResult=await syncObject(pointer,{source,target,retries,sleep,stats,verifyFull});
+  const pointerResult=await syncObject(pointer,{source,target,retries,sleep,stats,verifyFull,cache});
   if(pointerResult==='uploaded')summary.uploaded++;else summary.skipped++;
 
   if(prune)summary.deleted=await pruneTarget(plan,target,{retries,sleep,stats});
   summary.retries=stats.retries??0;
+  if(cache)summary.cache=cache.stats();
   return summary;
 }
 
@@ -773,6 +973,13 @@ TARGET_STORAGE=blob with BLOB_BASE_URL/BLOB_READ_WRITE_TOKEN.
   --concurrency N        parallel transfer slots (default 5, max 16)
   --budget-mb N          warn when the planned transfer exceeds N MB
   --timeout-ms N         per-request timeout for the HTTP source (default 120000)
+  --cache-dir PATH       audio temp-file cache directory (default
+                         $TMPDIR/anyun-migrate-s3; env MIGRATE_CACHE_DIR).
+                         HTTP-source audio downloads to <hash>.opus.part,
+                         renames on completion, streams into the target, and
+                         is deleted after verification. Complete files are
+                         reused across interrupted runs; the directory is
+                         cleared when the run exits.
   --prune                after a successful pointer switch, delete managed
                          target objects that are not in this plan (S3 only)
   --now EPOCH            evaluation time in unix seconds (testing)
@@ -786,11 +993,22 @@ export async function run(argv=process.argv.slice(2),env=process.env,deps={}){
   if(sameLocation(source,target))throw Error('Source and target resolve to the same location');
   if(options.prune&&target.storage==='blob')throw Error('--prune is unsupported for Blob targets (no listing)');
   const now=options.now??deps.now??Date.now()/1000;
-  const plan=await buildPlan({source,target,now,windowDays:options.windowDays,months:options.months,budgetBytes:options.budgetMb*1024*1024,retries:deps.retries??DEFAULT_RETRIES,sleep:deps.sleep});
-  const summary=await migrate(plan,{source,target,concurrency:options.concurrency,dryRun:options.dryRun,prune:options.prune,verifyFull:options.verifyFull,retries:deps.retries??DEFAULT_RETRIES,sleep:deps.sleep});
-  (deps.log??console.log)(JSON.stringify(summary));
-  if(summary.budgetExceeded)(deps.warn??console.error)(`Warning: planned transfer (${summary.bytes} bytes) exceeds --budget-mb ${options.budgetMb}`);
-  return summary;
+  // The temp-file cache exists only for the HTTP source chain (the audio path
+  // that would otherwise buffer whole files in memory); dry-run never
+  // downloads audio. run()'s finally clears the whole dedicated directory on
+  // every exit path, including failures.
+  const cache=source.storage==='http'&&!options.dryRun
+    ?(deps.cache??createAudioCache({dir:resolveCacheDir(env,options.cacheDir),statfsFn:deps.statfs}))
+    :null;
+  try{
+    const plan=await buildPlan({source,target,now,windowDays:options.windowDays,months:options.months,budgetBytes:options.budgetMb*1024*1024,retries:deps.retries??DEFAULT_RETRIES,sleep:deps.sleep});
+    const summary=await migrate(plan,{source,target,concurrency:options.concurrency,dryRun:options.dryRun,prune:options.prune,verifyFull:options.verifyFull,retries:deps.retries??DEFAULT_RETRIES,sleep:deps.sleep,cache});
+    (deps.log??console.log)(JSON.stringify(summary));
+    if(summary.budgetExceeded)(deps.warn??console.error)(`Warning: planned transfer (${summary.bytes} bytes) exceeds --budget-mb ${options.budgetMb}`);
+    return summary;
+  }finally{
+    if(cache)await cache.clear();
+  }
 }
 
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url)){

@@ -83,7 +83,14 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 
 沿用旧链（migrate-audio）的语义：
 
-- **流式不落盘**：音频经内存直传目标，全程无临时文件、无本地缓存。
+- **音频临时文件缓存**：HTTP 源的音频不再整块进内存。每个音频先流式写入临时目录的 `<hash>.opus.part`，完成后改名为 `<hash>.opus`；上传时从缓存文件流式读入目标 Body（S3 走 Node `fs.createReadStream`，Blob 走其 web 流形态）；`--verify-full` 的校验读也来自缓存文件，不重复下载。峰值内存只与并发槽的流缓冲相关，不随文件大小增长。
+  - 缓存目录默认 `$TMPDIR/anyun-migrate-s3`（专用子目录），可用 `--cache-dir PATH` 或环境变量 `MIGRATE_CACHE_DIR` 覆盖（CLI 优先）。
+  - 下载→上传→校验完成即删除对应缓存文件（失败也删）；脚本退出时（含报错退出）清空整个专用子目录。
+  - **断点复用**：缓存文件名含内容 hash；重跑时同 hash 且「大小+摘要」验证通过的完整文件直接复用，损坏/不完整的重新下载。被进程直接杀死（kill）残留的文件同样会被验证后复用或重建，无脏数据风险。
+  - **磁盘安全**：写前检查缓存目录可用空间（可用 - 512MiB 预留 > 当前占用 + 本文件需求），不足即报错并提示 `--cache-dir` 换盘或降低 `--concurrency`，不做静默降级。summary 的 `cache` 字段报告 `downloads`/`reused`/`peakBytes`（缓存峰值占用）。
+  - 目标已存在且跳过的对象**不下载到缓存**（先 HEAD 判断再决定下载）。
+  - 不要让两个迁移并发共用同一缓存目录（退出清理会互相干扰）；需要并发时各自指定 `--cache-dir`。
+  - 缓存目录是专用目录，退出清理只删除本工具命名（`<hash>.opus`/`.part`）的文件；自定义 `--cache-dir` 请指向空目录。
 - **已存在跳过**：目标 key 已存在即跳过，不按大小决定重传；`--verify-full` 才会完整 GET 目标比对 SHA-256，已存在但摘要不同只报错、不重传。
 - **B2 无条件 PUT**：不发送 `If-None-Match` 条件头；B2 同 key 上传会创建新版本，因此迁移只补缺失 key。迁移期间不要有其他进程向相同目标 key 写入。
 - **429/失败不自动重试**：源与目标均是。429 报错提示后由人工等待后重跑；4xx 立即失败。
@@ -91,7 +98,7 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 - **指针最后写**：全部对象校验通过才写 `current.json`；中断不会让目标读者看到半成品目录。
 - 上传后 HEAD 目标校验长度；音频另校验内容 SHA-256 与文件名一致、月块 revision 与内容一致（源端完整性）。
 - 失败即停、退出码非 0；重跑跳过已完成对象，可断点续跑（不按字节续传）。
-- `--concurrency` 并行槽默认 5（1..16）；`--timeout-ms` 每请求超时默认 120000；`--now` 仅测试用。
+- `--concurrency` 并行槽默认 5（1..16）；`--timeout-ms` 每请求超时默认 120000；`--cache-dir`/`MIGRATE_CACHE_DIR` 音频临时缓存目录（见上文）；`--now` 仅测试用。
 - 输出与错误信息均脱敏：不含端点、签名或密钥。
 
 ## 5. 裁剪与 manifest 重建
@@ -127,6 +134,9 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 - `Source release changed during migration`：迁移中源发布了新 release；重跑即可（从头钉住新 release）。
 - `Destination differs; existing object not uploaded`：`--verify-full` 下目标已有对象与源不一致；人工核查后决定，工具不覆盖。
 - `Source audio integrity mismatch`：源音频内容与其 `audio/<sha256>.opus` 名称不符；先修源数据。
+- `Source audio download failed (...)`：HTTP 源音频流式下载中断（网络/超时）；重跑即可（完整缓存文件会被复用，不会重复下载已验证部分）。
+- `Insufficient cache disk space`：缓存目录可用空间（扣除 512MiB 预留）低于本文件需求；用 `--cache-dir` 指向更大的盘，或降低 `--concurrency` 减少同时在缓存的文件量。
+- `Cache disk space check failed`：无法读取缓存目录的磁盘空间信息；检查 `--cache-dir` 指向的文件系统是否支持 `statfs`。
 - `--prune is unsupported for Blob targets`：Blob 无列举能力，不支持 prune。
 - `Source and target resolve to the same location`：源与目标是同一地址；检查 env。
 
@@ -136,4 +146,4 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 npm run test:migrate-s3
 ```
 
-覆盖：`TARGET_S3_*`/`AUDIO_S3_*` 映射（含 B2 自定义 endpoint 与 path-style）、HTTP mock 源（`/api/current`、`/api/catalog` 含 available 翻转、release 钉住、`/api/audio` 307+Range）、HEAD 探长与 Range 回退、完整 v2 对象集与指针最后写、窗口/月裁剪重算 revision、已存在跳过（无内容读取）、`--verify-full` 全文摘要比对与差异拒绝、源/目标 429 均不自动重试、源超时、release 中途变更检测、Blob 目标全量写入与二次跳过、Blob 拒绝 prune、同地址拒绝。全部为本地 HTTP mock 与内存 fake（S3/Blob），不访问真实 B2/Blob，不使用真实凭据。
+覆盖：`TARGET_S3_*`/`AUDIO_S3_*` 映射（含 B2 自定义 endpoint 与 path-style）、HTTP mock 源（`/api/current`、`/api/catalog` 含 available 翻转、release 钉住、`/api/audio` 307+Range）、HEAD 探长与 Range 回退、完整 v2 对象集与指针最后写、窗口/月裁剪重算 revision、已存在跳过（无内容读取且零缓存下载）、`--verify-full` 全文摘要比对（目标与缓存文件流式摘要，无二次源下载）与差异拒绝、源/目标 429 均不自动重试、源超时、release 中途变更检测、Blob 目标全量写入与二次跳过、Blob 拒绝 prune、同地址拒绝、音频临时目录缓存全生命周期（`.part`→改名、流式上传、断点复用、损坏重下、失败/退出清理、磁盘不足拒绝与 `--cache-dir`/`MIGRATE_CACHE_DIR` 参数校验）。全部为本地 HTTP mock 与内存 fake（S3/Blob），不访问真实 B2/Blob，不使用真实凭据。

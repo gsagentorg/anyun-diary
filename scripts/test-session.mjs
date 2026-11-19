@@ -1,104 +1,113 @@
-// 会话快照恢复 + 随机 LIFO 行为测试（vite-node 跑，node 环境补浏览器桩）
+import assert from 'node:assert/strict';
 const store = new Map();
-const ls = {
-  getItem: (k) => (store.has(k) ? store.get(k) : null),
-  setItem: (k, v) => store.set(k, String(v)),
-  removeItem: (k) => store.delete(k),
+const ls = { getItem:k=>store.get(k)??null, setItem:(k,v)=>store.set(k,String(v)), removeItem:k=>store.delete(k) };
+globalThis.window={localStorage:ls,addEventListener(){},removeEventListener(){}};
+globalThis.document={addEventListener(){},removeEventListener(){},visibilityState:'visible'};
+Object.defineProperty(globalThis,'navigator',{value:{mediaSession:{setActionHandler(){},setPositionState(){}}},configurable:true});
+globalThis.MediaMetadata=class {};
+globalThis.Audio=class extends EventTarget { paused=true;currentTime=0;duration=100;src='';load(){} play(){this.paused=false;return Promise.resolve()} pause(){this.paused=true} removeAttribute(){this.src=''} };
+// Test-only vite runner stubs the runtime environment; no real storage/network.
+const { ViteNodeRunner } = await import('vite-node/client');
+const original = ViteNodeRunner.prototype.dependencyRequest;
+ViteNodeRunner.prototype.dependencyRequest = function(id, fsPath, callstack) {
+  if (id === '$env/dynamic/public' || String(fsPath).includes('env/dynamic/public')) return Promise.resolve({env:{}});
+  return original.call(this,id,fsPath,callstack);
 };
-globalThis.window = { localStorage: ls, addEventListener() {}, removeEventListener() {}, setTimeout, clearTimeout };
-globalThis.localStorage = ls;
-globalThis.document = { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' };
-Object.defineProperty(globalThis, 'navigator', {
-  value: { mediaSession: { setActionHandler() {}, setPositionState() {}, playbackState: 'none' } },
-  configurable: true,
-});
-globalThis.MediaMetadata = class {};
-globalThis.Audio = class {
-  constructor() { this.paused = true; this.currentTime = 0; this.src = ''; }
-  addEventListener() {} removeEventListener() {}
-  load() {} setAttribute() {} removeAttribute() {}
-  play() { this.paused = false; return Promise.resolve(); }
-  pause() { this.paused = true; }
+let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[];
+class NativeStub extends EventTarget {
+  constructor(config,update){super();this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
+  refresh(){return Promise.resolve();} sync(){nativeSyncs.push(structuredClone(this.config()));return Promise.resolve();}
+}
+const stubbed = ViteNodeRunner.prototype.dependencyRequest;
+ViteNodeRunner.prototype.dependencyRequest = function(id,fsPath,callstack) {
+  if (String(id).endsWith('/native-audio') || String(fsPath).endsWith('/native-audio.ts')) return Promise.resolve({NativeAudio:NativeStub,usesNativeAudio:()=>nativeMode});
+  return stubbed.call(this,id,fsPath,callstack);
 };
-
-const { player, initSession, toggleShuffle, step, setRate, getAudio, prependAt, __resetSessionGuardForTest } = await import('../src/lib/player.svelte.ts');
-const { buildRecTracks } = await import('../src/lib/types.ts');
-const data = (await import('../src/lib/data.json')).default;
-const recs = data.recordings;
-const allTracks = recs.flatMap((r) => buildRecTracks(r));
-const byFile = new Map(allTracks.map((t) => [t.clip.file, t]));
-const C = ['0', '1', '2'].map((i) => [...byFile.keys()][Number(i)]);
-let pass = 0, fail = 0;
-const ok = (cond, name) => { if (cond) { pass++; } else { fail++; console.log('FAIL:', name); } };
-
-// T1 快照恢复：暂停 + 队列 + 当前项 + 倍速
-store.set('anyun-session-v1', JSON.stringify({ v: 1, queue: C, cur: 1, t: 42.5, shuffle: false, skipSame: true, dedup: true, rate: 1.25 }));
-initSession();
-ok(player.sessionRestored === true, 'sessionRestored');
-ok(player.playlist.length === 3, 'queue rebuilt 3');
-ok(player.pos === 1, 'cur=1');
-ok(player.playbackRate === 1.25, 'rate 1.25 restored');
-ok(player.playing === false, 'stays paused');
-ok(decodeURIComponent(getAudio().src).includes(byFile.get(C[1]).clip.opus), 'audio src = cur clip (opus)');
-ok(getAudio().paused === true, 'audio not auto-playing');
-
-// T2 重复队列项保留
-__resetSessionGuardForTest();
-store.set('anyun-session-v1', JSON.stringify({ v: 1, queue: [C[0], C[0], C[2]], cur: 0, t: 0, shuffle: false, skipSame: true, dedup: true, rate: 1 }));
-initSession();
-ok(player.playlist.length === 3 && player.playlist[0].clip.file === player.playlist[1].clip.file, 'duplicate entries kept');
-
-// T3 坏快照安全
-store.set('anyun-session-v1', '{broken json!!!');
-initSession();
-ok(player.sessionRestored === false || player.playlist.length >= 0, 'no crash on garbage');
-
-// T4 随机 LIFO：上一曲压栈、下一曲优先弹回
-player.playlist = allTracks.filter((t) => C.includes(t.clip.file));
-player.pos = 1; player.track = player.playlist[1];
-player.history = []; player.playedTitles = []; player.shuffleRedo = [];
-toggleShuffle();
-ok(player.shuffle === true, 'shuffle on');
-const seen = [];
-step(1); seen.push(player.pos);
-step(-1); seen.push(player.pos);
-step(1); seen.push(player.pos);
-step(1); seen.push(player.pos);
-ok(seen[1] === 1, 'prev returns to origin (' + seen.join(',') + ')');
-ok(seen[0] === seen[2], 'next pops LIFO back to P (' + seen.join(',') + ')');
-
-// T5 随机避开同名
-const same = allTracks.filter((t) => t.clip.title === '凑热闹').slice(0, 5);
-const diff = allTracks.find((t) => t.clip.title !== '凑热闹');
-player.playlist = [...same, diff];
-player.pos = -1; player.track = null;
-player.playedTitles = ['T:凑热闹'];
-player.shuffleSkipSameTitle = true;
-let hitDiff = false;
-for (let i = 0; i < 30 && !hitDiff; i++) { player.pos = -1; step(1); if (player.track?.clip.title !== '凑热闹') hitDiff = true; }
-ok(hitDiff, 'skipSameTitle=true avoids same-title');
-player.shuffleSkipSameTitle = false;
-player.dedupByName = false; // 身份判定切到「同名不同词=不同曲」，同名才可能被重抽
-let hitSame = false;
-for (let i = 0; i < 60 && !hitSame; i++) { player.pos = -1; step(1); if (player.track?.clip.title === '凑热闹') hitSame = true; }
-ok(hitSame, 'skipSameTitle=false can re-pick same title');
-
-// T6 setRate 写 localStorage
-setRate(2);
-ok(ls.getItem('anyun-rate') === '2', 'rate persisted');
-
-// T7 prependAt：插到最前 + 切到目标曲 + 原当前曲后移入历史；空队列也能插
-player.playlist = allTracks.filter((t) => C.includes(t.clip.file));
-player.pos = 0; player.track = player.playlist[0];
-player.history = []; player.playedTitles = []; player.shuffleRedo = [];
-const extra = allTracks.find((t) => !C.includes(t.clip.file));
-prependAt([extra], 0);
-ok(player.pos === 0 && player.track?.clip.file === extra.clip.file, 'prependAt jumps to target');
-ok(player.playlist.length === 4 && player.playlist[1].clip.file === C[0], 'old queue shifted to back');
-ok(player.history.includes(1), 'old current recorded in history');
-player.playlist = []; player.pos = -1; player.track = null;
-prependAt([extra], 0);
-ok(player.pos === 0 && player.playlist.length === 1, 'prepend to empty queue');
-
-console.log('SESSION-TESTS pass=' + pass + ' fail=' + fail);
-process.exit(fail ? 1 : 0);
+const m=await import('../src/lib/player.svelte.ts');
+const audio=id=>({id,file:id+'.wav',opus:id+'.opus',title:id,startAt:1700000000,duration:100,lyrics:[],monthId:'2023-11'});
+const [a,b,c]=['a','b','c'].map(audio);
+// Every queue-growth path shares the byte guard; failure preserves current/history.
+const oversized={...a,id:'large',lyrics:[{t:0,text:'字'.repeat(1100000)}]};
+for(const change of [()=>m.adopt([m.makeTrack(oversized)],0),()=>m.prependTracks([oversized]),()=>m.playAudio(oversized)]){
+ const before=JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history});change();assert.equal(JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history}),before);assert.match(m.player.error,/缩小日期范围/);
+}
+const medium={...a,id:'medium',lyrics:[{t:0,text:'字'.repeat(600000)}]};m.adopt([m.makeTrack(medium)],0);
+const once=JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history});m.prependTracks([medium]);assert.equal(JSON.stringify({queue:m.player.playlist,pos:m.player.pos,history:m.player.history}),once,'repeated insertion also rejects atomically');
+m.player.playlist=[];m.player.pos=-1;m.player.track=null;m.player.history=[];m.player.shuffleRedo=[];m.player.error='';
+m.playAudio(a);m.playAudio(b);m.playAudio(a);
+assert.deepEqual(m.player.playlist.map(t=>t.audio.id),['a','b']);assert.equal(m.player.pos,0);
+m.prependTracks([a,c]);assert.deepEqual(m.player.playlist.map(t=>t.audio.id),['a','c','a','b']);assert.equal(m.player.pos,0);
+assert.equal(new Set(m.player.playlist.map(t=>t.queueEntryId)).size,4);
+m.player.history=[2,3];m.player.shuffleRedo=[1];const history=m.player.history.map(i=>m.player.playlist[i].queueEntryId);m.moveTrack(2,0);
+assert.deepEqual(m.player.history.map(i=>m.player.playlist[i].queueEntryId),history);
+m.player.history=[1,2];m.removeAt(1);assert.deepEqual(m.player.history,[1]);
+const queue=m.player.playlist.map(t=>JSON.parse(JSON.stringify(t)));
+store.set('anyun-session-v2',JSON.stringify({v:2,queue,cur:1,t:42,rate:1.25}));m.__resetSessionGuardForTest();m.setPlayerCatalog([]);
+assert.equal(m.player.pos,1);assert.equal(m.player.track.queueEntryId,queue[1].queueEntryId);assert.equal(m.getAudio().paused,true);assert.equal(m.player.playlist.length,queue.length);
+assert.equal(m.player.track.audio.monthId,'2023-11');
+// Migration reads only supplied blocks and preserves the original bytes.
+const fresh = () => { store.clear(); m.player.playlist=[]; m.player.track=null; m.player.pos=-1; m.__resetSessionGuardForTest(); };
+fresh();
+const late=audio('late-month'); late.monthId='2024-01';
+const legacy=JSON.stringify({v:1,queue:[a.file,late.opus,a.file],cur:2,t:37,rate:1.5,shuffle:true,history:[0,1],redo:[2],played:['a']});
+store.set('anyun-session-v1',legacy);
+m.setPlayerCatalog([a]);
+assert.equal(store.get('anyun-session-v1'),legacy);
+assert.equal(store.has('anyun-session-v2'),false,'missing month must not produce a shortened snapshot');
+assert.equal(m.player.playlist.length,0);
+m.sleep.until=Date.now()+60000; const until=m.sleep.until;
+m.setPlayerCatalog([late]);
+assert.equal(m.player.playlist.length,3);
+assert.equal(m.player.pos,2,'duplicate current entry keeps its position');
+assert.equal(new Set(m.player.playlist.map(t=>t.queueEntryId)).size,3);
+assert.deepEqual(m.player.history,[0,1]);assert.deepEqual(m.player.shuffleRedo,[2]);
+assert.equal(m.getAudio().paused,true);assert.equal(m.sleep.until,until);
+assert.equal(store.get('anyun-session-v1'),legacy);
+const migrated=store.get('anyun-session-v2');
+late.title='mutated source';m.setPlayerCatalog([late]);
+assert.equal(store.get('anyun-session-v2'),migrated,'migration happens once');
+assert.notEqual(m.player.playlist[1].audio.title,late.title,'snapshot is independent');
+fresh();store.set('anyun-session-v1',legacy);
+store.set('anyun-session-v2',migrated);m.setPlayerCatalog([a]);
+assert.equal(store.get('anyun-session-v2'),migrated,'v2 wins over v1');
+assert.equal(m.player.playlist.length,3);
+fresh();store.set('anyun-session-v1',JSON.stringify({v:1,queue:[{recFile:'recording',clipFile:'clip.wav'}],cur:0,t:0}));
+m.setPlayerCatalog([{...audio('structured'),file:'recording/clip.wav'}]);
+assert.equal(m.player.playlist[0].audio.id,'structured');
+fresh();nativeMode=true;
+const nativeTrack=m.makeTrack(audio('native-owned'));
+nativeState={queue:[{id:nativeTrack.queueEntryId,audio:nativeTrack.audio}],pos:0,history:[0],redo:[0],played:['native-owned'],shuffle:true,skipSame:true,rate:1.2,playing:true,loading:false,error:'',sleepRevision:'owned',sleepUntil:Date.now()+90000,sleepStarted:Date.now(),sleepMode:'gentle',afterTrack:false,sleepFired:false};
+store.set('anyun-session-v1',legacy);store.set('anyun-session-v2',migrated);
+m.setPlayerCatalog([a]);await new Promise(resolve=>setTimeout(resolve,0));
+assert.equal(m.player.track.audio.id,'native-owned','native queue wins over both web snapshots');
+assert.equal(m.player.playing,true);assert.equal(m.sleep.until,nativeState.sleepUntil);
+assert.deepEqual(m.player.history,[0]);assert.deepEqual(m.player.shuffleRedo,[0]);
+assert.equal(store.get('anyun-session-v2'),migrated);
+// Real old Swift state: no audio snapshot and duplicate ids; snapshot() strips lyrics.
+const oldItem={id:'duplicate',url:'https://audio.example/legacy.opus',title:'Legacy song',key:'Legacy song',clipDuration:91};
+nativeState={...nativeState,queue:[oldItem,{...oldItem}],pos:1,playing:false,loading:false,position:43};
+nativeUpdate(nativeState);
+assert.equal(m.player.playlist.length,2);
+assert.equal(new Set(m.player.playlist.map(t=>t.queueEntryId)).size,2);
+const oldIds=m.player.playlist.map(t=>t.queueEntryId);
+assert.equal(m.player.track.audio.opus,oldItem.url);
+assert.equal(m.player.track.audio.title,oldItem.title);
+assert.equal(m.player.track.audio.duration,91);
+assert.equal(m.player.track.audio.startAt,undefined);
+assert.equal(m.player.track.audio.monthId,undefined);
+assert.deepEqual(m.player.track.audio.lyrics,[],'old Swift summary has no lyrics to invent');
+assert.equal(m.player.playing,false,'external pause remains paused');
+nativeUpdate({...nativeState,pos:0,playing:true,history:[1],redo:[],position:54});
+assert.deepEqual(m.player.playlist.map(t=>t.queueEntryId),oldIds,'duplicate entry identity survives progress/advance events');
+assert.equal(m.player.pos,0);assert.equal(m.player.playing,true);assert.deepEqual(m.player.history,[1]);
+m.scheduleSessionSave();
+assert.equal(nativeSyncs.at(-1).queue.length,2,'sync cannot erase a restored old queue');
+assert.equal(nativeSyncs.at(-1).queue[1].url,oldItem.url);
+assert.equal(nativeSyncs.at(-1).queue[0].id,oldItem.id,'sync preserves native currentID so settings do not reload/pause background audio');
+const syncCount=nativeSyncs.length;
+nativeUpdate({...nativeState,queue:[{id:'unmapped'}]});
+m.scheduleSessionSave();
+assert.equal(nativeSyncs.length,syncCount,'incomplete mapping blocks native configure');
+m.player.track=null;m.player.pos=-1;m.clearQueue();
+assert.equal(nativeSyncs.at(-1).queue.length,0,'explicit user clear permits replacing an unmapped queue');
+console.log('session: snapshots, duplicate identity, history/redo, atomic legacy migration, delayed months and v2 priority passed');process.exit(0);

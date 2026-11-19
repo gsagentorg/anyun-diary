@@ -136,16 +136,30 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.tick(); self.publish()
         })
         notifications.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.diagnostic("background"); self?.persist(); self?.publish() })
-        if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let items = saved["queue"] as? [[String: Any]], valid(items) {
+        if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let items = restoredQueue(saved) {
             queue = NativeLyrics.hydrate(items); pos = saved["pos"] as? Int ?? -1
             rate = (saved["rate"] as? NSNumber)?.floatValue ?? 1
             shuffle = saved["shuffle"] as? Bool ?? false
             skipSame = saved["skipSame"] as? Bool ?? true
             history = saved["history"] as? [Int] ?? []; redo = saved["redo"] as? [Int] ?? []
             played = saved["played"] as? [String] ?? []
-            // Process restart restores paused; sleep countdowns do not survive termination.
+            // Restore paused without discarding a valid wall-clock sleep countdown.
+            sleepState.configure(revision: saved["sleepRevision"] as? String ?? "restored",
+                until: saved["sleepUntil"] as? Double, started: saved["sleepStarted"] as? Double,
+                mode: saved["sleepMode"] as? String ?? "off", afterTrack: saved["afterTrack"] as? Bool ?? false)
             loadCurrent(autoplay: false, at: saved["position"] as? Double ?? 0)
         }
+    }
+    private func restoredQueue(_ saved: [String: Any]) -> [[String: Any]]? {
+        if let data = saved["queueJSON"] as? Data,
+           let items = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]], valid(items) {
+            return items
+        }
+        // v1 stored clip.file as id and the resolved HTTPS URL verbatim. Keep
+        // those identities, order and optional metadata (including absent audio/
+        // monthId); neither dates nor a replacement JS queue can be inferred.
+        if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }
+        return nil
     }
     private func valid(_ items: [[String: Any]]) -> Bool {
         items.allSatisfy { item in
@@ -462,7 +476,13 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         var saved = snapshot()
         saved["queue"] = queue
         // UserDefaults property lists do not accept NSNull.
-        saved.removeValue(forKey: "sleepUntil"); saved.removeValue(forKey: "sleepStarted")
+        if saved["sleepUntil"] is NSNull { saved.removeValue(forKey: "sleepUntil") }
+        if saved["sleepStarted"] is NSNull { saved.removeValue(forKey: "sleepStarted") }
+        // Audio snapshots may contain null duration; JSON data preserves that safely.
+        // A failed migration must not replace the previous legacy record.
+        guard let data = try? JSONSerialization.data(withJSONObject: queue) else { return }
+        saved["queueJSON"] = data
+        saved.removeValue(forKey: "queue")
         UserDefaults.standard.set(saved, forKey: savedKey)
     }
 }

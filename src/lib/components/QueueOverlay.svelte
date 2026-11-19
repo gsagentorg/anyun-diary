@@ -7,7 +7,7 @@
 
   const list = $derived(player.playlist);
   const total = $derived.by(() =>
-    list.reduce((a, t) => a + (t.clip.offsetEnd - t.clip.offsetStart), 0),
+    list.reduce((a, t) => a + ((t.audio.duration ?? 0)), 0),
   );
 
   const LONG_PRESS_MS = 350;
@@ -117,7 +117,7 @@
     <StateHint kind="empty" />
   {:else}
     <ol class="mt-3 space-y-1 text-xs">
-      {#each list as t, i (t.clip.file + '@' + i)}
+      {#each list as t, i (t.queueEntryId)}
         <li>
           <div
             class="flex items-center gap-1 rounded border-l-2 px-1 py-0.5 {i === player.pos
@@ -126,6 +126,8 @@
               ? 'relative z-20 scale-105 bg-base-100 shadow-lg ring-1 ring-accent select-none'
               : ''}"
             style={dragMode && dragIdx === i ? `transform: translateY(${dragDelta}px)` : undefined}
+            role="group"
+            aria-label={"队列第 " + (i + 1) + " 项"}
             aria-current={i === player.pos ? 'true' : undefined}
             onpointerdown={(e) => onRowPointerDown(e, i)}
             onpointermove={onRowPointerMove}
@@ -143,9 +145,9 @@
               }}
             >
               <span class="w-6 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
-              <span class="truncate font-medium">{t.clip.title || '（未识别）'}</span>
+              <span class="truncate font-medium">{t.audio.title || '（未识别）'}</span>
               <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
-                {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
+                {fmtDur((t.audio.duration ?? 0))}
               </span>
             </button>
             <button

@@ -1,25 +1,16 @@
-import type { Recording, Track } from './types';
-import { buildRecTracks } from './types';
+import type { Audio, Track } from './types';
 
-/**
- * 把 [lo, hi)（epoch 秒，含 lo 不含 hi）内的录像按开播时间排序、
- * 每场录像内部按切片顺序，串成一个播放列表。
- * lo/hi 传 undefined 表示那一侧不限制。
- *
- * 纯函数（不含 runes），可直接被服务端路由复用。
- */
-export function tracksInRange(recs: Recording[], lo?: number, hi?: number): Track[] {
-  const picked = recs
-    .filter((r) => (lo == null || r.start >= lo) && (hi == null || r.start < hi))
-    .sort((a, b) => a.start - b.start);
-  return picked.flatMap((r) => buildRecTracks(r));
+export function tracksInRange(audios: Audio[], lo?: number, hi?: number): Track[] {
+ return audios.filter(a => (lo == null || a.startAt >= lo) && (hi == null || a.startAt < hi))
+ .sort((a,b) => a.startAt - b.startAt || a.id.localeCompare(b.id))
+ .map((audio,i) => ({ queueEntryId: 'range-' + Date.now() + '-' + i + '-' + Math.random(), audio }));
 }
 
 /** yyyy-mm-dd（Asia/Shanghai 当日 0 点）的 epoch 秒 */
 export function dayStartOf(dateStr: string): number | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
   const t = Date.parse(`${dateStr}T00:00:00+08:00`) / 1000;
-  return Number.isFinite(t) ? t : null;
+  return Number.isFinite(t) && new Date((t+28800)*1000).toISOString().slice(0,10) === dateStr ? t : null;
 }
 
 /** 「from/to 都是合法 yyyy-mm-dd 且 from<=to」 */
@@ -34,7 +25,7 @@ const esc = (s: string) =>
 
 /** 绝对音频 URL */
 export const trackUrl = (t: Track, base: string) =>
-  `${base}/audio/${encodeURIComponent(t.clip.opus)}`;
+  /^https?:\/\//.test(t.audio.opus) ? t.audio.opus : base.replace(/\/$/,'') + '/api/' + t.audio.opus.split('/').map(encodeURIComponent).join('/');
 
 /**
  * XSPF（.xspf）：显式逐曲列表，带 title/duration。
@@ -43,11 +34,11 @@ export const trackUrl = (t: Track, base: string) =>
 export function buildXspf(tracks: Track[], base: string, plName: string): string {
   const items = tracks
     .map((t) => {
-      const ms = Math.max(0, Math.round((t.clip.offsetEnd - t.clip.offsetStart) * 1000));
+      const ms = Math.max(0, Math.round(((t.audio.duration ?? 0)) * 1000));
       return [
         '    <track>',
         `      <location>${esc(trackUrl(t, base))}</location>`,
-        `      <title>${esc(t.clip.title || '（未识别）')}</title>`,
+        `      <title>${esc(t.audio.title || '（未识别）')}</title>`,
         `      <duration>${ms}</duration>`,
         '    </track>',
       ].join('\n');
@@ -71,8 +62,8 @@ export function buildPls(tracks: Track[], base: string, plName: string): string 
   tracks.forEach((t, i) => {
     const n = i + 1;
     lines.push(`File${n}=${trackUrl(t, base)}`);
-    lines.push(`Title${n}=${t.clip.title || '（未识别）'}`);
-    lines.push(`Length${n}=${Math.max(0, Math.round(t.clip.offsetEnd - t.clip.offsetStart))}`);
+    lines.push(`Title${n}=${t.audio.title || '（未识别）'}`);
+    lines.push(`Length${n}=${Math.max(0, Math.round((t.audio.duration ?? 0)))}`);
   });
   lines.push(`NumberOfEntries=${tracks.length}`, 'Version=2');
   return lines.join('\n') + '\n';
@@ -84,21 +75,11 @@ export function buildPls(tracks: Track[], base: string, plName: string): string 
 export function buildM3u(tracks: Track[], base: string, plName: string): string {
   const lines = ['#EXTM3U', '#PLAYLIST:' + plName];
   for (const t of tracks) {
-    const dur = Math.max(0, Math.round(t.clip.offsetEnd - t.clip.offsetStart));
-    lines.push(`#EXTINF:${dur},${t.clip.title || '（未识别）'}`);
-    lines.push(`${base}/audio/${encodeURIComponent(t.clip.opus)}`);
+    const dur = Math.max(0, Math.round((t.audio.duration ?? 0)));
+    lines.push(`#EXTINF:${dur},${t.audio.title || '（未识别）'}`);
+    lines.push(trackUrl(t,base));
   }
   return lines.join('\n') + '\n';
-}
-
-/** 规范化录像数组（补默认字段），服务端与页面共用 */
-export function normalize(recs: Recording[]): Recording[] {
-  return recs.map((r) => ({
-    ...r,
-    duration: r.duration ?? null,
-    segments: r.segments ?? [],
-    clips: r.clips ?? [],
-  }));
 }
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */

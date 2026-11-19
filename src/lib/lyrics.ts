@@ -1,4 +1,4 @@
-import type { Clip, LyricLine } from './types';
+import type { PlaybackAudio as Audio, LyricLine } from './types';
 
 /** 当前应显示的歌词行下标（最后一行 t <= pos），无歌词/未开始 → -1（二分） */
 export function lyricIndexAt(lyrics: LyricLine[] | null | undefined, pos: number): number {
@@ -21,7 +21,7 @@ export function lyricIndexAt(lyrics: LyricLine[] | null | undefined, pos: number
 }
 
 /** 该切片有无歌词 */
-export function hasLyrics(clip: Clip | null | undefined): boolean {
+export function hasLyrics(clip: Audio | null | undefined): boolean {
   return !!clip?.lyrics && clip.lyrics.length > 0;
 }
 
@@ -84,7 +84,7 @@ function fnv1a(s: string): string {
 }
 
 /** 歌词指纹：每行 text 去首尾空白、折叠行内空白、join('\n') 后 fnv1a */
-export function lyricsFingerprint(clip: Clip): string {
+export function lyricsFingerprint(clip: Audio): string {
   const lines = (clip.lyrics ?? []).map((l) => l.text.trim().replace(/\s+/g, ' '));
   return fnv1a(lines.join('\n'));
 }

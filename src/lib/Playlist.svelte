@@ -1,134 +1,16 @@
 <script lang="ts">
-  import type { Recording, Track } from './types';
-  import { prependAt } from './player.svelte.ts';
-  import { tracksInRange, dayStartOf, validRange } from './playlist-core';
-  import { onMount } from 'svelte';
-  import { fmtDur } from './types';
-  import { ListMusic, Plus, Check, Search, X } from 'lucide-svelte';
-
-  let {
-    recordings,
-    open = $bindable(false),
-    // 日期范围归 +page 的持久化状态所有（anyun-view-v1），此处双向绑定
-    from = $bindable(''),
-    to = $bindable(''),
-  }: {
-    recordings: Recording[];
-    open?: boolean;
-    from?: string;
-    to?: string;
-  } = $props();
-
-  let error = $state('');
-
-  // 应用时把范围写回 URL（可分享/刷新保持）
-  function syncUrl() {
-    const sp = new URLSearchParams(location.search);
-    if (from) sp.set('from', from); else sp.delete('from');
-    if (to) sp.set('to', to); else sp.delete('to');
-    history.replaceState(null, '', '?' + sp.toString());
-  }
-
-  // 范围预览：from/to 变化时展示 tracksInRange 结果（不再绑定播放队列）
-  const preview = $derived.by(() => {
-    if (from && to && !validRange(from, to)) return { tracks: [] as Track[], ok: false };
-    const lo = from ? dayStartOf(from) : null;
-    const hi = to ? dayStartOf(to)! + 86400 : null;
-    const tracks = tracksInRange(recordings, lo ?? undefined, hi ?? undefined);
-    return { tracks, ok: tracks.length > 0 };
-  });
-  const previewTotal = $derived(preview.tracks.reduce(
-    (a, t) => a + (t.clip.offsetEnd - t.clip.offsetStart),
-    0,
-  ));
-  const previewTop = $derived(preview.tracks.slice(0, 20));
-  const previewRest = $derived(Math.max(0, preview.tracks.length - 20));
-
-  let addedIdx = $state<number | null>(null);
-  let addTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function generate() {
-    if (from && to && !validRange(from, to)) {
-      error = '范围无效';
-      return;
-    }
-    error = '';
-    syncUrl();
-    if (preview.tracks.length === 0) {
-      error = '范围内没有切片';
-      return;
-    }
-    prependAt(preview.tracks);
-  }
-
-  function addToQueue(i: number) {
-    prependAt([preview.tracks[i]]);
-    addedIdx = i;
-    clearTimeout(addTimer);
-    addTimer = setTimeout(() => (addedIdx = null), 1200);
-  }
-
+import { onDestroy } from 'svelte';import {audiosInRange,backend} from './backend.svelte';import {prependTracks,player} from './player.svelte.ts';import {fmtDur} from './types';import type {Audio,Track} from './types';
+let {open=$bindable(false),from=$bindable(''),to=$bindable('')}:{open?:boolean;from?:string;to?:string}=$props();
+import {ListMusic,Search,X,Plus,Check} from 'lucide-svelte';
+import {createLatestOperation} from './interactions.js';
+const operation=createLatestOperation();
+import {assertQueueBudget} from './queue-budget.js';
+const previewOperation=createLatestOperation();let preview=$state<Audio[]>([]),previewBusy=$state(false),previewReady=$state(false),previewError=$state(''),added=$state<string|null>(null);let addedTimer:ReturnType<typeof setTimeout>;onDestroy(()=>{previewOperation.cancel();clearTimeout(addedTimer);});
+$effect(()=>{const lo=Date.parse(from+'T00:00:00+08:00')/1000,hi=Date.parse(to+'T00:00:00+08:00')/1000+86400;void backend.generation;previewOperation.cancel();preview=[];previewBusy=false;previewReady=false;previewError='';if(!open||!from||!to||!(lo<hi))return;previewBusy=true;const timer=setTimeout(()=>void previewOperation.run(async(signal:AbortSignal)=>audiosInRange(lo,hi,signal),(audios:Audio[])=>{preview=audios;previewBusy=false;previewReady=true;}).catch((e)=>{if(e?.name==='AbortError')return;previewBusy=false;previewError=e instanceof Error?e.message:'预览失败';}),180);return()=>{clearTimeout(timer);previewOperation.cancel();};});
+function addOne(audio:Audio){try{assertQueueBudget(player.playlist,[{queueEntryId:crypto.randomUUID(),audio}]);}catch(e){error=e instanceof Error?e.message:'队列超过安全预算';return;}prependTracks([{queueEntryId:crypto.randomUUID(),audio}]);added=audio.id;clearTimeout(addedTimer);addedTimer=setTimeout(()=>added=null,1200);}
+let progress=$state({completed:0,total:0});let busy=$state(false),error=$state(''),result=$state<Audio[]>([]);let controller:AbortController|undefined;
+function cancel(){controller?.abort();operation.cancel();busy=false;}onDestroy(cancel);
+$effect(()=>{void from;void to;void backend.generation;void open;cancel();result=[];error='';});
+async function generate(){const url=new URL(location.href);if(from)url.searchParams.set('from',from);else url.searchParams.delete('from');if(to)url.searchParams.set('to',to);else url.searchParams.delete('to');history.replaceState(history.state,'',url);cancel();const c=new AbortController();controller=c;busy=true;progress={completed:0,total:0};error='';try{if(!from||!to)throw Error('请选择完整日期范围');const lo=Date.parse(from+'T00:00:00+08:00')/1000,hi=Date.parse(to+'T00:00:00+08:00')/1000+86400;await operation.run(async(signal:AbortSignal)=>{const audios=await audiosInRange(lo,hi,signal,p=>{if(!signal.aborted)progress=p;});if(!audios.length)throw Error('范围内没有音频');return audios;},(audios:Audio[])=>{const tracks:Track[]=audios.map(audio=>({queueEntryId:crypto.randomUUID(),audio}));assertQueueBudget(player.playlist,tracks);result=audios;prependTracks(tracks);});}catch(e){if(!c.signal.aborted)error=e instanceof Error?e.message:'生成失败';}finally{if(controller===c)busy=false;}}
 </script>
-
-<div class="card rounded-xl border bg-base-100 p-4">
-  <div class="flex items-center justify-between">
-    <div class="flex items-center gap-2 text-sm font-semibold">
-      <ListMusic class="h-4 w-4" />
-      按时间生成
-    </div>
-    <button class="rounded p-1 transition hover:bg-base-200" onclick={() => (open = false)} aria-label="收起">
-      <X class="h-4 w-4" />
-    </button>
-  </div>
-
-  <div class="mt-3 flex flex-wrap items-center gap-2 text-xs">
-    <input type="date" bind:value={from} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums" />
-    <span class="opacity-50">→</span>
-    <input type="date" bind:value={to} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums" />
-    <button
-      class="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-accent-content transition hover:opacity-90"
-      onclick={generate}
-    >
-      <Search class="h-3 w-3" /> 生成并插入队列
-    </button>
-    {#if error}
-      <span class="text-warning">{error}</span>
-    {/if}
-  </div>
-
-  <div class="mt-3 border-t border-base-300 pt-3 text-xs">
-    <span class="rounded-full bg-accent/15 px-2 py-0.5 text-2xs tabular-nums opacity-80">
-      {preview.tracks.length} 首 · {fmtDur(previewTotal)}
-    </span>
-    {#if preview.ok}
-      <ol class="mt-2 max-h-64 space-y-0.5 overflow-y-auto">
-        {#each previewTop as t, i (t.clip.file)}
-          <li>
-            <button
-              type="button"
-              class="group flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs transition hover:bg-base-200"
-              aria-label={`加入队列：${t.clip.title || '（未识别）'}`}
-              onclick={() => addToQueue(i)}
-            >
-              <span class="w-7 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
-              <span class="truncate">{t.clip.title || '（未识别）'}</span>
-              <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
-                {fmtDur(t.clip.offsetEnd - t.clip.offsetStart)}
-              </span>
-              {#if addedIdx === i}
-                <Check class="h-3 w-3 shrink-0 text-accent" />
-              {:else}
-                <Plus class="h-3 w-3 shrink-0 opacity-40 transition group-hover:text-accent group-hover:opacity-100" />
-              {/if}
-            </button>
-          </li>
-        {/each}
-        {#if previewRest > 0}
-          <li class="px-1 py-0.5 text-2xs opacity-50">…其余 {previewRest} 首</li>
-        {/if}
-      </ol>
-    {:else}
-      <p class="mt-2 px-1 text-2xs opacity-50">范围内没有切片</p>
-    {/if}
-  </div>
-</div>
+<section class="card rounded-xl border bg-base-100 p-4"><div class="flex items-center justify-between"><h2 class="flex items-center gap-2 text-sm font-semibold"><ListMusic class="h-4 w-4"/> 按时间生成</h2><button class="rounded p-1 transition hover:bg-base-200" aria-label="收起" onclick={()=>open=false}><X class="h-4 w-4"/></button></div><div class="mt-3 flex flex-wrap items-center gap-2 text-xs"><input aria-label="开始日期" type="date" bind:value={from} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums"/><span class="opacity-50">→</span><input aria-label="结束日期" type="date" bind:value={to} class="rounded border border-base-300 bg-base-200 px-2 py-1 tabular-nums"/><button class="flex items-center gap-1 rounded bg-accent px-2.5 py-1 text-accent-content transition hover:opacity-90" disabled={busy} onclick={generate}><Search class="h-3 w-3"/> 生成并插入队列</button>{#if busy}<button onclick={cancel}>取消</button>{/if}</div>{#if busy}<p role="status" class="mt-3 text-xs">已读取 {progress.completed}/{progress.total} 块，完成前不会修改队列…</p>{/if}{#if error}<p role="alert" class="mt-3 text-xs text-warning">{error}（原队列未修改）</p>{/if}<div class="mt-3 border-t border-base-300 pt-3 text-xs">{#if previewReady}<span class="rounded-full bg-accent/15 px-2 py-0.5 text-2xs tabular-nums opacity-80">{preview.length} 首 · {fmtDur(preview.reduce((n,a)=>n+(a.duration??0),0))}</span>{/if}{#if previewBusy}<p role="status" class="mt-2 text-2xs opacity-50">正在加载范围预览…</p>{:else if preview.length}<ol class="mt-2 max-h-64 space-y-0.5 overflow-y-auto">{#each preview.slice(0,20) as audio,i (audio.id)}<li><button class="group flex w-full items-center gap-2 rounded px-1 py-0.5 text-left text-xs transition hover:bg-base-200" aria-label={'加入队列：'+audio.title} onclick={()=>addOne(audio)}><span class="w-7 shrink-0 text-2xs tabular-nums opacity-50">{i+1}</span><span class="truncate">{audio.title}</span><span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">{fmtDur(audio.duration??0)}</span>{#if added===audio.id}<Check class="h-3 w-3 shrink-0 text-accent"/>{:else}<Plus class="h-3 w-3 shrink-0 opacity-40"/>{/if}</button></li>{/each}{#if preview.length>20}<li class="px-1 py-0.5 text-2xs opacity-50">…其余 {preview.length-20} 首</li>{/if}</ol>{:else if previewError}<p role="alert">范围预览未完成：{previewError}</p>{:else if previewReady}<p class="mt-2 px-1 text-2xs opacity-50">范围内没有切片</p>{:else}<p class="mt-2 text-2xs opacity-50">请选择完整日期范围</p>{/if}</div></section>

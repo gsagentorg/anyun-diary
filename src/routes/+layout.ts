@@ -3,7 +3,7 @@ import { injectAnalytics } from '@vercel/analytics/sveltekit';
 import { initTheme } from '$lib/theme.svelte.ts';
 import { initBackend } from '$lib/backend.svelte';
 
-export const prerender = true;
+export const prerender = false;
 
 injectAnalytics({ mode: dev ? 'development' : 'production' });
 

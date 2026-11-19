@@ -1,22 +1,36 @@
-import type { Clip, Recording, Track } from './types';
-import { audioUrl, buildRecTracks, dateCard } from './types';
-import { backend, bundledRecordings } from './backend.svelte';
+import {assertQueueBudget} from './queue-budget.js';
+import {attachAudioRenewal} from './audio-renewal';
+import type { Audio as DiaryAudio, PlaybackAudio, Track } from './types';
+import { audioUrl, dateCard } from './types';
+export function setPlayerCatalog(audios: DiaryAudio[]) {
+  // Loaded months do not define queue membership.
+  // Retain only references required by a pending v1 queue, never the visited catalog.
+  let refs: unknown[] = [];
+  try { if (typeof window !== 'undefined' && !window.localStorage.getItem(SESSION_KEY)) refs = JSON.parse(window.localStorage.getItem(LEGACY_SESSION_KEY) ?? '{}').queue ?? []; } catch {}
+  const required = (a: DiaryAudio) => Array.isArray(refs) && refs.some((r: any) => typeof r === 'string' ? r === a.file || r === a.opus : r && (r.file === a.file || r.opus === a.opus || (r.recFile && a.file === r.recFile + '/' + r.clipFile)));
+  for (const [id,a] of knownSessionAudios) if (!required(a)) knownSessionAudios.delete(id);
+  for (const audio of audios) if (required(audio)) knownSessionAudios.set(audio.id, audio);
+  if (nativeAudio) void nativeAudio.refresh().catch(() => {});
+  if (typeof window !== 'undefined') initSession();
+}
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
 import { isSleepMode, MIN_SLEEP_SECONDS, type SleepMode } from './sleep-curves';
 
 export type { Track };
-export { buildRecTracks };
+
 
 import { NativeAudio, usesNativeAudio, type NativeState } from './native-audio';
 let nativeAudio: NativeAudio | undefined;
 let nativeBootstrapDone = false;
+let nativeBootstrapPending = false;
 let applyingNativeState = false;
+let nativeQueueMapped = false;
 let nativeSleepRevision = '';
 function nativeConfig() {
   return {
-    queue: player.playlist.map(t => ({ id: t.clip.file, url: audioUrl(t.clip.opus), title: t.clip.title || '（未识别）', key: trackKey(t), lyrics: t.clip.lyrics ?? [], clipDuration: t.clip.offsetEnd - t.clip.offsetStart, album: Number.isFinite(t.rec.start) ? `安允日记 · ${dateCard(t.rec.start).md}` : '安允日记' })),
+    queue: player.playlist.map(t => ({ id: t.nativeQueueId ?? t.queueEntryId, audio: JSON.parse(JSON.stringify(t.audio)), url: audioUrl(t.audio.opus), title: t.audio.title || '（未识别）', key: trackKey(t), lyrics: t.audio.lyrics ?? [], clipDuration: (t.audio.duration ?? 0), album: typeof t.audio.startAt === 'number' && Number.isFinite(t.audio.startAt) ? `安允日记 · ${dateCard(t.audio.startAt).md}` : '安允日记' })),
     pos: player.track ? player.pos : -1, shuffle: player.shuffle, skipSame: player.shuffleSkipSameTitle,
     history: [...player.history], redo: [...player.shuffleRedo], played: [...player.playedTitles], rate: player.playbackRate,
     sleepRevision: nativeSleepRevision, sleepUntil: sleep.until, sleepStarted: sleep.started, sleepMode: sleep.mode, afterTrack: sleep.afterTrack,
@@ -26,15 +40,28 @@ function applyNativeState(state: NativeState) {
   if (!state.queue.length && player.playlist.length) return;
   applyingNativeState = true;
   try {
-    const existing = new Map(player.playlist.map(t => [t.clip.file, t]));
-    const restored = state.queue.some(t => !existing.has(t.id)) ? snapshotRebuild(state.queue.map(t => t.id)) : [];
-    const catalog = new Map(restored.map(t => [t.clip.file, t]));
-    const tracks = state.queue.map(t => existing.get(t.id) ?? catalog.get(t.id));
-    // A newer backend catalog may not yet be loaded. Never map a native index to the wrong song.
+    const existing = new Map(player.playlist.map(t => [t.queueEntryId, t]));
+    const counts = new Map<string, number>();
+    for (const item of state.queue) counts.set(item.id, (counts.get(item.id) ?? 0) + 1);
+    const used = new Set(state.queue.map(t => t.id));
+    const tracks = state.queue.map((t, index): Track | undefined => {
+      let queueEntryId = t.id;
+      if (counts.get(t.id)! > 1) {
+        queueEntryId = 'legacy-native:' + JSON.stringify([t.id, index]);
+        while (used.has(queueEntryId)) queueEntryId += ':';
+      }
+      used.add(queueEntryId);
+      const prior = existing.get(queueEntryId);
+      const audio: PlaybackAudio | undefined = t.audio ?? prior?.audio ??
+        (typeof t.url === 'string' && t.url.startsWith('https://') && typeof t.title === 'string'
+          ? { id: t.id, file: t.url, opus: t.url, title: t.title,
+              duration: Number.isFinite(t.clipDuration) ? t.clipDuration! : null,
+              lyrics: t.lyrics ?? [], legacyNative: true } : undefined);
+      return audio ? { queueEntryId, nativeQueueId: t.id, audio } : undefined;
+    });
+    nativeQueueMapped = tracks.every(t => !!t);
     if (tracks.every((t): t is Track => !!t)) {
-      if (tracks.length !== player.playlist.length || tracks.some((t, i) => t !== player.playlist[i])) player.playlist = tracks;
-      player.pos = state.pos;
-      player.track = tracks[state.pos] ?? null;
+      player.playlist = tracks; player.pos = state.pos; player.track = tracks[state.pos] ?? null;
     }
     player.history = state.history; player.shuffleRedo = state.redo; player.playedTitles = state.played;
     player.shuffle = state.shuffle; player.shuffleSkipSameTitle = state.skipSame;
@@ -56,7 +83,7 @@ function syncNativeSleep() {
   syncNative();
 }
 function syncNative() {
-  if (usesNativeAudio() && nativeAudio && !applyingNativeState) void nativeAudio.sync().catch(() => {});
+  if (usesNativeAudio() && nativeAudio && nativeBootstrapDone && nativeQueueMapped && !nativeBootstrapPending && !applyingNativeState) void nativeAudio.sync().catch(() => {});
 }
 
 /** 全局单例：当前播放项 + 加载态 + 当前播放列表 */
@@ -180,8 +207,8 @@ export function setShuffleSkipSameTitle(v: boolean) {
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
 function trackKey(t: Track): string {
-  if (player.dedupByName) return trackKeyOf(t.clip);
-  return hasLyrics(t.clip) ? `L:${t.clip.title}#${lyricsFingerprint(t.clip)}` : trackKeyOf(t.clip);
+  if (player.dedupByName) return trackKeyOf(t.audio);
+  return hasLyrics(t.audio) ? `L:${t.audio.title}#${lyricsFingerprint(t.audio)}` : trackKeyOf(t.audio);
 }
 
 /** 音频单例挂 globalThis：HMR 重载本模块也不会产生第二实例（防叠播） */
@@ -203,6 +230,7 @@ function ensureAudio(): HTMLAudioElement {
   if (!gAudio.__anyunAudio) {
     const a = new Audio();
     a.preload = 'metadata';
+    attachAudioRenewal(a,()=>player.track?.queueEntryId??'',message=>{player.error=message;player.loading=false;});
     a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
     a.addEventListener('play', () => {
@@ -270,9 +298,9 @@ function playCurrent() {
   player.track = t;
   player.loading = true;
   const a = getAudio(); // Resume a suspended gain graph within the track-selection gesture.
-  a.src = audioUrl(t.clip.opus);
+  a.src = audioUrl(t.audio.opus);
   a.load();
-  a.play().catch(() => {});
+  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;player.error=e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试'; });
   updateMediaSession(t);
   scheduleSessionSave();
 }
@@ -283,8 +311,8 @@ let mediaHandlersBound = false;
 
 /** 系统媒体浮层的 metadata：有歌词时「歌名」处放当前歌词、「作者」处放歌名；无歌词保持原样 */
 function buildMetadata(t: Track, lyricText: string | null): MediaMetadata {
-  const md = Number.isFinite(t.rec.start) ? dateCard(t.rec.start).md : '';
-  const name = t.clip.title || '（未识别）';
+  const md = typeof t.audio.startAt === 'number' && Number.isFinite(t.audio.startAt) ? dateCard(t.audio.startAt).md : '';
+  const name = t.audio.title || '（未识别）';
   // owner 2026-11-01：iOS 对每次元数据更新都会重取 artwork 造成封面闪烁 → 不再提供专辑图
   return new MediaMetadata({
     title: lyricText ?? name,
@@ -329,15 +357,15 @@ function updateMediaSession(t: Track) {
 export function syncLyricMetadata(t: Track | null, pos: number) {
   if (usesNativeAudio()) return;
   if (typeof navigator === 'undefined' || !('mediaSession' in navigator)) return;
-  if (!t || !hasLyrics(t.clip) || !Number.isFinite(pos)) return;
-  const idx = lyricDisplayIndexAt(t.clip.lyrics, pos, t.clip.offsetEnd - t.clip.offsetStart);
+  if (!t || !hasLyrics(t.audio) || !Number.isFinite(pos)) return;
+  const idx = lyricDisplayIndexAt(t.audio.lyrics, pos, (t.audio.duration ?? 0));
   // 同刻多行（含尾部超界折叠行）只推第一行（owner 2026-11-07：元数据无动画延迟概念）
-  const group = sameTimeGroupBounds(t.clip.lyrics, idx, t.clip.offsetEnd - t.clip.offsetStart);
+  const group = sameTimeGroupBounds(t.audio.lyrics, idx, (t.audio.duration ?? 0));
   const metaIdx = group ? group[0] : -1;
-  if (metaIdx === mdLineIdx && mdClipFile === t.clip.opus) return;
+  if (metaIdx === mdLineIdx && mdClipFile === t.audio.opus) return;
   mdLineIdx = metaIdx;
-  mdClipFile = t.clip.opus;
-  navigator.mediaSession.metadata = buildMetadata(t, metaIdx < 0 ? null : t.clip.lyrics![metaIdx].text);
+  mdClipFile = t.audio.opus;
+  navigator.mediaSession.metadata = buildMetadata(t, metaIdx < 0 ? null : t.audio.lyrics![metaIdx].text);
 }
 
 /** 同步系统浮层播放状态：不设的 UA 只能靠猜，iOS/macOS 锁屏控件可能因此卡在过期状态 */
@@ -367,9 +395,11 @@ export function reportPlaybackState(duration: number, position: number) {
   }
 }
 
+function allowQueueChange(list:Track[],replace=false){try{assertQueueBudget(player.playlist,list,{replace});return true;}catch(e){player.error=e instanceof Error?e.message:'队列超过安全预算';return false;}}
 /** 采纳一个播放列表并从第 i 项开始播放 */
 export function adopt(list: Track[], i: number) {
-  if (!list[i]) return;
+  if (!list[i]||!allowQueueChange(list,true)) return;
+  nativeQueueMapped = true;
   player.playlist = list;
   player.pos = i;
   player.history = [];
@@ -381,23 +411,14 @@ export function adopt(list: Track[], i: number) {
 /** 按时间生成结果的插入语义：空闲（无当前曲）或空队列 → 整队替换并从首项播放；正在播 → append 队尾不动当前。返回插入数 */
 export function insertRange(tracks: Track[]): number {
   if (tracks.length === 0) return 0;
-  if (player.playlist.length === 0 || !player.track) {
-    player.playlist = tracks;
-    player.pos = 0;
-    player.history = [];
-    player.shuffleRedo = [];
-    player.playedTitles = [trackKey(tracks[0])];
-    playCurrent();
-    return tracks.length;
-  }
-  player.playlist = [...player.playlist, ...tracks];
-  scheduleSessionSave();
+  prependTracks(tracks);
   return tracks.length;
 }
 
 /** 把一组曲目插到队列最前面并切到 list[i]（默认第一首）；既有队列整体后移保留，随机回退栈同步平移 */
 export function prependAt(list: Track[], i = 0) {
-  if (!list[i]) return;
+  if (!list[i]||!allowQueueChange(list)) return;
+  list = list.map(t => makeTrack(t.audio));
   const n = list.length;
   player.history = player.history.map((h) => h + n);
   player.shuffleRedo = player.shuffleRedo.map((h) => h + n);
@@ -421,10 +442,9 @@ export function playAt(i: number) {
 export function removeAt(index: number) {
   if (index < 0 || index >= player.playlist.length) return;
   player.playlist = player.playlist.filter((_, i) => i !== index);
-  player.history = player.history.map((h) => (h > index ? h - 1 : h)).filter((h) => h !== index);
+  player.history = player.history.filter(h => h !== index).map(h => h > index ? h - 1 : h);
   player.shuffleRedo = player.shuffleRedo
-    .map((h) => (h > index ? h - 1 : h))
-    .filter((h) => h !== index);
+    .filter(h => h !== index).map(h => h > index ? h - 1 : h);
   if (index < player.pos) {
     player.pos -= 1;
   } else if (index === player.pos) {
@@ -443,6 +463,7 @@ export function removeAt(index: number) {
 export function moveTrack(from: number, to: number) {
   const n = player.playlist.length;
   if (from < 0 || to < 0 || from >= n || to >= n || from === to) return;
+  const old = [...player.playlist];
   const removed = player.playlist.splice(from, 1)[0];
   player.playlist.splice(to, 0, removed);
   if (from === player.pos) {
@@ -452,13 +473,15 @@ export function moveTrack(from: number, to: number) {
   } else if (from > player.pos && to <= player.pos) {
     player.pos += 1;
   }
-  player.history = []; // 历史存的是下标，重排后已失效；清空避免随机回退错乱
-  player.shuffleRedo = []; // 回退栈同理作废
+  const remap = (h: number) => player.playlist.findIndex(t => t.queueEntryId === old[h]?.queueEntryId);
+  player.history = player.history.map(remap).filter(h => h >= 0);
+  player.shuffleRedo = player.shuffleRedo.map(remap).filter(h => h >= 0);
   scheduleSessionSave();
 }
 
 /** 清空队列：移除除当前播放外的全部（无当前播放则全清） */
 export function clearQueue() {
+  nativeQueueMapped = true;
   const cur = player.pos >= 0 ? player.playlist[player.pos] : null;
   if (!cur) {
     player.playlist = [];
@@ -504,10 +527,10 @@ export function playRandom() {
   if (player.shuffleSkipSameTitle) {
     const played = new Set(player.playedTitles);
     const avoidTitles = new Set(
-      player.playlist.filter((_, i) => played.has(keys[i])).map((t) => t.clip.title),
+      player.playlist.filter((_, i) => played.has(keys[i])).map((t) => t.audio.title),
     );
     avoid = new Set(
-      player.playlist.map((_, i) => i).filter((i) => avoidTitles.has(player.playlist[i].clip.title)),
+      player.playlist.map((_, i) => i).filter((i) => avoidTitles.has(player.playlist[i].audio.title)),
     );
     if (avoid.size === 0) avoid = undefined;
   }
@@ -527,24 +550,23 @@ function stepTo(i: number) {
   playCurrent();
 }
 
-/** 播放某录像内的第 i 个切片：已在当前列表（按 clip.file）则定位播放；否则构造曲目插入当前播放位置之后并播放，绝不整体替换列表 */
-export function playClip(rec: Recording, i: number) {
-  const clip = rec.clips?.[i];
-  if (!clip) return;
-  const hit = player.playlist.findIndex((t) => t.clip.file === clip.file);
-  if (hit >= 0) {
-    player.pos = hit;
-    playCurrent();
-    return;
-  }
-  const track = buildRecTracks(rec)[i];
-  if (!track) return;
+export function playAudio(audio: DiaryAudio) {
+  const hit = player.playlist.findIndex(t => t.audio.id === audio.id);
+  if (hit >= 0) { if (hit !== player.pos) recordVisit(); player.pos = hit; playCurrent(); return; }
+  const candidate=makeTrack(audio);if(!allowQueueChange([candidate]))return;
   const at = player.pos < 0 ? 0 : player.pos + 1;
   recordVisit();
-  player.shuffleRedo = [];
-  player.playlist = [...player.playlist.slice(0, at), track, ...player.playlist.slice(at)];
-  player.pos = at;
-  playCurrent();
+  player.history = player.history.map(h => h >= at ? h + 1 : h);
+  player.shuffleRedo = player.shuffleRedo.map(h => h >= at ? h + 1 : h);
+  player.playlist = [...player.playlist.slice(0, at), candidate, ...player.playlist.slice(at)];
+  player.pos = at; playCurrent();
+}
+let entrySequence = 0;
+export function makeTrack(audio: PlaybackAudio): Track {
+  return { queueEntryId: String(Date.now()) + '-' + (++entrySequence) + '-' + Math.random(), audio };
+}
+export function prependTracks(list: Track[] | DiaryAudio[], i = 0) {
+  prependAt(list.map(t => makeTrack('audio' in t ? t.audio : t)), i);
 }
 
 /** 在当前播放列表中上/下一首；随机模式：上一曲压栈当前曲并弹历史，下一曲优先按栈弹回（先入后出），栈空才随机 */
@@ -579,38 +601,42 @@ export function step(delta: number) {
 
 /* ---------- 会话快照：刷新后恢复队列/进度（保持暂停，绝不自动出声） ---------- */
 
-const SESSION_KEY = 'anyun-session-v1';
+const SESSION_KEY = 'anyun-session-v2';
+const LEGACY_SESSION_KEY = 'anyun-session-v1';
+const knownSessionAudios = new Map<string, DiaryAudio>();
 let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null;
 let lastProgressSave = 0;
 
 type SessionSnapshot = {
-  v: 1;
-  queue: string[]; // clip.file 有序列表（含重复项）
+  v: 2;
+  queue: Track[];
   cur: number; // 当前项下标（-1 = 无当前项）
   t: number; // 当前曲目进度（秒）
   shuffle: boolean;
   skipSame: boolean;
   dedup: boolean;
   rate: number;
+  history?: number[]; redo?: number[]; played?: string[];
 };
 
 function collectSnapshot(): SessionSnapshot | null {
   if (player.playlist.length === 0) return null;
   const a = usesNativeAudio() ? nativeAudio : gAudio.__anyunAudio;
   return {
-    v: 1,
-    queue: player.playlist.map((t) => t.clip.file),
+    v: 2,
+    queue: JSON.parse(JSON.stringify(player.playlist)),
     cur: player.pos,
     t: a && Number.isFinite(a.currentTime) ? a.currentTime : 0,
     shuffle: player.shuffle,
     skipSame: player.shuffleSkipSameTitle,
     dedup: player.dedupByName,
     rate: player.playbackRate,
+    history: [...player.history], redo: [...player.shuffleRedo], played: [...player.playedTitles],
   };
 }
 
 function writeSessionSnapshot() {
-  if (typeof window === 'undefined') return;
+  if (typeof window === 'undefined' || nativeBootstrapPending) return;
   const snap = collectSnapshot();
   try {
     if (snap) window.localStorage.setItem(SESSION_KEY, JSON.stringify(snap));
@@ -636,22 +662,37 @@ export function saveSessionProgress() {
   writeSessionSnapshot();
 }
 
-/** 快照队列 → Track 列表：按 clip.file 反查，已删/改名的条目静默剔除 */
-function snapshotRebuild(queue: string[]): Track[] {
-  // 索引来源与全站一致：远程已拉到用远程，否则内置兜底（启动恢复通常早于远程索引返回，走内置）
-  const recs = backend.recordings ?? bundledRecordings;
-  const byFile = new Map<string, Track>();
-  for (const r of recs) {
-    (r.clips ?? []).forEach((c, i) => {
-      if (!byFile.has(c.file)) byFile.set(c.file, { clip: c, rec: r, index: i });
+function validSnapshotTrack(t: unknown): t is Track {
+ const x = t as Track;
+ return !!x && typeof x.queueEntryId === 'string' && !!x.audio && typeof x.audio.id === 'string' && typeof x.audio.opus === 'string' && ((typeof x.audio.monthId === 'string' && Number.isFinite(x.audio.startAt)) || (x.audio.legacyNative === true && x.audio.startAt == null && x.audio.monthId == null && x.audio.opus.startsWith('https://')));
+}
+
+/** Missing or ambiguous references defer the entire migration; v1 is never modified. */
+function migrateLegacySession(): SessionSnapshot | null {
+  const raw = window.localStorage.getItem(LEGACY_SESSION_KEY);
+  if (!raw || player.playlist.length) return null;
+  const old = JSON.parse(raw);
+  if (old?.v !== 1 || !Array.isArray(old.queue) || !Number.isInteger(old.cur)) return null;
+  const queue: Track[] = [];
+  for (const ref of old.queue) {
+    const matches = [...knownSessionAudios.values()].filter(audio => {
+      if (typeof ref === 'string') return audio.file === ref || audio.opus === ref;
+      if (!ref || typeof ref !== 'object') return false;
+      const legacy = audio as DiaryAudio & { recFile?: string; clipFile?: string };
+      if (typeof ref.recFile === 'string' && typeof ref.clipFile === 'string') {
+        return (legacy.recFile === ref.recFile && (legacy.clipFile ?? audio.file) === ref.clipFile)
+          || audio.file === ref.recFile + '/' + ref.clipFile;
+      }
+      return (typeof ref.file === 'string' && audio.file === ref.file)
+        || (typeof ref.opus === 'string' && audio.opus === ref.opus);
     });
+    if (matches.length !== 1) return null;
+    queue.push(makeTrack(JSON.parse(JSON.stringify(matches[0]))));
   }
-  const tracks: Track[] = [];
-  for (const f of queue) {
-    const t = byFile.get(f);
-    if (t) tracks.push(t);
-  }
-  return tracks;
+  const snap: SessionSnapshot = { ...old, v: 2, queue };
+  window.localStorage.setItem(SESSION_KEY, JSON.stringify(snap));
+  knownSessionAudios.clear();
+  return snap;
 }
 
 /** 测试专用：重置 initSession 的一次性守卫（生产代码勿调） */
@@ -661,20 +702,23 @@ export function __resetSessionGuardForTest() {
 
 /** 启动恢复：读快照 → 重建队列 → 预载当前曲到进度处（保持暂停）；仅浏览器调用一次 */
 export function initSession() {
+  if (typeof window === 'undefined' || gAudio.__anyunSessionInit) return;
   if (usesNativeAudio() && !nativeBootstrapDone) {
     nativeBootstrapDone = true;
+    nativeBootstrapPending = true;
     ensureAudio();
     void nativeAudio!.ready.then(state => {
+      nativeBootstrapPending = false;
       if (state.queue.length || player.playlist.length) {
         player.sessionRestored = true; gAudio.__anyunSessionInit = true;
-        // Native restoration hydrates lyrics itself. Startup only reads native state.
+        // Native restoration hydrates lyrics itself. Startup only reads native state:
+        // refresh metadata for queues persisted by an earlier native build, but native
+        // state owns playback and valid sleep timers; do not overwrite it on startup.
       } else initSession();
     }).catch(() => {});
     return;
   }
-  if (typeof window === 'undefined' || gAudio.__anyunSessionInit) return;
-  gAudio.__anyunSessionInit = true;
-
+  if (typeof window === 'undefined' || nativeBootstrapPending || gAudio.__anyunSessionInit) return;
   let snap: SessionSnapshot | null = null;
   try {
     const raw = window.localStorage.getItem(SESSION_KEY);
@@ -682,9 +726,9 @@ export function initSession() {
       const p = JSON.parse(raw) as SessionSnapshot;
       if (
         p &&
-        p.v === 1 &&
+        p.v === 2 &&
         Array.isArray(p.queue) &&
-        p.queue.every((x) => typeof x === 'string') &&
+        p.queue.every(validSnapshotTrack) &&
         typeof p.cur === 'number'
       ) {
         snap = p;
@@ -694,13 +738,28 @@ export function initSession() {
     snap = null; // 坏数据整条丢弃
   }
 
+  if (!snap) {
+    try {
+      // Any existing v2 wins, even if a newer client wrote an unknown schema.
+      if (window.localStorage.getItem(SESSION_KEY)) { gAudio.__anyunSessionInit = true; return; }
+      snap = migrateLegacySession();
+      if (!snap && window.localStorage.getItem(LEGACY_SESSION_KEY) && !player.playlist.length) return;
+    } catch { return; }
+  }
+  gAudio.__anyunSessionInit = true;
+
   if (snap) {
-    const tracks = snapshotRebuild(snap.queue);
+    const tracks = snap.queue;
     if (tracks.length > 0) {
       const origFile =
         snap.cur >= 0 && snap.cur < snap.queue.length ? snap.queue[snap.cur] : null;
-      const cur = origFile ? tracks.findIndex((t) => t.clip.file === origFile) : -1;
+      const cur = origFile ? snap.cur : -1;
       player.playlist = tracks;
+      const indices = (value: unknown) => Array.isArray(value) ? value.filter((i): i is number => Number.isInteger(i) && i >= 0 && i < tracks.length) : [];
+      player.history = indices(snap.history);
+      player.shuffleRedo = indices(snap.redo);
+      player.playedTitles = Array.isArray(snap.played) ? snap.played.filter(x => typeof x === 'string') : [];
+      player.track = tracks[cur] ?? null;
       player.pos = cur;
       player.shuffle = !!snap.shuffle;
       player.shuffleSkipSameTitle = snap.skipSame !== false;
@@ -710,7 +769,8 @@ export function initSession() {
       if (cur >= 0) {
         player.track = tracks[cur];
         const a = ensureAudio();
-        a.src = audioUrl(tracks[cur].clip.opus);
+        a.pause(); player.playing = false;
+        a.src = audioUrl(tracks[cur].audio.opus);
         const t0 = Number.isFinite(snap.t) && snap.t > 0 ? snap.t : 0;
         const onMeta = () => {
           a.removeEventListener('loadedmetadata', onMeta);
@@ -726,7 +786,7 @@ export function initSession() {
         a.load();
         // 不调用 play()：刷新后保持暂停，等用户点播放
       }
-      writeSessionSnapshot(); // 回写，清理已失效条目
+      // Queue snapshots are independent of catalog loading.
     } else {
       try {
         window.localStorage.removeItem(SESSION_KEY);
@@ -745,9 +805,9 @@ export function stopCurrent() {
   const a = getAudio();
   a.pause();
   a.removeAttribute('src');
-  a.load();
   player.track = null;
   player.pos = -1;
+  a.load();
   player.loading = false;
   setMediaPlaybackState('none');
   scheduleSessionSave();

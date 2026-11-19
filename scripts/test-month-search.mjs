@@ -1,0 +1,51 @@
+import assert from 'node:assert/strict';
+import {publishMonths,digest} from '../src/lib/server/publisher.mjs';
+import {monthBounds} from '../src/lib/server/months.mjs';
+import {readCatalog,readMonth} from '../src/lib/server/catalog.ts';
+import {searchAudiosAsync,searchAudios} from '../src/lib/search.ts';
+import {createSearchLimiter,searchStream} from '../src/lib/server/search-stream.ts';
+const map=new Map();const store={async read(k){return map.has(k)?new Response(map.get(k)):new Response(null,{status:404});},async write(k,b){map.set(k,b)},async remove(k){map.delete(k)}};
+const now=Date.parse('2026-11-17T00:00:00+08:00')/1000;
+map.set('audio/'+digest('OggSfixture')+'.opus','OggSfixture');
+const audio={id:'fixture',file:'fixture.opus',opus:'audio/'+digest('OggSfixture')+'.opus',title:'Hello World',startAt:monthBounds('2026-11').startAt,duration:10,lyrics:[{t:0,text:'Blue sky'}],monthId:'2026-11'};
+const manifest=await publishMonths([audio],store,{now});assert.equal((await readCatalog(store)).revision,manifest.revision);assert.equal((await readMonth(store,manifest.months[0])).audios.length,1);
+assert.equal(searchAudios([audio],'title:HELLO lyrics:blue date:11-07 time:00:00').length,1);assert.equal(searchAudios([audio],'hello missing').length,0);assert.equal(searchAudios([audio],'unknown:x').length,0);assert.equal(searchAudios([audio],'time:24:00').length,0);
+const parse=async stream=>(await new Response(stream).text()).trim().split('\n').map(x=>JSON.parse(x));
+const events=await parse(searchStream(store,manifest.months,'blue'));assert.equal(events[1].hits[0].line,'Blue sky');assert.deepEqual(events.at(-1),{type:'done',completed:1,total:1,timedOut:false});
+let reads=0;const slow={read(k,{signal}={}){reads++;return new Promise((resolve,reject)=>{signal?.addEventListener('abort',()=>reject(signal.reason),{once:true});});}};
+const timeout=await parse(searchStream(slow,[manifest.months[0]],'hello',{timeoutMs:10}));assert.equal(timeout.at(-1).timedOut,true);assert.equal(timeout.at(-1).completed,0);
+reads=0;const reader=searchStream(slow,Array(20).fill(manifest.months[0]),'hello',{timeoutMs:1000,concurrency:2}).getReader();await reader.read();await new Promise(r=>setTimeout(r,5));assert(reads<=2);await reader.cancel();
+const abort=new AbortController();abort.abort();const cancelled=await parse(searchStream(slow,manifest.months,'hello',{signal:abort.signal}));assert.equal(cancelled.at(-1).completed,0);
+const partialStore={read(k,options){if(k===manifest.months[0].key)return store.read(k,options);return slow.read(k,options);}};
+const fake={...manifest.months[0],key:'never'};
+const partial=await parse(searchStream(partialStore,[manifest.months[0],fake],'blue',{timeoutMs:20,concurrency:2}));assert.equal(partial.filter(e=>e.type==='results').length,1);assert.deepEqual(partial.at(-1),{type:'done',completed:1,total:2,timedOut:true});
+console.log('monthly search/stream mock tests passed');
+
+// CPU-heavy lyric scans must give timers a turn before scanning the whole month.
+const huge={...audio,lyrics:Array.from({length:100000},()=>({t:0,text:'unmatched lyric'}))};
+const cpuAbort=new AbortController();let inspected=0;
+const counted={...huge,lyrics:huge.lyrics.map(l=>({t:0,get text(){inspected++;return l.text;}}))};
+setTimeout(()=>cpuAbort.abort(),0);
+await assert.rejects(searchAudiosAsync([counted],'lyrics:absent',{signal:cpuAbort.signal}),{name:'AbortError'});
+assert(inspected>0&&inspected<huge.lyrics.length,'timer interrupts inside one audio');
+let clock=0,steps=0;
+await assert.rejects(searchAudiosAsync([counted],'lyrics:absent',{deadline:20,now:()=>++clock,batchSize:100000,yieldTask:async()=>{steps++;}}),{name:'TimeoutError'});
+assert.equal(steps,0,'monotonic deadline works before any timer/yield');
+for(const query of ['hello blue','lyrics:blue title:hello','date:11-07 time:00:00','unknown:x','missing','blue lyrics:sky'])assert.deepEqual(await searchAudiosAsync([audio],query),searchAudios([audio],query));
+// A cancelled or expired waiter cannot consume/leak a slot.
+const acquire=createSearchLimiter(1),release=await acquire({});
+const queuedAbort=new AbortController();const queued=acquire({signal:queuedAbort.signal});queuedAbort.abort();await assert.rejects(queued);
+let fakeNow=0;const expired=acquire({deadline:1,now:()=>fakeNow});fakeNow=2;
+release();await assert.rejects(expired,{name:'TimeoutError'});const recovered=await acquire({});recovered();
+// Real streams share the module-global limit, not one limiter per request.
+let active=0,peak=0,started=0;const unblock=[];
+const gated={async read(key,{signal}={}){active++;started++;peak=Math.max(peak,active);try{await new Promise((resolve,reject)=>{unblock.push(resolve);signal?.addEventListener('abort',()=>reject(signal.reason),{once:true});});return store.read(key);}finally{active--;}}};
+const streams=Array.from({length:4},()=>searchStream(gated,manifest.months,'blue',{timeoutMs:5000}).getReader());
+await Promise.all(streams.map(r=>r.read()));await new Promise(r=>setTimeout(r,0));assert.equal(started,2);assert.equal(peak,2);
+const queuedTimeout=await parse(searchStream(gated,manifest.months,'blue',{timeoutMs:5}));assert.equal(queuedTimeout.at(-1).timedOut,true);assert.equal(started,2,'expired queued request never reads');
+await streams[2].cancel();unblock.shift()();unblock.shift()();
+for(let turn=0;started<3&&turn<100;turn++)await new Promise(r=>setTimeout(r,0));assert.equal(started,3,'cancelled queued request never reads');assert(peak<=2);
+for(const resolve of unblock)resolve();
+await Promise.all(streams.map(async(r,i)=>{if(i!==2)while(!(await r.read()).done){}}));
+const after=await parse(searchStream(store,manifest.months,'blue'));assert.equal(after.at(-1).completed,1);
+console.log('cooperative CPU cancellation, monotonic deadline and global queue tests passed');

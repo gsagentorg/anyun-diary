@@ -1,115 +1,41 @@
-// 站内搜索：简单关键词 + GitHub 风格 字段:值 高级语法。纯函数（无 runes），可服务端复用。
-// 字段：title 歌名 / lyrics 歌词 / time HH:MM 或 HH:MM-HH:MM / date MM-DD 或 YYYY-MM-DD。
-// 裸关键词 = 歌名 ∪ 歌词 ∪ 日期文本 的子串匹配（大小写不敏感）；多条件空格分隔 = AND。
-import type { Clip, Recording } from './types';
-import { dayStartOf } from './playlist-core';
-
-export type SearchToken = { kind: 'bare'; v: string } | { kind: 'field'; field: string; v: string };
-
-export type SearchHit = {
-  rec: Recording;
-  clipIndex: number;
-  clip: Clip;
-  /** 命中的歌词行（有则展示摘要） */
-  line: string | null;
-};
-
-export function parseQuery(q: string): SearchToken[] {
-  return q
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .map((tok) => {
-      const m = /^([A-Za-z_]+):(.+)$/.exec(tok);
-      if (m) return { kind: 'field' as const, field: m[1].toLowerCase(), v: m[2] };
-      return { kind: 'bare' as const, v: tok.toLowerCase() };
-    });
+import type { Audio } from './types';
+export type SearchToken={kind:'bare';v:string}|{kind:'field';field:string;v:string};
+export type SearchHit={audio:Audio;line:string|null};
+export function parseQuery(q:string):SearchToken[]{return q.trim().split(/\s+/).filter(Boolean).map(t=>{const m=/^([A-Za-z_]+):(.+)$/.exec(t);return m?{kind:'field',field:m[1].toLowerCase(),v:m[2]}:{kind:'bare',v:t.toLowerCase()};});}
+export function audioClock(audio:Audio){const parts=new Intl.DateTimeFormat('en-GB',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(audio.startAt*1000));const get=(t:string)=>parts.find(p=>p.type===t)?.value??'';return {hm:get('hour')+':'+get('minute'),date:get('year')+'-'+get('month')+'-'+get('day')};}
+function minute(v:string){const m=/^(\d{1,2}):(\d{2})$/.exec(v);return m&&+m[1]<24&&+m[2]<60?+m[1]*60 + +m[2]:null;}
+function matchTime(v:string,hm:string){const cur=minute(hm);const r=/^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/.exec(v);if(r){const a=minute(r[1]),b=minute(r[2]);return cur!==null&&a!==null&&b!==null&&cur>=a&&cur<=b;}return minute(v)!==null&&minute(v)===cur;}
+function matchDate(v:string,date:string){v=v.replace(/\//g,'-');return /^\d{4}-\d{2}-\d{2}$/.test(v)?v===date:/^\d{2}-\d{2}$/.test(v)&&date.endsWith('-'+v);}
+/** One shared iterator keeps sync/client and cooperative/server matching identical. */
+function* scanAudios(audios:Audio[],query:string):Generator<SearchHit|null>{
+ const tokens=parseQuery(query);if(!tokens.length)return;
+ for(const audio of audios){yield null;const {hm,date}=audioClock(audio);const dateText=date+' '+date.slice(5).replace('-','/');let line:string|null=null,matched=true;
+ for(const tok of tokens){yield null;const v=tok.v.toLowerCase();let lyric:Audio['lyrics'][number]|undefined;
+ // Preserve first matching lyric and AND token order, including the returned line.
+ if(tok.kind==='bare'||tok.field==='lyrics')for(const l of audio.lyrics??[]){yield null;if(l.text.toLowerCase().includes(v)){lyric=l;break;}}
+ let ok=false;
+ if(tok.kind==='bare'){const title=audio.title.toLowerCase().includes(v);if(lyric&&!title)line??=lyric.text;ok=title||!!lyric||dateText.includes(v);}
+ else if(tok.field==='title')ok=audio.title.toLowerCase().includes(v);
+ else if(tok.field==='lyrics'){if(lyric)line=lyric.text;ok=!!lyric;}
+ else if(tok.field==='date')ok=matchDate(v,date);
+ else if(tok.field==='time')ok=matchTime(v,hm);
+ if(!ok){matched=false;break;}}
+ if(matched)yield {audio,line};}
 }
-
-const pad2 = (n: number) => String(n).padStart(2, '0');
-
-/** clip 绝对开始时刻的 Asia/Shanghai HH:MM 与日期 yyyy-mm-dd */
-export function clipClock(rec: Recording, clip: Clip): { hm: string; date: string } {
-  const d = new Date((rec.start + clip.offsetStart) * 1000);
-  const parts = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).formatToParts(d);
-  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? '';
-  return { hm: `${get('hour')}:${get('minute')}`, date: `${get('year')}-${get('month')}-${get('day')}` };
+export function searchAudios(audios:Audio[],query:string):SearchHit[]{
+ const hits:SearchHit[]=[];for(const hit of scanAudios(audios,query))if(hit)hits.push(hit);return hits;
 }
-
-function toMin(hm: string): number | null {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(hm.trim());
-  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+export type SearchBudget={signal?:AbortSignal;deadline?:number;now?:()=>number;batchSize?:number;yieldTask?:()=>Promise<void>};
+export function checkSearchBudget({signal,deadline=Infinity,now=()=>performance.now()}:SearchBudget){
+ signal?.throwIfAborted();if(now()>=deadline)throw new DOMException('Search deadline exceeded','TimeoutError');
 }
-
-function matchTime(tok: string, hm: string): boolean {
-  const cur = toMin(hm);
-  if (cur == null) return false;
-  const range = /^(\d{1,2}:\d{2})-(\d{1,2}:\d{2})$/.exec(tok.trim());
-  if (range) {
-    const a = toMin(range[1]);
-    const b = toMin(range[2]);
-    return a != null && b != null && cur >= a && cur <= b;
-  }
-  const one = toMin(tok);
-  return one != null && one === cur;
-}
-
-function matchDate(tok: string, date: string): boolean {
-  const t = tok.trim().replace(/\//g, '-');
-  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t === date;
-  if (/^\d{2}-\d{2}$/.test(t)) return date.endsWith('-' + t);
-  return false;
-}
-
-export function searchClips(
-  recs: Recording[],
-  query: string,
-  range?: { from?: string; to?: string },
-): SearchHit[] {
-  const tokens = parseQuery(query);
-  if (tokens.length === 0) return [];
-  const lo = range?.from ? dayStartOf(range.from) : null;
-  const hiRaw = range?.to ? dayStartOf(range.to) : null;
-  const hi = hiRaw != null ? hiRaw + 86400 : null;
-  const hits: SearchHit[] = [];
-  for (const rec of recs) {
-    if (lo != null && rec.start < lo) continue;
-    if (hi != null && rec.start >= hi) continue;
-    (rec.clips ?? []).forEach((clip, clipIndex) => {
-      const lyricLines = clip.lyrics ?? [];
-      const { hm, date } = clipClock(rec, clip);
-      const dateText = date + ' ' + date.slice(5).replace('-', '/');
-      let line: string | null = null;
-      let matched = true;
-      for (const tok of tokens) {
-        if (tok.kind === 'bare') {
-          const v = tok.v;
-          const inTitle = (clip.title || '').toLowerCase().includes(v);
-          const hitLine = lyricLines.find((l) => (l.text || '').toLowerCase().includes(v));
-          const inDate = dateText.toLowerCase().includes(v);
-          if (!inTitle && !hitLine && !inDate) { matched = false; break; }
-          if (hitLine && !inTitle && line == null) line = hitLine.text;
-        } else if (tok.field === 'title') {
-          if (!(clip.title || '').toLowerCase().includes(tok.v.toLowerCase())) { matched = false; break; }
-        } else if (tok.field === 'lyrics') {
-          const hit = lyricLines.find((l) => (l.text || '').toLowerCase().includes(tok.v.toLowerCase()));
-          if (!hit) { matched = false; break; }
-          line = hit.text;
-        } else if (tok.field === 'time') {
-          if (!matchTime(tok.v, hm)) { matched = false; break; }
-        } else if (tok.field === 'date') {
-          if (!matchDate(tok.v, date)) { matched = false; break; }
-        } else {
-          matched = false; // 未知字段视为不匹配，避免静默全匹配
-          break;
-        }
-      }
-      if (matched) hits.push({ rec, clipIndex, clip, line });
-    });
-    if (hits.length >= 100) break;
-  }
-  return hits.slice(0, 100);
+/** Yield a macrotask, not a microtask: timers and disconnects must get a turn. */
+export async function searchAudiosAsync(audios:Audio[],query:string,budget:SearchBudget={}):Promise<SearchHit[]>{
+ const hits:SearchHit[]=[];let steps=0;const batch=Math.max(1,Math.floor(budget.batchSize??128));
+ const yieldTask=budget.yieldTask??(()=>new Promise<void>(resolve=>setTimeout(resolve,0)));
+ checkSearchBudget(budget);
+ const scan=scanAudios(audios,query);
+ while(true){checkSearchBudget(budget);const next=scan.next();checkSearchBudget(budget);if(next.done)break;if(next.value)hits.push(next.value);
+ if(++steps>=batch){steps=0;await yieldTask();checkSearchBudget(budget);}}
+ return hits;
 }

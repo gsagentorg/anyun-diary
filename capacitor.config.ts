@@ -9,7 +9,7 @@ const config: CapacitorConfig = {
   ios: { loggingBehavior: 'none', zoomEnabled: false },
   plugins: {
     // 原生壳内全局接管 fetch/XHR，绕过 WKWebView 的 CORS 限制：
-    // 任意后端地址的 data.json 拉取不受跨域约束（音频走 <audio> 加载，本就不受 CORS）
+    // 运行时后端 /api/catalog 拉取不受跨域约束；音频由原生 AVPlayer 加载
     CapacitorHttp: { enabled: true },
   },
 };

@@ -14,7 +14,7 @@ const config = {
       ? adapterVercel({ runtime: 'nodejs22.x' })
       : process.env.DEPLOY_TARGET === 'capacitor'
         // strict=false：/api/live 是服务端代理端点，App 内不可用（前端已优雅降级），不需要它进静态包
-        ? adapterStatic({ pages: 'cap', assets: 'cap', strict: false })
+        ? adapterStatic({ pages: 'cap', assets: 'cap', fallback: 'index.html', strict: false })
         : adapterNode(),
   },
 };

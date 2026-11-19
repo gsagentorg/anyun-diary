@@ -1,57 +1,49 @@
 <script lang="ts">
-  import { theme, toggleTheme } from '$lib/theme.svelte.ts';
-  import Timeline from '$lib/Timeline.svelte';
-  import DayStrip from '$lib/DayStrip.svelte';
-  import Heatmap from '$lib/Heatmap.svelte';
-  import { player } from '$lib/player.svelte.ts';
-  import SearchPanel from '$lib/components/SearchPanel.svelte';
-  import Playlist from '$lib/Playlist.svelte';
-  import QueueOverlay from '$lib/components/QueueOverlay.svelte';
-  import LyricsSheet from '$lib/components/LyricsSheet.svelte';
-  import BackendSheet from '$lib/components/BackendSheet.svelte';
-  import { backend, bundledRecordings, isNativeApp } from '$lib/backend.svelte';
-  import { validRange } from '$lib/playlist-core';
-  import { page } from '$app/state';
-  import { browser } from '$app/environment';
-  import { ListMusic, Sun, Moon, Monitor, Search } from 'lucide-svelte';
-  import Chip from '$lib/components/Chip.svelte';
-  import * as publicEnv from '$env/static/public';
-
-  const variants = ['泳道时间轴', '日卡片', '热力图'] as const;
-  let current = $state(0);
-  let searchOpen = $state(false);
-
-  // 状态记忆：视图 / 面板开合 / 生成日期（刷新保留；分享链接显式带范围时以 URL 为准）
-  const VIEW_KEY = 'anyun-view-v1';
-  $effect(() => {
-    if (!browser) return;
-    let v: { view?: unknown; plOpen?: unknown; rangeFrom?: unknown; rangeTo?: unknown } = {};
-    try {
-      const raw = localStorage.getItem(VIEW_KEY);
-      if (raw) v = JSON.parse(raw) as typeof v;
-    } catch {
-      /* 忽略 */
-    }
-    if (typeof v.view === 'number' && v.view >= 0 && v.view < variants.length) current = v.view;
-    if (typeof v.plOpen === 'boolean') plOpen = v.plOpen;
-    if (typeof v.rangeFrom === 'string') rangeFrom = v.rangeFrom;
-    if (typeof v.rangeTo === 'string') rangeTo = v.rangeTo;
-    const uFrom = page.url.searchParams.get('from') ?? '';
-    const uTo = page.url.searchParams.get('to') ?? '';
-    if (uFrom && uTo && validRange(uFrom, uTo)) {
-      rangeFrom = uFrom;
-      rangeTo = uTo;
-    }
-  });
-  $effect(() => {
-    if (!browser) return;
-    try {
-      localStorage.setItem(VIEW_KEY, JSON.stringify({ view: current, plOpen, rangeFrom, rangeTo }));
-    } catch {
-      /* 配额/隐私模式静默 */
-    }
-  });
-
+import {onMount,untrack,tick} from 'svelte';
+import {page} from '$app/state';
+import {player,setPlayerCatalog} from '$lib/player.svelte.ts';
+import {backend,initBackend,fetchIndex,loadMonth,currentMonthId,isNativeApp} from '$lib/backend.svelte';
+import {browseWindow} from '$lib/supply.js';
+import {theme,toggleTheme} from '$lib/theme.svelte.ts';
+import * as publicEnv from '$env/static/public';
+import Chip from '$lib/components/Chip.svelte';
+import ContinuousBrowse from '$lib/ContinuousBrowse.svelte';
+import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
+import {ListMusic,Sun,Moon,Monitor,Search} from 'lucide-svelte';
+const viewScroll=[0,0,0];
+let cancelRestore=()=>{};
+async function switchView(next:number){
+ if(next===view)return;cancelRestore();viewScroll[view]=window.scrollY;view=next;const target=viewScroll[next];await tick();
+ // Dynamic view imports can grow the document after tick; observe layout rather than retrying every frame.
+ const restore=()=>window.scrollTo(0,target);
+ const observer=new ResizeObserver(restore);
+ const cleanup=()=>{observer.disconnect();for(const event of ['wheel','pointerdown','keydown'])window.removeEventListener(event,cleanup);};
+ cancelRestore=cleanup;
+ for(const event of ['wheel','pointerdown','keydown'])window.addEventListener(event,cleanup,{once:true,passive:true});
+ observer.observe(document.body);restore();
+}
+let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
+let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false);
+let endAt=$state(Math.floor(Date.now()/1000)+1);
+const startAt=$derived(backend.manifest?.queryMonthLimit===2?browseWindow(selected,endAt).startAt:-Infinity);
+const laneMode=$derived(page.url.searchParams.get('lane')==='linear'?'linear':'compress');
+const months=$derived((backend.manifest?.months??[]).filter(m=>m.available).sort((a,b)=>b.startAt-a.startAt));
+let expandedDay=$state<number|null>(null);
+let heatFrom=$state(''),heatTo=$state('');
+const heatAudios=$derived(Object.values(backend.summaries).flat().filter(a=>a.startAt>=startAt&&a.startAt<endAt));
+let revealed=$state(1);
+const refs=$derived(months.slice(0,revealed));
+$effect(()=>{for(const ref of refs)if(!backend.summaries[ref.id]&&!backend.loading[ref.id]&&!backend.errors[ref.id])void loadMonth(ref.id).catch(()=>{});});
+function continueHistory(node:HTMLElement){let visible=false;const advance=()=>{if(visible&&window.scrollY>0&&revealed<months.length)revealed++;};const observer=new IntersectionObserver(entries=>{visible=entries.some(e=>e.isIntersecting);advance();},{rootMargin:'0px'});observer.observe(node);const wheel=(e:WheelEvent)=>{if(e.deltaY>0&&visible&&revealed<months.length)revealed++;};window.addEventListener('scroll',advance,{passive:true});window.addEventListener('wheel',wheel,{passive:true});return {destroy:()=>{observer.disconnect();window.removeEventListener('scroll',advance);window.removeEventListener('wheel',wheel);}};}
+onMount(()=>{
+ try{const v=JSON.parse(localStorage.getItem('anyun-view-v1')??'{}');if(Number.isInteger(v.view)&&v.view>=0&&v.view<3)view=v.view;if(typeof v.plOpen==='boolean')playlistOpen=v.plOpen;rangeFrom=typeof v.rangeFrom==='string'?v.rangeFrom:'';rangeTo=typeof v.rangeTo==='string'?v.rangeTo:'';}catch{}
+ const from=page.url.searchParams.get('from')??'',to=page.url.searchParams.get('to')??'';
+ if(/^\d{4}-\d{2}-\d{2}$/.test(from)&&/^\d{4}-\d{2}-\d{2}$/.test(to)&&from<=to){rangeFrom=from;rangeTo=to;}
+ ready=true;initBackend();const refresh=()=>{if(document.visibilityState==='hidden')return;endAt=Math.floor(Date.now()/1000)+1;selected=currentMonthId();void fetchIndex();};const timer=setInterval(refresh,30000);document.addEventListener('visibilitychange',refresh);window.addEventListener('pageshow',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);window.removeEventListener('pageshow',refresh);};
+});
+$effect(()=>{if(ready)try{localStorage.setItem('anyun-view-v1',JSON.stringify({view,plOpen:playlistOpen,rangeFrom,rangeTo}));}catch{}});
+$effect(()=>{const snapshot=Object.values(backend.months).flat();untrack(()=>setPlayerCatalog(snapshot));});
+$effect(()=>{void backend.generation;untrack(()=>revealed=1);});
   // 直播间状态
   type LiveInfo = {
     live: boolean | null;
@@ -85,18 +77,8 @@
     return () => clearInterval(id);
   });
 
-  // 索引：远程拉取成功用远程，否则内置兜底（首屏 SSR/预渲染也走内置）
-  const recordings = $derived(backend.recordings ?? bundledRecordings);
 
-  // ?lane=linear 直链保留；日期范围不随 URL 自动装载——插入永远走显式按钮
-  let plOpen = $state(true);
-  let rangeFrom = $state('');
-  let rangeTo = $state('');
-  const laneMode = $derived(
-    (browser ? page.url.searchParams.get('lane') : null) === 'linear' ? 'linear' : 'compress',
-  );
-</script>
-
+</script><svelte:head><title>安允日记</title></svelte:head>
 <div class="mx-auto max-w-[1600px] px-4 py-6 sm:px-6 lg:px-8 {player.track ? 'pb-32' : ''}">
   <header
     class="sticky top-0 z-30 -mx-4 mb-4 border-b border-base-300 bg-base-100/85 px-4 backdrop-blur sm:-mx-6 sm:mb-6 sm:px-6 lg:-mx-8 lg:px-8"
@@ -118,14 +100,14 @@
 
       <div class="ml-auto flex flex-wrap items-center gap-2">
         <div class="flex flex-wrap items-center gap-2" role="tablist" aria-label="视图切换">
-          {#each variants as v, i}
+          {#each ['泳道时间轴', '日卡片', '热力图'] as v, i}
             <button
               role="tab"
-              aria-selected={i === current}
-              class="rounded-full border px-3 py-1 text-sm transition {i === current
+              aria-selected={i === view}
+              class="rounded-full border px-3 py-1 text-sm transition {i === view
                 ? 'border-accent text-accent'
                 : 'border-base-300 opacity-60 hover:opacity-100'}"
-              onclick={() => (current = i)}
+              onclick={() => void switchView(i)}
             >
               {v}
             </button>
@@ -150,11 +132,11 @@
           {:else}<Monitor class="h-4 w-4" />{/if}
         </button>
         <button
-          class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {plOpen
+          class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {playlistOpen
             ? 'border-accent text-accent'
             : ''}"
-          onclick={() => (plOpen = !plOpen)}
-          aria-expanded={plOpen}
+          onclick={() => (playlistOpen = !playlistOpen)}
+          aria-expanded={playlistOpen}
         >
           <ListMusic class="h-4 w-4" /> 播放列表
         </button>
@@ -221,34 +203,23 @@
   </section>
   {/if}
 
-  <div class="lg:flex-1">
-    {#if plOpen}
-      <div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">
-        <Playlist {recordings} bind:open={plOpen} bind:from={rangeFrom} bind:to={rangeTo} />
-      </div>
-    {:else}
-      <button
-        class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm transition hover:border-accent"
-        onclick={() => (plOpen = true)}
-        aria-expanded={plOpen}
-      >
-        <span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4" /> 播放列表</span>
-        <span class="text-xs opacity-60">展开</span>
-      </button>
-    {/if}
-  </div>
-  </div>
 
-  <QueueOverlay />
-  <LyricsSheet />
-  <BackendSheet />
-  <SearchPanel bind:open={searchOpen} {recordings} />
-
-  {#if current === 0}
-    <Timeline recordings={recordings} laneMode={laneMode} />
-  {:else if current === 1}
-    <DayStrip recordings={recordings} />
-  {:else}
-    <Heatmap recordings={recordings} />
-  {/if}
+<div class="lg:flex-1">
+{#if playlistOpen}<div class="max-h-[60vh] overflow-y-auto rounded-lg border border-base-300 bg-base-100">{#await import('$lib/Playlist.svelte') then module}<module.default bind:open={playlistOpen} bind:from={rangeFrom} bind:to={rangeTo}/>{/await}</div>
+{:else}<button class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm" onclick={()=>playlistOpen=true}><span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4"/> 播放列表</span><span class="text-xs opacity-60">展开</span></button>{/if}
+</div></div>
+{#if player.error&&!player.track}<p role="alert" class="text-xs text-warning">{player.error}</p>{/if}
+{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>void fetchIndex()}>重试目录</button></p>{:else if !backend.manifest}<BrowseSkeleton/>{/if}
+{#if backend.manifest}
+{#if view===2&&months.length&&!Object.keys(backend.summaries).length}
+{#if backend.errors[months[0].id]}<p role="alert">{backend.errors[months[0].id]} <button onclick={()=>void loadMonth(months[0].id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label="正在加载热力数据…"/>{/if}
+{:else if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){revealed++;}}}/>{/await}
+{:else}{#if Object.keys(backend.summaries).length}<ContinuousBrowse {view} {laneMode} {startAt} {endAt} bind:expanded={expandedDay}/>{/if}
+{#each refs as ref (ref.id)}{#if !backend.summaries[ref.id]}{#if backend.errors[ref.id]}<p role="alert">{backend.errors[ref.id]} <button onclick={()=>void loadMonth(ref.id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label={"正在加载 "+ref.id+"…"}/>{/if}{/if}{/each}
+{#if revealed<months.length}{#key revealed}<div use:continueHistory class="h-8" aria-label="继续加载历史月份"></div>{/key}{/if}{/if}
+{/if}
+{#if searchOpen}{#await import('$lib/components/SearchPanel.svelte') then module}<module.default bind:open={searchOpen}/>{/await}{/if}
+{#if backend.prompt}{#await import('$lib/components/BackendSheet.svelte') then module}<module.default/>{/await}{/if}
+{#if player.queueOpen}{#await import('$lib/components/QueueOverlay.svelte') then module}<module.default/>{/await}{/if}
+{#if player.lyricsOpen}{#await import('$lib/components/LyricsSheet.svelte') then module}<module.default/>{/await}{/if}
 </div>

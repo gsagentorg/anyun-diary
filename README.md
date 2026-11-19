@@ -1,215 +1,114 @@
-# 安允日记 · 直播歌单时间线
+# 安允日记
 
-把主播直播间的每日录像做成可浏览、可试听、可导出播放列表的歌单时间线（直播间地址由 `PUBLIC_LIVE_ROOM_ID` 配置）。
+音频是唯一业务实体：稳定 id、绝对 epoch 秒 startAt、独立时长和相对歌词。不存在录像父目录。时间轴、日视图、热力图、搜索、队列使用相同音频模型。
 
-- **数据零手填**：全部由**文件名时间戳 + 切片自带的元数据**自动生成，不人工录入。
-- **三种视图**：泳道时间轴 / 日卡片 / 热力图。
-- **内置播放器**：点击任意歌块即播，支持上/下一首、进度、**睡眠定时器**。
-- **动态播放列表**：按 URL 时间范围或面板自定义范围生成，仅在浏览器内播放（外部播放器导出已移除）。
+## 开发与验证
 
-> 注：“有音频但没识别出歌”的片段属录制导致，不代表开播，界面不展示。
+Node 22，按 package-lock.json 使用 `npm ci`。
 
-## 技术栈
-
-SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + `lucide-svelte` 图标。
-部署目标：**Vercel**（`@sveltejs/adapter-vercel`）。
-
-## 前端重构（已合并 main · 2026-10-18 发版）
-
-在 `refactor/frontend` 分支上完成的一次视觉/响应式重做，主分支不受影响。
-
-- **设计 token**：单一来源在 `src/app.css` 的 `@theme`（语义字号 `--text-2xs/xs/sm/base/lg/xl`、圆角 `--radius-sm/md/lg`、`--color-*`），组件不再写任意值字号/圆角。
-- **共享组件**（`src/lib/components/`）：`Chip.svelte`（胶囊徽标）、`HourAxis.svelte`（泳道/热力共用时间轴，按容器宽自适应 2h/3h/6h 刻度）、`Sheet.svelte`（叠层容器，队列叠层用）、`QueueOverlay.svelte`（播放队列叠层：跳播/移出/上下移/清空）、`StateHint.svelte`（空列表/无数据/加载态）。
-- **配色选型页**：`static/design-variants.html`（`/design-variants.html`），可选主题/布局方案并导出 token。
-
-详见 `docs/frontend-refactor-plan.md`。
-
-## 快速开始
-
-```bash
-npm install
-npm run dev        # http://127.0.0.1:5173（配置里监听 0.0.0.0:4173 时以 vite.config.ts 为准）
-npm run check      # svelte-kit sync + svelte-check
-npm run build      # 默认 adapter-node；DEPLOY_TARGET=vercel 时输出 .vercel/output
+```sh
+npm run dev
+npm test
+npm run check
+npm run build
+DEPLOY_TARGET=vercel npm run build
+DEPLOY_TARGET=capacitor npm run build
 ```
 
-### 测试（仅本地，不部署）
+构建不发布数据、不访问对象存储。Capacitor 构建仅验证网页壳，不替代 Xcode 编译与真机后台/锁屏验收。保留原生睡眠定时器。
 
-使用 Node.js `^20.19.0 || >=22.12.0`（与 Vite 7 一致），先执行 `npm ci`。
-测试执行器固定为开发依赖 `vite-node@3.2.4`，支持 Vite 7，
-与锁文件中的 Vite 7.3.7 共用同一版本；不要用临时下载最新版的 `npx vite-node` 代替锁文件。
+## 数据契约
 
-```bash
-npm test                # 依次运行以下七套；任何断言/套件失败即非零退出
-npm run test:data       # Python 3：LRC 更新边界、零目录扫描、原子写入和失败不清词
-npm run test:lyrics     # 歌词下标/同刻分组：面板闪过整组、元数据只推首行
-npm run test:playlist   # 合成夹具：范围、排序、日期、M3U URL 精确编码
-npm run test:shuffle    # 固定种子、40 次抽取及非空覆盖检查
-npm run test:lane-scale # 泳道布局/映射
-npm run test:session    # 会话恢复、队列、LIFO、倍速
-npm run test:sleep      # 睡眠曲线、音频增益、定时器及取消
-```
+上海时区每月 **7 日 00:00** 划分左闭右开业务月；跨界音频归开始所在月，不切割。`monthId` 是边界起始月的 YYYY-MM。manifest 保留全部历史月份及可用性；每月 JSON 包含该月音频与完整歌词，当前空月合法。
 
-每套使用独立进程，避免会话/睡眠测试的全局浏览器桩、假时钟和 `process.exit`
-影响其他套件。播放列表使用合成数据，不依赖 NAS、真实音频或不断增加的录制日期；
-会话套件仍读取仓库内 `src/lib/data.json`（只读）。
-`npm test` 不运行数据生成、音频转换、构建、部署或服务重启。
-睡眠测试是模拟环境下的逻辑验证，不代表 iPhone 锁屏/后台真机验收。
+`MAX_QUERY_MONTHS` 在运行查询与发布保留共用：2 表示当前月和紧邻上月，空月也占位，不是最近两个非空月；0 表示不限。范围越界明确失败，不静默截断。滚动自然月日期短月 clamp，不额外加载第三个边界块。
 
-### 更新歌词（现有切片清单不变）
+同一 manifest/month/range/resolve 供应层使用修订缓存及请求去重。首页只启动当前月；历史按需加载。搜索走服务端逐月 NDJSON，关闭或更换查询真正取消请求，已完成结果可保留并显示 X/Y 进度。
 
-`src/lib/data.json` 是现有切片清单；最终 LRC 目录是本次换词的唯一外部输入。
+## 同构后端
 
-```bash
-export TAGGED_DIR=<最终同名LRC所在目录>
-npm run data -- --dry-run  # 检查，不写入
-npm run data              # 只更新现有切片的 lyrics
-```
+Vercel 与 MCSM/adapter-node 共用路由与业务逻辑，只替换 Blob/本地持久化适配器。配置占位模板见 `.env.example`，真实地址和凭据只能放仓库外的运行环境。未配置数据应显示错误，不回退旧全量 bundled 数据。
 
-- 按 data.json 中每个切片的文件名读取同名 `.lrc`，不枚举素材目录，不读或探查录像、LLC、音频标签、时长缓存。
-- 不新增/删除切片，不改变标题、起止偏移、分组或其他既有字段；只有歌词实际变化时更新 `generatedAt`。无变化则文件字节和时间均不改。
-- 缺失、空或无效 LRC、时间越界、源文件变化或 data.json 并发变化时，失败退出且不写入；不会把读取失败当成“无歌词”清空旧词。
-- 同一时间戳的多行（合唱/同唱）按源顺序全部保留：歌词面板整组快速闪过，系统媒体浮层只推送组内第一行。时间戳必须非递减（同刻允许、倒序拒绝）。
-- 末行因整秒取整略超出切片尾部（实测 274 行）时**数据层按源值保留并计数报告**；展示层将其视为正好收在音频结尾（到结尾即点亮、同刻成组快速闪过、元数据推首行）；若 lrc 首行就超出切片尾部则视为拿错文件，拒绝导入。
-- 兼容旧 `AUDIO_ROOT` 环境变量，但仅将其拼成 `已打标签/` 路径，不扫描该根目录。优先使用 `TAGGED_DIR` 消除歧义。
-- 可用 `--data-file <现有JSON>` 指定独立验证副本。缺少现有清单会报错，绝不回退扫描原始素材。
-- `--expand-catalog`：**仅在你明确要求扩容后使用**——扫描 TAGGED_DIR 里的切片音频（文件名承载偏移、ffprobe 读切片自带 tag 除标题外不探查媒体），把目录里没有的切片加入 existing 录音骨架，只增不删；既有条目与字段不动。副产物计入：无词期曲数、尾越界行数、非段名音频跳过计数。
+API：`GET /api/catalog` 返回 manifest，`GET /api/month/[id]` 返回完整月块，`GET /api/search?q=...` 流式搜索。音频 URL 直接对应持久化音频，月 JSON 清理不删除音频。
 
-### 音频与新切片
+发布流程见 [数据发布](docs/data-publication.md)。旧全量目录、预签、迁移和桶配置路线已移除；历史只保留在 git。不要运行旧操作手册中的命令。
 
-现有音频转换入口与歌词更新分开：`AUDIO_ROOT=<切片素材根> npm run audio` 将 `已打标签/` 内的切片转成 opus；只更新 LRC 时不要运行它。
+## 队列
 
-`npm run data` **不承担新曲导入或从零建库**。新增/移除切片、调整切片标签属于另一个清单更新操作，须单独确认范围，不能借换词顺便扫描其他输入。
+队列持有音频独立快照与唯一 queueEntryId，同一个 audioId 可以重复出现。点击已存在音频定位，否则插在当前项后播放。日期生成只有在完整范围成功后才一次队首插入并播放；取消或失败不会修改队列。随机仅从当前队列抽取。恢复不依赖首页已加载月份，保持暂停和原生已有播放优先；搜索重排不改变队列。
 
-本地预览使用 `npm run dev`；歌词数据变化后 dev 自动热更。直播间区块可通过 `.env` 的 `PUBLIC_LIVE_ROOM_ID` 配置。
 
-### 发版（本地生产）
-```
-npm run build && systemctl --user restart anyun-diary-web
-```
-生产 = `<你的生产域名>`（由 frpc 配置提供）；开发 = `<你的开发域名>`（由 frpc 配置提供）
+## 项目与技术栈
 
-## 目录结构
+SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + lucide-svelte；支持 Web 与 Capacitor iOS 壳。数据由已打标签独立音频和同名 UTF-8 LRC 派生，不手填、不探查主录像。
 
-```
-src/
-  app.css                     # Tailwind 主题（base-*/accent/warning）
-  routes/
-    +page.svelte              # 三视图切换 + 播放列表面板入口
-  lib/
-    types.ts                  # 类型 + 纯工具（blocksOf/audioUrl/格式化/Track）
-    playlist-core.ts          # 纯逻辑：按时间范围取曲、m3u 生成、日期解析
-    player.svelte.ts          # 播放器内核：播放列表、上/下一首、睡眠定时器
-    Player.svelte             # 底部播放条（含睡眠定时器菜单）
-    Playlist.svelte           # 动态播放列表面板（范围选择 / 生成并插入队列）
-    Timeline.svelte           # 泳道时间轴
-    DayStrip.svelte           # 日卡片
-    Heatmap.svelte            # 热力图
-    data.json                 # 自动生成的数据（勿手改）
-scripts/                      # 数据管线 / 转码 / 校验 / 单测
-static/audio/                 # 155 个 opus 切片（不进 Vercel 部署包，见 .vercelignore）
-```
+- 三种视图：泳道时间轴 / 日卡片 / 热力图，共用 Audio 绝对时间模型。
+- 内置播放器：点歌、上/下一首、进度、倍速、歌词、队列及睡眠定时器。
+- 设计 token 位于 src/app.css，保留明暗主题与响应式布局；共享 Chip、Sheet、QueueOverlay、StateHint 位于 src/lib/components/。
+- 配色选型页为 static/design-variants.html。历史视觉说明见 docs/frontend-refactor-plan.md，其中旧数据路线不再适用。
 
-## 播放列表用法
+## 三视图与交互
 
-| 入口 | 行为 |
-| --- | --- |
-| URL | `/?from=2026-10-04&to=2026-10-05` 打开即装载该范围（Asia/Shanghai，含 to 当天） |
-| 顶部「播放列表」 | 打开面板：自定义范围、生成并插入队列 |
-| 各视图「列表」按钮 | 时间轴 / 日卡片 / 热力图每行一个，一键把该场次全部曲目加入列表 |
-
-> 外部播放器导出（m3u 端点 / VLC 直开 / 复制链接 / 下载）已移除；队列与生成器仅在浏览器内。
+- 泳道按绝对时间展示音频、点击即播；仅挂载当前活跃视图，其他视图动态导入，不在后台生成完整 DOM。
+- 日卡按上海自然日聚合，不构造录音父实体。保留响应式卡片、日期、曲数徽标、展开/收起、当天替换列表、歌曲颜色点、序号、标题、时长及当前曲高亮。旧录像偏移改为绝对时间的上海时钟。每页最多 30 天，仅展开一天，歌曲每页最多 60 首。
+- 热力图保留日期/星期列头、24 小时网格、明暗热度渐变、少/多图例、鼠标 tooltip、点击及 Enter/Space 装载当天列表。跨小时和自然日按实际占用秒数分摊；每页最多 31 天，统计不随分页改变。
+- 热力范围独立于队列生成范围，保留日期输入、近 7/30 天、清除范围及本地记忆；只过滤已加载窗口，不隐式请求历史全量。统计保留活跃日、曲数、已知总时长、平均及五档分层。未知时长明确说明，不作为零秒参与平均。
+- 日期面板完整范围成功后才生成并插入。分享 URL 使用 from/to 参数（上海时区、to 包含当天），仍受可用月份限制。
+- 外部播放器导出、M3U 端点、VLC 直开和下载已移除，不恢复旧入口。
 
 ## 睡眠定时器
 
-播放条上的月亮按钮：预设 10/15/30/45/60/90 分钟、**自定义分钟数**、「播完当前曲目后就停」，激活时显示倒计时，可随时取消。
+播放条月亮按钮提供预设分钟数、自定义分钟数及「播完当前曲目后停」，激活后显示倒计时并可取消。iOS 后台队列、系统媒体控制与睡眠由原生播放器持有；Web 模拟测试不代表锁屏/后台真机通过。
 
-## 音频托管（不进 git）
+## 目录结构
 
-155 个 opus（264MB）是**可从 NAS 切片重新生成的产物**（`npm run audio`），因此：
+| 路径 | 用途 |
+| --- | --- |
+| src/app.css | 语义设计 token 与主题 |
+| src/routes/+page.svelte | 月份窗口、三视图、面板懒加载 |
+| src/lib/types.ts | Audio/Track 契约与格式化 |
+| src/lib/supply.js、month.js | manifest/月供应、业务月与范围 |
+| src/lib/player.svelte.ts | 队列、播放、恢复、睡眠 |
+| src/lib/Player.svelte、Playlist.svelte | 播放条、日期生成 |
+| src/lib/Timeline.svelte、DayStrip.svelte、Heatmap.svelte | 三视图 |
+| src/lib/server/ | 同构后端及持久化适配 |
+| scripts/ | 发布与合成夹具测试 |
+| ios/ | Capacitor 壳和原生 AVPlayer |
 
-- **不进 git 跟踪**（`.gitignore` 已排除 `static/audio/`），也不进 Vercel 部署包（`.vercelignore`）。
-- 站点按 `${后端}/audio/<文件名>` 取音频、`${后端}/data.json` 拉索引；后端留空则音频用同源 `/audio`、索引用内置兜底。App 内可运行时修改后端地址（首启无后端时弹窗收集，存 localStorage `anyun-backend-v1`）；web 端不可运行时配置，恒用构建期注入的 `PUBLIC_AUDIO_BASE`。
+音频、运行数据、真实配置和凭据不进入 git，不将旧 bundled 数据重新接为运行时输入。
 
-三种托管方式：
+## 部署到 Vercel / 自托管
 
-1. **Vercel Blob**（推荐，Vercel 原生对象存储，支持 Range）：
-   ```bash
-   # 在 Vercel 项目里创建 Blob Store，拿到 BLOB_READ_WRITE_TOKEN
-   BLOB_READ_WRITE_TOKEN=vercel_blob_rw_xxx node scripts/upload-blob.mjs
-   # 输出 PUBLIC_AUDIO_BASE=https://xxxx.public.blob.vercel-storage.com → 配到项目环境变量
-   ```
-   脚本使用官方 `@vercel/blob` SDK，对象路径固定为 `audio/<原文件名>`，不添加随机后缀。默认跳过已存在的非空对象；需要覆盖时显式加 `--overwrite`。
-2. **外部静态托管**：把音频放到任意可对公网提供 Range 的站点，设 `PUBLIC_AUDIO_BASE` 指向它（例如自建入口 `<你的生产域名>`）。
-3. **随部署包**（不推荐，体积大）：删掉 `.vercelignore` 里的 `static/audio/` 且把它们加回 git。
+1. Vercel 导入仓库，Framework Preset 选择 SvelteKit，根目录为仓库根。
+2. Node 22.x，安装 npm ci、构建 npm run build，输出目录保持框架默认，不手填 build。
+3. VERCEL=1 自动选择 adapter-vercel，或显式 DEPLOY_TARGET=vercel；本地/MCSM 默认 adapter-node，可显式 DEPLOY_TARGET=node。
+4. 按 .env.example 配置持久化后端和查询月份上限；真实配置只放部署环境。可选 PUBLIC_LIVE_ROOM_ID 配置直播区块。
+5. Vercel 产物为 .vercel/output/；adapter-node 由部署平台运行构建产物。音频路由需支持 Range，发布数据与应用构建分离。
 
-> ⚠️ 注：音频已从 git **跟踪**中移除，但**历史提交里仍有**（本体 ~266MB）。彻底瘦身需重写历史 + 强推，属破坏性操作，**待确认后执行**。
-
-## 部署到 Vercel
-
-1. 在 Vercel 导入仓库，Framework Preset 选择 **SvelteKit**，根目录为仓库根。
-2. Node.js 选择 **22.x**（`package.json` 已固定版本），构建命令 `npm run build`，安装命令 `npm ci`；输出目录保持框架默认。`vercel.json` 已提供框架和命令配置。
-3. Vercel 设置 `VERCEL=1` 时自动使用 `adapter-vercel`；也可以显式配置 `DEPLOY_TARGET=vercel`。本地/自托管默认仍使用 `adapter-node`，显式 `DEPLOY_TARGET=node` 可覆盖自动检测。
-4. 给 Production / Preview 配置 `PUBLIC_AUDIO_BASE`（已有音频站或迁移后的 Blob 基础地址，不带 `/audio`）；需要直播区块时配置数字 `PUBLIC_LIVE_ROOM_ID`。
-5. 点击 Deploy；切换音频地址后重新部署。若希望该分支直接作为生产版本，在 Vercel 将 Production Branch 设为 `deploy/vercel`。
-
-构建产物：`.vercel/output/`。不要把 Output Directory 改成 `build`。
-构建直接使用已提交的 `src/lib/data.json`，不运行数据生成或音频转换。
-
-### 从已有 PUBLIC_AUDIO_BASE 一次性迁移到 Blob
-
-已有部署的音频地址仍可直接用于 Vercel；若希望改用 Blob，可自动下载并重上传，无需本地音频目录。
-先在 Vercel 项目的 Storage 中创建 **Public** Blob Store，并获取 `BLOB_READ_WRITE_TOKEN`。
-在仓库根目录执行（Node.js 22，先 `npm ci`）：
-
-```bash
-# 基础地址不带 /audio，支持 https://旧站点/子目录 形式
-export SOURCE_AUDIO_BASE='https://旧音频站点.example.com'
-
-# 预览清单：不联网、不需要令牌、不下载或上传
-npm run audio:migrate -- --dry-run
-
-# 在本地终端安全输入令牌（不写入 shell 历史；bash / zsh）
-read -r -s BLOB_READ_WRITE_TOKEN
-export BLOB_READ_WRITE_TOKEN
-npm run audio:migrate
-unset BLOB_READ_WRITE_TOKEN
-```
-
-也可以仅导出旧 `PUBLIC_AUDIO_BASE`：未指定 `SOURCE_AUDIO_BASE` 时会自动使用它。
-命令只读取进程环境，不自动加载 `.env`；若配置已在 `.env` 中，可以执行：
-
-```bash
-node --env-file=.env scripts/upload-blob.mjs --from-remote --dry-run
-node --env-file=.env scripts/upload-blob.mjs --from-remote
-```
-
-- 从 `data.json` 的 `recordings[].clips[].opus` 获取并去重文件名，只迁移歌单中引用的音频。
-- 下载 `${SOURCE_AUDIO_BASE}/audio/<编码后的文件名>`，校验非空、Ogg Opus 头、已知长度，拒绝 HTML 错误页；单文件上限 128 MiB，默认并发 4，可加 `--concurrency=2` 降低内存占用。
-- 使用官方 Blob SDK，上传为 Public、保留 `audio/<原文件名>`，不添加随机后缀。令牌只发送给 Blob，下载源无需 Blob 令牌。
-- 每个文件最多尝试 3 次；失败后非零退出。可直接重跑：默认跳过目标已存在的非空文件，不校验其内容是否与旧站一致；要更新已有文件请加 `--overwrite`。
-- 全部成功后输出 `PUBLIC_AUDIO_BASE=https://xxx.public.blob.vercel-storage.com`，把它填入 Vercel 项目环境变量，再重新部署。部分失败不会输出新的地址，也不会自动修改旧部署或环境变量。
-- 上传成功的文件会保留，下载内容仅暂存在内存，不落盘、不进 Git；后续无需旧音频站持续在线。
-- 迁移是单独命令，不放进构建流程，避免每次发布重复传输或依赖旧站可用性。
-
-本地已有音频时用 `npm run audio:upload`；预览为 `npm run audio:upload -- --dry-run`。
-离线迁移逻辑验证：`npm run test:blob`（模拟下载和 Blob，不访问真实存储）。
+本地 npm run dev；生产先 npm run build，再由已有服务管理器发布。端口、域名、隧道及具体 unit 属私有部署配置，不在此固化。不要照抄旧 RUNBOOK 的数据命令，不在测试时重启服务或发布真实存储。
 
 ## iOS App（Capacitor）
 
-> **状态（2026-11-07）：壳已跑通** —— 真机验证通过，播放正常（.opus 在现代 iOS WebKit 可直接解码，无需转格式）。
-> **原生播放已接入**：iOS 直接选歌即可使用 AVPlayer；后台队列、系统媒体控制和睡眠定时由原生持有。构建及真机验收见 [iOS 原生播放器验收](docs/ios-opus-test.md)。
+静态网页壳不携带服务端：先 DEPLOY_TARGET=capacitor npm run build，再 npx cap sync ios。
 
-纯静态单页打进 App（无服务端）：
+- 现代 iOS WebKit 可解码 Opus；原生 AVPlayer 接入与真机验收参考 [iOS 原生播放器验收](docs/ios-opus-test.md)，历史验收不等于本轮验证。
+- 首次填写 HTTPS 后端基础地址，保存在 localStorage。App 使用后端 /api/catalog、/api/month/[id]、/api/search 与 /api/audio/ 路由，不请求静态壳自身的数据端点。后端设置可切换并重新加载。
+- CapacitorHttp 接管 fetch 处理壳内跨域，媒体走原生播放桥。PUBLIC_AUDIO_BASE 可作默认后端；敏感值不写源码或构建产物。
+- Web 与 App 共用校验后的 Audio/月目录与独立队列快照。加载错误明确显示，不回退旧全量目录。
+- /api/live 是服务端代理，静态壳不能自行提供，直播区块保留兜底版式。
+- 仍需 Xcode 编译和真机前后台、锁屏媒体控制、恢复与睡眠验收；静态构建或模拟测试不能替代。
 
-```bash
-DEPLOY_TARGET=capacitor npm run build && npx cap sync ios
-```
+## 已知限制与开发约定
 
-- 索引与音频都不随包走：App 首次启动弹窗填**后端地址**（结尾不带 `/audio`，需 https），索引按 `<地址>/data.json`、音频按 `<地址>/audio/<文件名>` 拉取；保存在 localStorage，之后可随时修改。构建时若设了 `PUBLIC_AUDIO_BASE` 则作为默认值。
-- 壳内启用 `CapacitorHttp` 全局接管 fetch，绕过 WKWebView 的 CORS 限制，后端站点无需开跨域；音频走 `<audio>` 加载，本就不受 CORS 约束。
-- 内置 `data.json` 永远是首屏与离线兜底：远程拉取失败或还没拉到时按内置索引渲染，不白屏。**web 端行为完全不变**——后端地址不可运行时配置（恒用构建期注入的 `PUBLIC_AUDIO_BASE`），索引始终用内置 `data.json`，不发任何远程索引请求。
-- `/api/live`（直播状态）是服务端代理端点，App 内不可用，直播条恒为兜底版式。
+- **跨平台注意**：runes 模块的导入必须写全后缀——`./player.svelte.ts`、`./theme.svelte.ts`（不是 `./player.svelte`）。
+  `.svelte.ts` 后缀是 Svelte 5 模块级 runes（`$state/$derived`）必需的，不能改名；而裸写的 `./player.svelte`
+  在 macOS 大小写不敏感盘上会先命中同名组件 `Player.svelte`，esbuild 依赖扫描直接报
+  `No matching export`（2026-11-07 已把全部 13 处导入改为显式 `.ts`）。tsconfig 需配套
+  `allowImportingTsExtensions: true`。
+- 时长为空显示未知，不补查原始录像，不用歌词尾时间伪造时长。
+- 月 JSON 可清理而音频独立持久化；已入队快照不依赖首页当前月份。
+- 测试用合成夹具、模拟存储和原生桥桩，各套独立进程；不读取 NAS，不跑数据发布、转码、部署或服务重启。
+- 可访问性与响应式视觉仍需人工验收，源码检查不等于 Lighthouse 或真机通过。
 
 ## 本地常驻（可选）
 
@@ -224,22 +123,6 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 
 > 注意：frpc 的 `serverAddr` 钉的是内网 LAN 地址（由 frpc 配置提供）。域名在容器/公网 DNS
 > 下若解析到另一台机器，而那边的 frps 不被 nginx 前置——注册“成功”也不会路由（曾导致整站 404）。
-
-## 已知限制
-
-- **跨平台注意**：runes 模块的导入必须写全后缀——`./player.svelte.ts`、`./theme.svelte.ts`（不是 `./player.svelte`）。
-  `.svelte.ts` 后缀是 Svelte 5 模块级 runes（`$state/$derived`）必需的，不能改名；而裸写的 `./player.svelte`
-  在 macOS 大小写不敏感盘上会先命中同名组件 `Player.svelte`，esbuild 依赖扫描直接报
-  `No matching export`（2026-11-07 已把全部 13 处导入改为显式 `.ts`）。tsconfig 需配套
-  `allowImportingTsExtensions: true`。
-
-- 既有数据中的时长为空时，前端按未知显示；歌词更新不补查原始素材或时长。
-- 「有音频无歌」片段不展示（录制导致，非开播）。
-
-## 待办
-
-- [x] 前端视觉重构（见 `docs/frontend-refactor-plan.md`，已完成于 `refactor/frontend` 分支）
-- [ ] 合并 `refactor/frontend` 到 `main` 前重跑 Lighthouse 可访问性验收
 
 ### 头像与 App 图标
 

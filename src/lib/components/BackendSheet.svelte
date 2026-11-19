@@ -23,10 +23,10 @@
   <form class="flex flex-col gap-3 px-4 py-4" onsubmit={submit}>
     <p class="text-xs leading-relaxed opacity-70">
       索引与切片音频都从该地址拉取：索引按
-      <code class="rounded bg-base-200 px-1">地址 /data.json</code>，音频按
-      <code class="rounded bg-base-200 px-1">地址 /audio/文件名</code>。
+      <code class="rounded bg-base-200 px-1">地址 /api/catalog</code>，音频按
+      <code class="rounded bg-base-200 px-1">地址 /api/catalog 与 /api/month/月份；音频由月块指定持久化地址</code>。
       填站点根地址（结尾不带 /audio），例如
-      <span class="break-all">https://xxxx.public.blob.vercel-storage.com</span>。请使用
+      <span class="break-all">https://YOUR-BACKEND-HERE</span>。请使用
       https（iOS 会拦截明文 http）。
     </p>
     <input

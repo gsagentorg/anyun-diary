@@ -5,6 +5,12 @@
 // chain), an S3 store (CATALOG_STORAGE=s3), or a local directory. Source
 // objects are never written, renamed, or deleted. Output never includes
 // credentials or URLs.
+//
+// Pruning is part of the publish pipeline, not an optional extra: once the
+// pointer switch succeeded, target objects that this run's manifest no longer
+// references are deleted (managed key shapes only, target prefix only), so a
+// rolling-window publish reclaims out-of-window data on every run. --no-prune
+// is the explicit opt-out.
 import {createHash} from 'node:crypto';
 import {createReadStream,createWriteStream} from 'node:fs';
 import {mkdir,readdir,rmdir,stat,statfs,unlink,rename} from 'node:fs/promises';
@@ -27,6 +33,7 @@ const AUDIO_NAME=/^[a-f0-9]{64}\.opus$/;
 const DEFAULT_BUDGET_MB=1024;
 const DEFAULT_CONCURRENCY=5;
 const DEFAULT_WINDOW_DAYS=30;
+const DEFAULT_PRUNE=true;
 const DEFAULT_RETRIES=4;
 const DEFAULT_TIMEOUT_MS=120000;
 const DEFAULT_CACHE_DIR_NAME='anyun-migrate-s3';
@@ -36,7 +43,7 @@ const CACHE_FILE_NAME=/^[a-f0-9]{64}\.opus(\.part)?$/;
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 
 export function parseArgs(argv=process.argv.slice(2)){
-  const options={dryRun:false,prune:false,verifyFull:false,windowDays:undefined,months:undefined,concurrency:DEFAULT_CONCURRENCY,budgetMb:DEFAULT_BUDGET_MB,timeoutMs:DEFAULT_TIMEOUT_MS,cacheDir:undefined,now:undefined,help:false};
+  const options={dryRun:false,prune:DEFAULT_PRUNE,pruneExplicit:false,pruneDisabled:false,verifyFull:false,windowDays:undefined,months:undefined,concurrency:DEFAULT_CONCURRENCY,budgetMb:DEFAULT_BUDGET_MB,timeoutMs:DEFAULT_TIMEOUT_MS,cacheDir:undefined,now:undefined,help:false};
   const numeric=(flag,value,min,max)=>{
     if(!/^\d+$/.test(value??''))throw Error(`${flag} requires an integer`);
     const n=Number(value);
@@ -46,7 +53,10 @@ export function parseArgs(argv=process.argv.slice(2)){
   for(let i=0;i<argv.length;i++){
     const arg=argv[i];
     if(arg==='--dry-run')options.dryRun=true;
-    else if(arg==='--prune')options.prune=true;
+    // Pruning is part of every publish run by default; --prune stays accepted
+    // as a legacy alias, --no-prune is the explicit opt-out.
+    else if(arg==='--prune'){options.prune=true;options.pruneExplicit=true;}
+    else if(arg==='--no-prune'){options.prune=false;options.pruneDisabled=true;}
     else if(arg==='--verify-full')options.verifyFull=true;
     else if(arg==='--help'||arg==='-h')options.help=true;
     else if(arg==='--window-days')options.windowDays=numeric(arg,argv[++i],0,36500);
@@ -62,6 +72,7 @@ export function parseArgs(argv=process.argv.slice(2)){
     else if(arg==='--now')options.now=numeric(arg,argv[++i],0,Number.MAX_SAFE_INTEGER);
     else throw Error('Unknown argument. Use --help.');
   }
+  if(options.pruneExplicit&&options.pruneDisabled)throw Error('Use either --prune or --no-prune');
   if(options.windowDays===undefined)options.windowDays=options.months!==undefined?0:DEFAULT_WINDOW_DAYS;
   if(options.months===undefined)options.months=0;
   return options;
@@ -878,28 +889,43 @@ async function syncObject(object,{source,target,retries,sleep,stats,verifyFull,c
   return 'uploaded';
 }
 
+// Collect the complete stale set first, then delete. Two guards stay
+// unchanged: only keys inside the target layout are candidates, and only
+// managed key shapes (current.json / releases/ / months/ / audio/) are ever
+// removed - user data under the same prefix is listed but never touched.
+// The source backend is a different client and is never reached here.
 async function pruneTarget(plan,target,{retries,sleep,stats}){
   const keep=new Set(plan.objects.map(object=>object.targetKey));
   const options=plan.targetOptions;
   const listed=await withRetry(()=>target.list(options.prefix),{retries,sleep,stats});
   const extra=options.audioPrefix.startsWith(options.prefix)?[]:await withRetry(()=>target.list(options.audioPrefix),{retries,sleep,stats});
-  const extraKeys=new Set();
+  const stale=new Map();
   for(const entry of [...listed,...extra]){
-    if(keep.has(entry.key)||extraKeys.has(entry.key))continue;
+    if(keep.has(entry.key)||stale.has(entry.key))continue;
     let managed=false;
     if(entry.key.startsWith(options.prefix)){
       const relative=entry.key.slice(options.prefix.length);
       managed=relative==='current.json'||RELEASE_KEY.test(relative)||MONTH_KEY.test(relative);
     }
     if(!managed&&entry.key.startsWith(options.audioPrefix))managed=AUDIO_NAME.test(entry.key.slice(options.audioPrefix.length));
-    if(managed)extraKeys.add(entry.key);
+    if(managed)stale.set(entry.key,Number(entry.size)||0);
   }
-  for(const key of extraKeys)await withRetry(()=>target.delete(key),{retries,sleep,stats});
-  return extraKeys.size;
+  // The listing above is complete before the first delete is issued.
+  let deleted=0;
+  let bytes=0;
+  for(const [key,size] of stale){
+    await withRetry(()=>target.delete(key),{retries,sleep,stats});
+    deleted++;
+    bytes+=size;
+  }
+  return {deleted,bytes};
 }
 
-export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENCY,dryRun=false,prune=false,verifyFull=false,retries=DEFAULT_RETRIES,sleep=defaultSleep,stats={retries:0},cache=null}={}){
+export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENCY,dryRun=false,prune=DEFAULT_PRUNE,verifyFull=false,retries=DEFAULT_RETRIES,sleep=defaultSleep,stats={retries:0},cache=null}={}){
   if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error('Invalid concurrency');
+  // Pruning needs a listing; the Blob store has none, so a default (implicit)
+  // prune is reported as skipped instead of failing the run.
+  const canPrune=typeof target.list==='function'&&target.storage!=='blob';
   const summary={
     ok:true,
     dryRun,
@@ -914,9 +940,11 @@ export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENC
     droppedMonths:plan.droppedMonths??0,
     normalized:plan.normalized??false,
     pruned:plan.pruned,
+    pruneMode:!prune?'disabled':(canPrune?'auto':'skipped'),
     uploaded:0,
     skipped:0,
     deleted:0,
+    deletedBytes:0,
     retries:stats.retries??0
   };
   if(dryRun)return summary;
@@ -932,7 +960,15 @@ export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENC
   const pointerResult=await syncObject(pointer,{source,target,retries,sleep,stats,verifyFull,cache});
   if(pointerResult==='uploaded')summary.uploaded++;else summary.skipped++;
 
-  if(prune)summary.deleted=await pruneTarget(plan,target,{retries,sleep,stats});
+  // Reaching this point means every object verified and the pointer switch
+  // succeeded; any upload/verification/pointer failure throws above and no
+  // object is ever deleted.
+  if(prune&&canPrune){
+    const result=await pruneTarget(plan,target,{retries,sleep,stats});
+    summary.deleted=result.deleted;
+    summary.deletedBytes=result.bytes;
+    summary.versioningHint='Deletes do not reclaim space on a versioned bucket; keep the B2 bucket unversioned or purge old versions separately';
+  }
   summary.retries=stats.retries??0;
   if(cache)summary.cache=cache.stats();
   return summary;
@@ -980,8 +1016,9 @@ TARGET_STORAGE=blob with BLOB_BASE_URL/BLOB_READ_WRITE_TOKEN.
                          is deleted after verification. Complete files are
                          reused across interrupted runs; the directory is
                          cleared when the run exits.
-  --prune                after a successful pointer switch, delete managed
-                         target objects that are not in this plan (S3 only)
+  --prune                legacy alias; pruning is already the default
+  --no-prune             keep target objects outside this plan (explicit
+                         opt-out; the target then grows without bound)
   --now EPOCH            evaluation time in unix seconds (testing)
   --help`;
 
@@ -991,7 +1028,12 @@ export async function run(argv=process.argv.slice(2),env=process.env,deps={}){
   const source=deps.source??sourceFromEnv(env,{client:deps.client,httpFetcher:deps.httpFetcher,timeoutMs:options.timeoutMs});
   const target=deps.target??targetFromEnv(env,{s3Client:deps.s3Client??deps.client,blobFetcher:deps.blobFetcher,blobSdk:deps.blobSdk});
   if(sameLocation(source,target))throw Error('Source and target resolve to the same location');
-  if(options.prune&&target.storage==='blob')throw Error('--prune is unsupported for Blob targets (no listing)');
+  if(options.prune&&target.storage==='blob'){
+    if(options.pruneExplicit)throw Error('--prune is unsupported for Blob targets (no listing)');
+    // A default prune cannot run without a listing. Say so loudly instead of
+    // silently leaving stale objects behind; the run itself still succeeds.
+    (deps.warn??console.error)('Warning: Blob targets cannot be pruned (no listing); stale objects are kept. Pass --no-prune to make that explicit.');
+  }
   const now=options.now??deps.now??Date.now()/1000;
   // The temp-file cache exists only for the HTTP source chain (the audio path
   // that would otherwise buffer whole files in memory); dry-run never

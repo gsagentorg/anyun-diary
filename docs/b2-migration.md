@@ -43,7 +43,8 @@ BLOB_READ_WRITE_TOKEN=YOUR-BLOB-READ-WRITE-TOKEN-HERE
 ```
 
 - 目标解析优先级：`TARGET_S3_*` > `AUDIO_S3_*` > `S3_*`；设了 `BLOB_READ_WRITE_TOKEN`（且无任何 S3 目标变量）或 `TARGET_STORAGE=blob` 时走 Blob。
-- 目标桶建议**私有、专用**；与其他数据共用时设置独立前缀并谨慎使用 `--prune`。
+- 目标桶建议**私有、专用**。每次发布都会**自动回收**本次 manifest 不引用的受管对象（`current.json`/`releases/`/`months/`/`audio/` 键型，见 §5），因此桶里不要放同前缀的非受管数据；共享前缀只会删除受管键型，但专用桶最安全。
+- **迁移前必须确认目标桶未开启版本化**（B2 控制台 → Bucket → Object Versioning = Off；目标桶应为专用、一次性的桶）：开启版本化时 `DeleteObject` 只产生 delete marker，旧版本继续计费占空间，自动回收等于没回收。若桶已开版本化，先在控制台清空旧版本（或换一个未版本化桶）再跑迁移。
 - 密钥只放在仓库外、权限 0600 的 env 文件或当前 shell；不要提交、不要粘贴真实值到日志。
 - 源必须支持 `HEAD` 并返回准确 `Content-Length`（个别部署剥离该头时工具会退一次 `Range: bytes=0-1` 取总长）。
 
@@ -56,10 +57,11 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --dry-run
 输出示例（JSON，数值为夹具示意）：
 
 ```json
-{"ok":true,"dryRun":true,"objects":412,"counts":{"pointer":1,"manifest":1,"month":18,"audio":392},"bytes":123456789,"budgetBytes":1073741824,"budgetExceeded":false,"release":"YOUR-RELEASE-HASH-HERE","months":18,"droppedMonths":0,"normalized":false,"pruned":true,"uploaded":0,"skipped":0,"deleted":0,"retries":0}
+{"ok":true,"dryRun":true,"objects":412,"counts":{"pointer":1,"manifest":1,"month":18,"audio":392},"bytes":123456789,"budgetBytes":1073741824,"budgetExceeded":false,"release":"YOUR-RELEASE-HASH-HERE","months":18,"droppedMonths":0,"normalized":false,"pruned":true,"pruneMode":"auto","uploaded":0,"skipped":0,"deleted":0,"deletedBytes":0,"retries":0}
 ```
 
 - `objects`/`bytes` 是计划写入量；超过 `--budget-mb`（默认 1024）时警告。
+- `pruneMode`：`auto` = 指针切换成功后自动回收（默认）；`disabled` = `--no-prune`；`skipped` = 目标无列举能力（Blob）。dry-run 不删任何对象，`deleted`/`deletedBytes` 恒为 0。
 - `droppedMonths`：源 `/api/catalog` 因查询窗口把某些月翻成不可用时，这些月无法读回，会被丢弃并重建 manifest（见 §5）。
 
 ## 3. 源 API 读取方式
@@ -94,7 +96,8 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 - **已存在跳过**：目标 key 已存在即跳过，不按大小决定重传；`--verify-full` 才会完整 GET 目标比对 SHA-256，已存在但摘要不同只报错、不重传。
 - **B2 无条件 PUT**：不发送 `If-None-Match` 条件头；B2 同 key 上传会创建新版本，因此迁移只补缺失 key。迁移期间不要有其他进程向相同目标 key 写入。
 - **429/失败不自动重试**：源与目标均是。429 报错提示后由人工等待后重跑；4xx 立即失败。
-- **绝不删源**：源端只读；`--prune` 只删目标端托管键布局内的多余对象（S3 目标专属，Blob 无列举能力，显式报错）。
+- **绝不删源**：源端只读；回收只作用于目标端托管键布局（S3 目标；Blob 无列举能力，跳过并告警）。
+- **每次发布自动回收（默认开启）**：`current.json` 切换成功之后，工具先完整列举目标前缀，再删除本次 manifest 不再引用的受管对象（`current.json`/`releases/<id>/manifest.json`/`months/<YYYY-MM>/<rev>.json`/`audio/<sha256>.opus`）。滚动窗口发布（默认 `--window-days 30`）每跑一次就回收窗口外的月块、音频与旧 release，**B2 存储不会随时间累积**。`--no-prune` 是显式退出（目标端会无界增长，仅用于排查/审计）；`--prune` 仍被接受，仅为旧脚本兼容别名。
 - **指针最后写**：全部对象校验通过才写 `current.json`；中断不会让目标读者看到半成品目录。
 - 上传后 HEAD 目标校验长度；音频另校验内容 SHA-256 与文件名一致、月块 revision 与内容一致（源端完整性）。
 - 失败即停、退出码非 0；重跑跳过已完成对象，可断点续跑（不按字节续传）。
@@ -108,6 +111,15 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 - `/api/catalog` 会按查询窗口把部分月翻成 `available:false`：这些月读不回来，工具丢弃它们并重建 manifest（`droppedMonths` 计入 summary）。这是源 API 的既定行为，不是数据丢失。
 - 月块内音频引用为绝对 URL（旧数据）时自动归一化为 `audio/<hash>.opus`（summary `normalized`）。
 - 历史 release manifest 在裁剪/重建模式下不复制（HTTP 源本身也无法枚举历史 release），避免目标留下引用缺失的回滚点。
+
+### 目标端自动回收
+
+- 回收是发布管线的一部分，不是可选项：**本次运行的 plan 就是保留集**。`current.json` 切换成功后，目标前缀下所有「不在 plan 中且属于受管键型」的对象会被删除。
+- 顺序固定：全部对象上传并校验 → 写 `current.json` → 完整列举目标前缀 → 逐个删除。任一上传、校验或指针写入失败都会在删除前中止，**绝不删任何对象**。
+- 先列全量再删：不会边列边删；summary 记 `deleted`（个数）与 `deletedBytes`（列表返回的字节数之和）。
+- 只删受管键型（`current.json`/`releases/`/`months/`/`audio/`）；同前缀下的其他键只被列出、永不删除。前缀护栏不变：前缀外的对象一概不碰；源端连的是另一个 client，永不被写或删。
+- Blob 目标没有列举能力：默认运行跳过回收并在 stderr 告警、summary `pruneMode:"skipped"`；显式 `--prune` 直接报错。
+- **版本化桶不会真正释放空间**：开版本化时 `DeleteObject` 只写 delete marker，旧版本仍占存储。迁移前确认桶未版本化（或另行清版本）；每次回收运行的 summary 都带 `versioningHint` 提醒。
 
 ## 6. 迁移后验收
 
@@ -137,7 +149,7 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 - `Source audio download failed (...)`：HTTP 源音频流式下载中断（网络/超时）；重跑即可（完整缓存文件会被复用，不会重复下载已验证部分）。
 - `Insufficient cache disk space`：缓存目录可用空间（扣除 512MiB 预留）低于本文件需求；用 `--cache-dir` 指向更大的盘，或降低 `--concurrency` 减少同时在缓存的文件量。
 - `Cache disk space check failed`：无法读取缓存目录的磁盘空间信息；检查 `--cache-dir` 指向的文件系统是否支持 `statfs`。
-- `--prune is unsupported for Blob targets`：Blob 无列举能力，不支持 prune。
+- `--prune is unsupported for Blob targets`：只在**显式**传 `--prune` 时出现；默认运行对 Blob 改为告警并跳过回收（`pruneMode:"skipped"`）。
 - `Source and target resolve to the same location`：源与目标是同一地址；检查 env。
 
 ## 9. 本地验证
@@ -146,4 +158,4 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --window-days 0 --mon
 npm run test:migrate-s3
 ```
 
-覆盖：`TARGET_S3_*`/`AUDIO_S3_*` 映射（含 B2 自定义 endpoint 与 path-style）、HTTP mock 源（`/api/current`、`/api/catalog` 含 available 翻转、release 钉住、`/api/audio` 307+Range）、HEAD 探长与 Range 回退、完整 v2 对象集与指针最后写、窗口/月裁剪重算 revision、已存在跳过（无内容读取且零缓存下载）、`--verify-full` 全文摘要比对（目标与缓存文件流式摘要，无二次源下载）与差异拒绝、源/目标 429 均不自动重试、源超时、release 中途变更检测、Blob 目标全量写入与二次跳过、Blob 拒绝 prune、同地址拒绝、音频临时目录缓存全生命周期（`.part`→改名、流式上传、断点复用、损坏重下、失败/退出清理、磁盘不足拒绝与 `--cache-dir`/`MIGRATE_CACHE_DIR` 参数校验）。全部为本地 HTTP mock 与内存 fake（S3/Blob），不访问真实 B2/Blob，不使用真实凭据。
+覆盖：`TARGET_S3_*`/`AUDIO_S3_*` 映射（含 B2 自定义 endpoint 与 path-style）、HTTP mock 源（`/api/current`、`/api/catalog` 含 available 翻转、release 钉住、`/api/audio` 307+Range）、HEAD 探长与 Range 回退、完整 v2 对象集与指针最后写、窗口/月裁剪重算 revision、**默认为发布管线内建的自动回收**（滚动窗口第二次运行自动删窗口外月块/音频/旧 release、`deleted`/`deletedBytes` 统计、先列全量再删、非受管键保留、指针失败零删除、`--no-prune` 零删除且零列举、Blob 目标跳过并报告）、已存在跳过（无内容读取且零缓存下载）、`--verify-full` 全文摘要比对（目标与缓存文件流式摘要，无二次源下载）与差异拒绝、源/目标 429 均不自动重试、源超时、release 中途变更检测、Blob 目标全量写入与二次跳过、Blob 拒绝显式 prune、同地址拒绝、音频临时目录缓存全生命周期（`.part`→改名、流式上传、断点复用、损坏重下、失败/退出清理、磁盘不足拒绝与 `--cache-dir`/`MIGRATE_CACHE_DIR` 参数校验）。全部为本地 HTTP mock 与内存 fake（S3/Blob），不访问真实 B2/Blob，不使用真实凭据。

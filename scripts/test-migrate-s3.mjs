@@ -150,6 +150,12 @@ test('argument defaults and validation',async()=>{
   assert.equal(defaults.windowDays,30);
   assert.equal(defaults.months,0);
   assert.equal(defaults.concurrency,5);
+  // Pruning is built into every publish run; --no-prune is the opt-out and
+  // --prune remains a legacy alias.
+  assert.equal(defaults.prune,true);
+  assert.equal(parseArgs(['--no-prune']).prune,false);
+  assert.equal(parseArgs(['--prune']).prune,true);
+  assert.throws(()=>parseArgs(['--prune','--no-prune']),/either --prune or --no-prune/);
   assert.equal(parseArgs(['--months','2']).windowDays,0);
   assert.equal(parseArgs(['--window-days','0','--months','2']).windowDays,0);
   assert.throws(()=>parseArgs(['--concurrency','17']),/between/);
@@ -275,7 +281,7 @@ test('window-days trims rows and recomputes month/manifest revisions',async()=>{
   assert(![...monthsOnly.targetObjects.keys()].some(key=>key.includes('2026-05')));
 });
 
-test('prune runs only after the pointer switch and keeps unmanaged keys',async()=>{
+test('prune runs by default only after the pointer switch and keeps unmanaged keys',async()=>{
   const catalog=makeCatalog();
   const first=await runWith({source:s3Source(catalog),argv:['--window-days','0']});
   const objects=first.targetObjects;
@@ -284,8 +290,10 @@ test('prune runs only after the pointer switch and keeps unmanaged keys',async()
   objects.set('backup/notes.txt',Buffer.from('keep me'));
   objects.set('backup/current.json',Buffer.from('{}'));
   first.calls.length=0;
-  const second=await runWith({source:s3Source(catalog),argv:['--window-days','0','--prune'],targetObjects:objects});
+  const second=await runWith({source:s3Source(catalog),argv:['--window-days','0'],targetObjects:objects});
+  assert.equal(second.summary.pruneMode,'auto');
   assert.equal(second.summary.deleted,2);
+  assert.equal(second.summary.deletedBytes,Buffer.byteLength('{}')+Buffer.byteLength('stale'));
   assert(!objects.has('backup/months/2020-01/'+('a'.repeat(64))+'.json'));
   assert(!objects.has('backup/audio/'+('b'.repeat(64))+'.opus'));
   assert.equal(objects.get('backup/notes.txt').toString(),'keep me');
@@ -293,6 +301,9 @@ test('prune runs only after the pointer switch and keeps unmanaged keys',async()
   const firstDelete=second.calls.findIndex(call=>call.name==='DeleteObjectCommand');
   assert(currentPut>=0);
   assert(firstDelete>currentPut);
+  // "list the full target, then delete": every listing precedes the first delete
+  const firstList=second.calls.findIndex(call=>call.name==='ListObjectsV2Command');
+  assert(firstList>=0&&firstList<firstDelete);
 });
 
 test('failed pointer write skips pruning and leaves the target otherwise intact',async()=>{
@@ -305,12 +316,49 @@ test('failed pointer write skips pruning and leaves the target otherwise intact'
   first.calls.length=0;
   await assert.rejects(runWith({
     source:s3Source(catalog),
-    argv:['--window-days','0','--prune'],
+    argv:['--window-days','0'],
     targetObjects:objects,
     targetClientOptions:{fail:(name,input)=>name==='PutObjectCommand'&&input.Key==='backup/current.json'?{$metadata:{httpStatusCode:400}}:null}
   }),/HTTP 400/);
   assert(objects.has(stale));
   assert(first.calls.filter(call=>call.name==='DeleteObjectCommand').length===0);
+});
+
+test('a rolling window publish reclaims out-of-window objects by default',async()=>{
+  const catalog=makeCatalog({monthsSpec:[
+    {id:'2026-05',rows:[{title:'Old A'},{title:'Old B'}]},
+    {id:'2026-11',rows:[{title:'New'}]}
+  ]});
+  const targetObjects=new Map();
+  const full=await runWith({source:s3Source(catalog),argv:['--window-days','0','--months','0'],targetObjects});
+  assert.equal(full.summary.deleted,0);
+  assert([...targetObjects.keys()].some(key=>key.includes('2026-05')));
+  const sizes=new Map([...targetObjects.entries()].map(([key,value])=>[key,value.length]));
+  // Same command the publish pipeline runs, no extra flags: the 30-day window
+  // now drops 2026-05, and the run reclaims those objects on its own.
+  const rolling=await runWith({source:s3Source(catalog),argv:[],targetObjects});
+  assert.equal(rolling.summary.months,1);
+  const removed=[...sizes.keys()].filter(key=>!targetObjects.has(key));
+  assert(removed.length>0);
+  assert(![...targetObjects.keys()].some(key=>key.includes('2026-05')));
+  assert.equal(rolling.summary.deleted,removed.length);
+  assert.equal(rolling.summary.deletedBytes,removed.reduce((total,key)=>total+sizes.get(key),0));
+  assert.equal(rolling.summary.pruneMode,'auto');
+  assert.match(rolling.summary.versioningHint,/versioned bucket/);
+});
+
+test('--no-prune opts out of reclamation and keeps every stale object',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
+  const targetObjects=new Map();
+  await runWith({source:s3Source(catalog),argv:['--window-days','0','--months','0'],targetObjects});
+  const before=[...targetObjects.keys()];
+  const rolling=await runWith({source:s3Source(catalog),argv:['--no-prune'],targetObjects});
+  assert.equal(rolling.summary.pruneMode,'disabled');
+  assert.equal(rolling.summary.deleted,0);
+  assert.equal(rolling.summary.deletedBytes,0);
+  assert.equal(rolling.calls.filter(call=>call.name==='DeleteObjectCommand').length,0);
+  assert.equal(rolling.calls.filter(call=>call.name==='ListObjectsV2Command').length,0);
+  for(const key of before)assert(targetObjects.has(key),`${key} must survive --no-prune`);
 });
 
 test('429/5xx retries stop at the configured cap',async()=>{
@@ -789,6 +837,9 @@ test('blob target receives the full object set through the blob store',async()=>
       MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
     assert.equal(summary.uploaded,summary.objects);
+    // Blob has no listing: the implicit prune is reported as skipped, not fatal.
+    assert.equal(summary.pruneMode,'skipped');
+    assert.equal(summary.deleted,0);
     const keys=[...blob.objects.keys()].sort();
     assert(keys.includes('current.json'));
     assert(keys.includes(`releases/${catalog.revision}/manifest.json`));

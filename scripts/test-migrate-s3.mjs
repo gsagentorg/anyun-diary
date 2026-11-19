@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createServer} from 'node:http';
 import {createHash} from 'node:crypto';
 import {localStore} from '../src/lib/server/storage.mjs';
 import {digest} from '../src/lib/server/publisher.mjs';
@@ -324,6 +325,331 @@ test('source and target at the same location are rejected',async()=>{
   const source=sourceFromEnv({...sourceEnv('data/'),S3_BUCKET:'shared'},{client:fakeClient({objects:catalog.objects})});
   const target=createS3Backend(targetOptions({TARGET_S3_ENDPOINT:'https://example.invalid',TARGET_S3_REGION:'us-west-004',TARGET_S3_BUCKET:'shared',TARGET_S3_ACCESS_KEY_ID:'a',TARGET_S3_SECRET_ACCESS_KEY:'b',TARGET_S3_PREFIX:'data/'}),fakeClient());
   await assert.rejects(run([],{}, {source,target,now:NOW,log:()=>{},warn:()=>{}}),/same location/);
+});
+
+// ---------- production HTTP API source (SOURCE_AUDIO_BASE chain) ----------
+
+// Local mock of the production API surface: /api/current, /api/catalog (with
+// optional availability flip, mirroring MAX_QUERY_MONTHS), /api/month/<id>
+// (release-pinned, 404 for unavailable months), and /api/audio/<hash>.opus
+// 307-redirecting to a range-capable /storage/<hash>.opus backend.
+function startMockApi(catalog,{flip=[],headLengthless=false,catalogStatus=200,catalogRevisionOverride,slow=()=>0}={}){
+  const requests=[];
+  // makeCatalog may prefix physical keys; look objects up by logical suffix.
+  const find=suffix=>{for(const [key,value] of catalog.objects)if(key===suffix||key.endsWith('/'+suffix))return value;};
+  const manifest=JSON.parse(find('releases/'+catalog.revision+'/manifest.json').toString());
+  const releaseId=JSON.parse(find('current.json').toString()).releaseId;
+  const server=createServer((req,res)=>{
+    req.on('error',()=>{});
+    res.on('error',()=>{});
+    requests.push({method:req.method,path:req.url,range:req.headers.range});
+    const respond=()=>{
+      try{
+        const url=new URL(req.url,'http://127.0.0.1');
+        if(req.method==='GET'&&url.pathname==='/api/current'){
+          res.writeHead(200,{'content-type':'application/json','cache-control':'private, no-cache'});
+          res.end(JSON.stringify({schemaVersion:2,releaseId,queryMonthLimit:0,period:'2026-11'}));
+          return;
+        }
+        if(req.method==='GET'&&url.pathname==='/api/catalog'){
+          if(catalogStatus!==200){res.writeHead(catalogStatus);res.end();return;}
+          const payload={...manifest,queryMonthLimit:0,months:manifest.months.map(entry=>({...entry,available:entry.available&&!flip.includes(entry.id)}))};
+          if(catalogRevisionOverride!==undefined)payload.revision=catalogRevisionOverride;
+          res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+          res.end(JSON.stringify(payload));
+          return;
+        }
+        const month=url.pathname.match(/^\/api\/month\/(\d{4}-(?:0[1-9]|1[0-2]))$/);
+        if(month){
+          if(url.searchParams.get('release')!==releaseId){res.writeHead(404);res.end();return;}
+          const entry=manifest.months.find(e=>e.id===month[1]);
+          if(!entry||!entry.available||flip.includes(entry.id)){res.writeHead(404,{'content-type':'application/json'});res.end(JSON.stringify({error:'Month unavailable'}));return;}
+          res.writeHead(200,{'content-type':'application/json','cache-control':'no-store'});
+          res.end(find(entry.key));
+          return;
+        }
+        const audio=url.pathname.match(/^\/api\/audio\/([a-f0-9]{64})\.opus$/);
+        if(audio){
+          res.writeHead(307,{location:`http://${req.headers.host}/storage/${audio[1]}.opus`,'cache-control':'private, no-store'});
+          res.end();
+          return;
+        }
+        const storage=url.pathname.match(/^\/storage\/([a-f0-9]{64})\.opus$/);
+        if(storage){
+          const body=find('audio/'+storage[1]+'.opus');
+          if(!body){res.writeHead(404);res.end();return;}
+          const headers={'content-type':'audio/ogg','accept-ranges':'bytes','cache-control':'public,max-age=31536000,immutable'};
+          if(req.method==='HEAD'){
+            if(!headLengthless)headers['content-length']=String(body.length);
+            res.writeHead(200,headers);res.end();return;
+          }
+          const range=/^bytes=(\d+)-(\d+)$/.exec(req.headers.range??'');
+          if(range){
+            const start=Number(range[1]),end=Math.min(Number(range[2]),body.length-1);
+            res.writeHead(206,{...headers,'content-range':`bytes ${start}-${end}/${body.length}`,'content-length':String(end-start+1)});
+            res.end(body.slice(start,end+1));return;
+          }
+          res.writeHead(200,{...headers,'content-length':String(body.length)});
+          res.end(body);
+          return;
+        }
+        res.writeHead(404);res.end();
+      }catch{res.writeHead(503);res.end();}
+    };
+    const delay=slow(req.method,req.url);
+    if(delay)setTimeout(respond,delay);else respond();
+  });
+  return {
+    requests,
+    server,
+    start:async()=>{await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));return `http://127.0.0.1:${server.address().port}`;},
+    stop:()=>new Promise(resolve=>{server.closeIdleConnections?.();server.close(resolve);})
+  };
+}
+
+async function runHttp(argv,{catalog,mock,targetObjects=new Map(),envExtra={},targetClientOptions={},deps={}}={}){
+  const base=await mock.start();
+  const calls=[];
+  const targetClient=fakeClient({objects:targetObjects,calls,...targetClientOptions});
+  const env={SOURCE_AUDIO_BASE:base,...TARGET_ENV,TARGET_S3_PREFIX:'backup/',...envExtra};
+  try{
+    const summary=await run(argv,env,{s3Client:targetClient,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{},...deps});
+    return {summary,calls,targetObjects,base};
+  }finally{
+    await mock.stop();
+  }
+}
+
+function fakeBlobBackend(objects){
+  const puts=[];
+  const response=(key,status=200)=>{
+    const body=objects.get(key);
+    if(body===undefined)return new Response(null,{status:404});
+    return new Response(body,{status,headers:{'content-length':String(body.length),'content-type':key.endsWith('.opus')?'audio/ogg':'application/json'}});
+  };
+  const fetcher=async url=>response(new URL(url).pathname.replace(/^\//,''));
+  const sdk={
+    put:async(key,bytes)=>{puts.push(key);objects.set(key,Buffer.from(bytes));},
+    del:async url=>{objects.delete(new URL(url).pathname.replace(/^\//,''));},
+    get:async key=>objects.get(key)
+  };
+  return {puts,fetcher,sdk,objects};
+}
+
+test('AUDIO_S3_* legacy env maps onto the target chain',async()=>{
+  const options=targetOptions({AUDIO_S3_ENDPOINT:'https://s3.example.invalid',AUDIO_S3_REGION:'fixture-region',AUDIO_S3_BUCKET:'fixture-bucket',AUDIO_S3_ACCESS_KEY_ID:'k',AUDIO_S3_SECRET_ACCESS_KEY:'s',AUDIO_S3_PATH_STYLE:'1',AUDIO_S3_KEY_PREFIX:'legacy/'});
+  assert.equal(options.clientOptions.endpoint,'https://s3.example.invalid');
+  assert.equal(options.clientOptions.forcePathStyle,true);
+  assert.equal(options.audioPrefix,'legacy/');
+  const plain=targetOptions({AUDIO_S3_ENDPOINT:'https://s3.example.invalid',AUDIO_S3_REGION:'fixture-region',AUDIO_S3_BUCKET:'fixture-bucket',AUDIO_S3_ACCESS_KEY_ID:'k',AUDIO_S3_SECRET_ACCESS_KEY:'s'});
+  // The mapping feeds s3Options pure S3_* names, so legacy markers never flip
+  // the target layout: without an explicit audio prefix the target uses audio/.
+  assert.equal(plain.audioPrefix,'audio/');
+  assert.equal(plain.prefix,'');
+  assert.throws(()=>targetOptions({AUDIO_S3_BUCKET:'b'}),/S3_REGION/);
+});
+
+test('http source migrates the full v2 object set with the pointer last',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const {summary,calls,targetObjects}=await runHttp(['--window-days','0','--months','0'],{catalog,mock});
+  assert.equal(summary.droppedMonths,0);
+  assert.equal(summary.normalized,false);
+  const keys=[...targetObjects.keys()].sort();
+  assert(keys.includes('backup/current.json'));
+  assert(keys.includes(`backup/releases/${catalog.revision}/manifest.json`));
+  assert(keys.some(key=>/^backup\/months\/2026-05\/[a-f0-9]{64}\.json$/.test(key)));
+  assert(keys.some(key=>/^backup\/months\/2026-11\/[a-f0-9]{64}\.json$/.test(key)));
+  assert(keys.some(key=>/^backup\/audio\/[a-f0-9]{64}\.opus$/.test(key)));
+  assert.equal(putKeys(calls).at(-1),'backup/current.json');
+  assert.equal(mock.requests.filter(r=>r.path==='/api/current').length,1);
+  assert(mock.requests.some(r=>r.method==='GET'&&/^\/api\/audio\/[a-f0-9]{64}\.opus$/.test(r.path)));
+  assert(mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)));
+  const manifest=JSON.parse(targetObjects.get(`backup/releases/${catalog.revision}/manifest.json`));
+  assert.equal(manifest.revision,digest(JSON.stringify(manifest.months)));
+  const pointer=JSON.parse(targetObjects.get('backup/current.json'));
+  assert.deepEqual(Object.keys(pointer).sort(),['key','releaseId','schemaVersion']);
+  assert.equal(pointer.releaseId,manifest.revision);
+  assert.equal(pointer.key,`releases/${manifest.revision}/manifest.json`);
+  const audioPut=calls.find(call=>call.name==='PutObjectCommand'&&call.input.Key.endsWith('.opus'));
+  assert.equal(audioPut.input.ContentType,'audio/ogg');
+});
+
+test('http source probes sizes with HEAD and falls back to range when HEAD lacks length',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'Only'}]}]});
+  const mockA=startMockApi(catalog);
+  const a=await runHttp(['--window-days','0','--months','0'],{catalog,mock:mockA});
+  assert(mockA.requests.some(r=>r.method==='HEAD'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)));
+  assert(!mockA.requests.some(r=>r.range));
+  assert.equal(a.summary.counts.audio,1);
+  const mockB=startMockApi(catalog,{headLengthless:true});
+  const b=await runHttp(['--window-days','0','--months','0'],{catalog,mock:mockB});
+  assert(mockB.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)&&r.range==='bytes=0-1'));
+  assert.equal(b.summary.counts.audio,1);
+  assert.equal([...b.targetObjects.keys()].filter(key=>key.endsWith('.opus')).length,1);
+});
+
+test('api availability flip drops unreadable months and rebuilds the manifest',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog,{flip:['2026-05']});
+  const {summary,targetObjects}=await runHttp(['--window-days','0','--months','0'],{catalog,mock});
+  assert.equal(summary.droppedMonths,1);
+  assert.equal(summary.months,1);
+  assert(!mock.requests.some(r=>r.path?.startsWith('/api/month/2026-05')));
+  assert(![...targetObjects.keys()].some(key=>key.includes('2026-05')));
+  const manifestKey=[...targetObjects.keys()].find(key=>key.includes('/releases/'));
+  const manifest=JSON.parse(targetObjects.get(manifestKey));
+  assert.deepEqual(manifest.months.map(entry=>entry.id),['2026-11']);
+  assert.equal(manifest.revision,digest(JSON.stringify(manifest.months)));
+  const sourceEntry=catalog.manifest.months.find(entry=>entry.id==='2026-11');
+  assert(targetObjects.has('backup/'+sourceEntry.key));
+  const pointer=JSON.parse(targetObjects.get('backup/current.json'));
+  assert.equal(pointer.releaseId,manifest.revision);
+  assert.equal(pointer.key,`releases/${manifest.revision}/manifest.json`);
+  assert.notEqual(manifest.revision,catalog.revision);
+});
+
+test('window-days prunes http source rows and recomputes revisions',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
+  const oldHash=[...catalog.rowsById.get('2026-05')][0].opus;
+  const mock=startMockApi(catalog);
+  const {summary,targetObjects}=await runHttp(['--window-days','30'],{catalog,mock});
+  assert.equal(summary.months,1);
+  assert.equal(summary.pruned,true);
+  assert(![...targetObjects.keys()].some(key=>key.includes('2026-05')));
+  assert(!mock.requests.some(r=>r.path===`/api/audio/${oldHash.slice(6)}`));
+  const manifestKey=[...targetObjects.keys()].find(key=>key.includes('/releases/'));
+  const manifest=JSON.parse(targetObjects.get(manifestKey));
+  assert.deepEqual(manifest.months.map(entry=>entry.id),['2026-11']);
+  const block=JSON.parse(targetObjects.get('backup/'+manifest.months[0].key));
+  assert.equal(block.revision,digest(JSON.stringify(block.audios)));
+});
+
+test('existing target objects are skipped without content reads (legacy chain semantics)',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const first=await runHttp(['--window-days','0','--months','0'],{catalog,mock:startMockApi(catalog)});
+  assert.equal(first.summary.uploaded,first.summary.objects);
+  const mock=startMockApi(catalog);
+  const second=await runHttp(['--window-days','0','--months','0'],{catalog,mock,targetObjects:first.targetObjects});
+  assert.equal(second.summary.uploaded,0);
+  assert.equal(second.summary.skipped,second.summary.objects);
+  assert.equal(putKeys(second.calls).length,0);
+  assert.equal(second.calls.filter(call=>call.name==='GetObjectCommand').length,1);
+});
+
+test('verify-full compares full digests and skips matching objects',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const first=await runHttp(['--window-days','0','--months','0','--verify-full'],{catalog,mock:startMockApi(catalog)});
+  assert.equal(first.summary.uploaded,first.summary.objects);
+  assert.equal(first.summary.verifyFull,true);
+  const second=await runHttp(['--window-days','0','--months','0','--verify-full'],{catalog,mock:startMockApi(catalog),targetObjects:first.targetObjects});
+  assert.equal(second.summary.uploaded,0);
+  assert.equal(second.summary.skipped,second.summary.objects);
+  assert.equal(putKeys(second.calls).length,0);
+  assert(second.calls.filter(call=>call.name==='GetObjectCommand').length>=second.summary.objects-1);
+});
+
+test('verify-full rejects a differing existing object without re-uploading',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const first=await runHttp(['--window-days','0','--months','0'],{catalog,mock:startMockApi(catalog)});
+  const audioKey=[...first.targetObjects.keys()].find(key=>key.endsWith('.opus'));
+  const original=first.targetObjects.get(audioKey);
+  const corrupted=Buffer.from(original);
+  corrupted[corrupted.length-2]=corrupted[corrupted.length-2]===48?49:48;
+  first.targetObjects.set(audioKey,corrupted);
+  await assert.rejects(runHttp(['--window-days','0','--months','0','--verify-full'],{catalog,mock:startMockApi(catalog),targetObjects:first.targetObjects}),/Destination differs; existing object not uploaded/);
+  assert.deepEqual(first.targetObjects.get(audioKey),corrupted);
+});
+
+test('429 from the target never retries automatically',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const attempts=[];
+  await assert.rejects(runHttp(['--window-days','0','--months','0','--concurrency','1'],{
+    catalog,mock:startMockApi(catalog),
+    targetClientOptions:{fail:(name,input)=>{if(name==='PutObjectCommand'){attempts.push(input.Key);return {$metadata:{httpStatusCode:429}};}return null;}}
+  }),/throttled \(HTTP 429\)/);
+  assert.equal(attempts.length,1);
+});
+
+test('429 from the source API fails immediately without retry',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog,{catalogStatus:429});
+  await assert.rejects(runHttp(['--window-days','0','--months','0'],{catalog,mock}),/Source API request failed \(HTTP 429\)/);
+  assert.equal(mock.requests.filter(r=>r.path==='/api/catalog').length,1);
+});
+
+test('source release change between api calls is detected',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog,{catalogRevisionOverride:'f'.repeat(64)});
+  await assert.rejects(runHttp(['--window-days','0','--months','0'],{catalog,mock}),/Source release changed during migration/);
+});
+
+test('http source timeout fails without retry',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog,{slow:(method,path)=>path==='/api/current'?400:0});
+  await assert.rejects(runHttp(['--timeout-ms','50','--window-days','0','--months','0'],{catalog,mock}),/Source API request failed \(timeout\)/);
+  assert.equal(mock.requests.filter(r=>r.path==='/api/current').length,1);
+});
+
+test('blob target receives the full object set through the blob store',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-05',rows:[{title:'Old'}]},{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const base=await mock.start();
+  const blob=fakeBlobBackend(new Map());
+  try{
+    const summary=await run(['--window-days','0','--months','0'],{
+      SOURCE_AUDIO_BASE:base,
+      TARGET_STORAGE:'blob',
+      BLOB_BASE_URL:'https://blob.fixture.invalid',
+      BLOB_READ_WRITE_TOKEN:'fixture-token'
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
+    assert.equal(summary.uploaded,summary.objects);
+    const keys=[...blob.objects.keys()].sort();
+    assert(keys.includes('current.json'));
+    assert(keys.includes(`releases/${catalog.revision}/manifest.json`));
+    assert(keys.some(key=>/^months\/2026-05\/[a-f0-9]{64}\.json$/.test(key)));
+    assert(keys.some(key=>/^audio\/[a-f0-9]{64}\.opus$/.test(key)));
+    assert.equal(blob.puts.at(-1),'current.json');
+    const pointer=JSON.parse(blob.objects.get('current.json'));
+    assert.equal(pointer.releaseId,catalog.revision);
+    // Second run: existing objects skip, pointer compares equal, no writes.
+    blob.puts.length=0;
+    const again=await run(['--window-days','0','--months','0'],{
+      SOURCE_AUDIO_BASE:base,
+      TARGET_STORAGE:'blob',
+      BLOB_BASE_URL:'https://blob.fixture.invalid',
+      BLOB_READ_WRITE_TOKEN:'fixture-token'
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
+    assert.equal(again.uploaded,0);
+    assert.equal(again.skipped,again.objects);
+    assert.equal(blob.puts.length,0);
+  }finally{
+    await mock.stop();
+  }
+});
+
+test('blob target rejects --prune and same-base source/target is rejected',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const base=await mock.start();
+  const blob=fakeBlobBackend(new Map());
+  try{
+    await assert.rejects(run(['--window-days','0','--months','0','--prune'],{
+      SOURCE_AUDIO_BASE:base,
+      TARGET_STORAGE:'blob',
+      BLOB_BASE_URL:'https://blob.fixture.invalid',
+      BLOB_READ_WRITE_TOKEN:'fixture-token'
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}}),/unsupported for Blob targets/);
+    await assert.rejects(run(['--window-days','0','--months','0'],{
+      SOURCE_AUDIO_BASE:base,
+      TARGET_STORAGE:'blob',
+      BLOB_BASE_URL:base+'',
+      BLOB_READ_WRITE_TOKEN:'fixture-token'
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}}),/same location/);
+    assert.equal(blob.puts.length,0);
+  }finally{
+    await mock.stop();
+  }
 });
 
 let failed=0;

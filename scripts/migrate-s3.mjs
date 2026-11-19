@@ -305,8 +305,8 @@ export function createS3Backend(options,client=new S3Client({...options.clientOp
 }
 
 // Blob target reusing the application blobStore (no separate Blob protocol).
-// Logical keys map 1:1 (prefix is identity); prune is unsupported because the
-// store has no listing.
+// Logical keys map 1:1 (prefix is identity); listing/head go through the SDK
+// so target-side reclamation works here as well.
 export function createBlobBackend({baseUrl,token,access='public',fetcher=fetch,sdk}={}){
   let store;
   try{store=blobStore({baseUrl,token,access,fetcher,sdk});}
@@ -323,18 +323,31 @@ export function createBlobBackend({baseUrl,token,access='public',fetcher=fetch,s
   return {
     options,
     storage:'blob',
-    async list(){throw Error('Blob target cannot list; prune is unsupported');},
-    async head(key){
-      let response;
-      try{response=await store.read(validKey(key));}
-      catch(error){throw sanitize('target head',error);}
+    async list(prefix=''){
+      const api=sdk??await import('@vercel/blob');
+      const entries=[];
+      let cursor;
       try{
-        if(response.status===404)return null;
-        if(!response.ok)throw Error(`target head failed (HTTP ${response.status})`);
-        const length=Number(response.headers.get('content-length'));
-        return {size:Number.isSafeInteger(length)&&length>=0?length:null};
+        do{
+          const page=await api.list({token,prefix,cursor,limit:1000});
+          for(const blob of page.blobs??[])entries.push({key:blob.pathname,size:blob.size});
+          cursor=page.hasMore?page.cursor:undefined;
+        }while(cursor);
       }
-      finally{await response.body?.cancel().catch(()=>{});}
+      catch(error){throw sanitize('target list',error);}
+      return entries;
+    },
+    async head(key){
+      const api=sdk??await import('@vercel/blob');
+      const pathname=validKey(key);
+      try{
+        const result=await api.head(pathname,{token});
+        return {size:typeof result?.size==='number'&&result.size>=0?result.size:null};
+      }
+      catch(error){
+        if(error&&(error.name==='BlobNotFoundError'||error?.status===404))return null;
+        throw sanitize('target head',error);
+      }
     },
     async get(key){
       let response;
@@ -506,9 +519,14 @@ export function createHttpSource({base,fetcher=fetch,timeoutMs=DEFAULT_TIMEOUT_M
       }catch(error){fail(error);}
       let size=null;
       try{
-        if(!response.ok)throw Error(`Source audio probe failed (HTTP ${response.status})`);
-        const length=response.headers.get('content-length');
-        if(length!==null&&/^[0-9]+$/.test(length)&&Number.isSafeInteger(+length))size=+length;
+        // Signed-redirect sources may reject HEAD outright (e.g. 403 when the
+        // 307 target only signs GET). A failed HEAD is a missing capability,
+        // not a probe failure: fall through to the range probe, which stays
+        // the place where hard failures are raised.
+        if(response.ok){
+          const length=response.headers.get('content-length');
+          if(length!==null&&/^[0-9]+$/.test(length)&&Number.isSafeInteger(+length))size=+length;
+        }
       }finally{await response.body?.cancel().catch(()=>{});}
       if(size!==null)return size;
       // Some deployments strip Content-Length on HEAD; one range request
@@ -923,9 +941,9 @@ async function pruneTarget(plan,target,{retries,sleep,stats}){
 
 export async function migrate(plan,{source,target,concurrency=DEFAULT_CONCURRENCY,dryRun=false,prune=DEFAULT_PRUNE,verifyFull=false,retries=DEFAULT_RETRIES,sleep=defaultSleep,stats={retries:0},cache=null}={}){
   if(!Number.isInteger(concurrency)||concurrency<1||concurrency>16)throw Error('Invalid concurrency');
-  // Pruning needs a listing; the Blob store has none, so a default (implicit)
-  // prune is reported as skipped instead of failing the run.
-  const canPrune=typeof target.list==='function'&&target.storage!=='blob';
+  // Pruning needs a listing; S3-like targets list through the SDK and the
+  // Blob target lists through its own paginated API, so both reclaim.
+  const canPrune=typeof target.list==='function';
   const summary={
     ok:true,
     dryRun,
@@ -1028,12 +1046,6 @@ export async function run(argv=process.argv.slice(2),env=process.env,deps={}){
   const source=deps.source??sourceFromEnv(env,{client:deps.client,httpFetcher:deps.httpFetcher,timeoutMs:options.timeoutMs});
   const target=deps.target??targetFromEnv(env,{s3Client:deps.s3Client??deps.client,blobFetcher:deps.blobFetcher,blobSdk:deps.blobSdk});
   if(sameLocation(source,target))throw Error('Source and target resolve to the same location');
-  if(options.prune&&target.storage==='blob'){
-    if(options.pruneExplicit)throw Error('--prune is unsupported for Blob targets (no listing)');
-    // A default prune cannot run without a listing. Say so loudly instead of
-    // silently leaving stale objects behind; the run itself still succeeds.
-    (deps.warn??console.error)('Warning: Blob targets cannot be pruned (no listing); stale objects are kept. Pass --no-prune to make that explicit.');
-  }
   const now=options.now??deps.now??Date.now()/1000;
   // The temp-file cache exists only for the HTTP source chain (the audio path
   // that would otherwise buffer whole files in memory); dry-run never

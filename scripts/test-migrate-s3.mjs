@@ -405,7 +405,7 @@ test('source and target at the same location are rejected',async()=>{
 // optional availability flip, mirroring MAX_QUERY_MONTHS), /api/month/<id>
 // (release-pinned, 404 for unavailable months), and /api/audio/<hash>.opus
 // 307-redirecting to a range-capable /storage/<hash>.opus backend.
-function startMockApi(catalog,{flip=[],headLengthless=false,catalogStatus=200,catalogRevisionOverride,slow=()=>0}={}){
+function startMockApi(catalog,{flip=[],headLengthless=false,headForbidden=false,catalogStatus=200,catalogRevisionOverride,slow=()=>0}={}){
   const requests=[];
   // makeCatalog may prefix physical keys; look objects up by logical suffix.
   const find=suffix=>{for(const [key,value] of catalog.objects)if(key===suffix||key.endsWith('/'+suffix))return value;};
@@ -452,6 +452,7 @@ function startMockApi(catalog,{flip=[],headLengthless=false,catalogStatus=200,ca
           if(!body){res.writeHead(404);res.end();return;}
           const headers={'content-type':'audio/ogg','accept-ranges':'bytes','cache-control':'public,max-age=31536000,immutable'};
           if(req.method==='HEAD'){
+            if(headForbidden){res.writeHead(403);res.end();return;}
             if(!headLengthless)headers['content-length']=String(body.length);
             res.writeHead(200,headers);res.end();return;
           }
@@ -507,7 +508,16 @@ function fakeBlobBackend(objects){
   const sdk={
     put:async(key,bytes)=>{puts.push(key);objects.set(key,await bodyToBuffer(bytes));},
     del:async url=>{objects.delete(new URL(url).pathname.replace(/^\//,''));},
-    get:async key=>objects.get(key)
+    get:async key=>objects.get(key),
+    head:async key=>{
+      const body=objects.get(key);
+      if(body===undefined){const error=new Error('Blob not found');error.name='BlobNotFoundError';throw error;}
+      return {size:body.length};
+    },
+    list:async options=>{
+      const prefix=options?.prefix??'';
+      return {blobs:[...objects.entries()].filter(([pathname])=>pathname.startsWith(prefix)).map(([pathname,body])=>({pathname,size:body.length})),hasMore:false};
+    }
   };
   return {puts,fetcher,sdk,objects};
 }
@@ -837,8 +847,8 @@ test('blob target receives the full object set through the blob store',async()=>
       MIGRATE_CACHE_DIR:cacheDir
     },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
     assert.equal(summary.uploaded,summary.objects);
-    // Blob has no listing: the implicit prune is reported as skipped, not fatal.
-    assert.equal(summary.pruneMode,'skipped');
+    // The Blob target lists through the SDK: the implicit prune runs.
+    assert.equal(summary.pruneMode,'auto');
     assert.equal(summary.deleted,0);
     const keys=[...blob.objects.keys()].sort();
     assert(keys.includes('current.json'));
@@ -866,20 +876,23 @@ test('blob target receives the full object set through the blob store',async()=>
   }
 });
 
-test('blob target rejects --prune and same-base source/target is rejected',async()=>{
+test('blob target accepts --prune and same-base source/target is rejected',async()=>{
   const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
   const mock=startMockApi(catalog);
   const base=await mock.start();
   const blob=fakeBlobBackend(new Map());
   const cacheDir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
   try{
-    await assert.rejects(run(['--window-days','0','--months','0','--prune'],{
+    const pruned=await run(['--window-days','0','--months','0','--prune'],{
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
       BLOB_BASE_URL:'https://blob.fixture.invalid',
       BLOB_READ_WRITE_TOKEN:'fixture-token',
       MIGRATE_CACHE_DIR:cacheDir
-    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}}),/unsupported for Blob targets/);
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:1,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
+    assert.equal(pruned.pruneMode,'auto');
+    assert.equal(pruned.deleted,0); // fresh store: nothing stale yet
+    blob.puts.length=0;
     await assert.rejects(run(['--window-days','0','--months','0'],{
       SOURCE_AUDIO_BASE:base,
       TARGET_STORAGE:'blob',
@@ -892,6 +905,48 @@ test('blob target rejects --prune and same-base source/target is rejected',async
     await mock.stop();
     await rm(cacheDir,{recursive:true,force:true});
   }
+});
+
+test('blob target prunes stale managed keys and keeps foreign data',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const base=await mock.start();
+  const staleMonth='months/2026-05/'+'a'.repeat(64)+'.json';
+  const staleRelease='releases/'+'b'.repeat(64)+'/manifest.json';
+  const staleAudio='audio/'+'c'.repeat(64)+'.opus';
+  const blob=fakeBlobBackend(new Map([
+    [staleMonth,Buffer.from('{}')],
+    [staleRelease,Buffer.from('{}')],
+    [staleAudio,Buffer.from('stale')],
+    ['keep/notes.txt',Buffer.from('user data')]
+  ]));
+  const cacheDir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  try{
+    const summary=await run(['--window-days','0','--months','0'],{
+      SOURCE_AUDIO_BASE:base,
+      TARGET_STORAGE:'blob',
+      BLOB_BASE_URL:'https://blob.fixture.invalid',
+      BLOB_READ_WRITE_TOKEN:'fixture-token',
+      MIGRATE_CACHE_DIR:cacheDir
+    },{blobFetcher:blob.fetcher,blobSdk:blob.sdk,retries:2,sleep:async()=>{},now:NOW,log:()=>{},warn:()=>{}});
+    assert.equal(summary.pruneMode,'auto');
+    assert.equal(summary.deleted,3);
+    assert.equal(blob.objects.has(staleMonth),false);
+    assert.equal(blob.objects.has(staleRelease),false);
+    assert.equal(blob.objects.has(staleAudio),false);
+    assert.equal(blob.objects.get('keep/notes.txt').toString(),'user data');
+  }finally{
+    await mock.stop();
+    await rm(cacheDir,{recursive:true,force:true});
+  }
+});
+
+test('http source falls back to range probe when HEAD is rejected',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog,{headForbidden:true});
+  const {summary}=await runHttp(['--window-days','0','--months','0'],{catalog,mock});
+  assert.equal(summary.uploaded,summary.objects);
+  assert(mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)&&r.range==='bytes=0-1'));
 });
 
 let failed=0;

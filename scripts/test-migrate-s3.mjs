@@ -949,6 +949,33 @@ test('http source falls back to range probe when HEAD is rejected',async()=>{
   assert(mock.requests.some(r=>r.method==='GET'&&/^\/storage\/[a-f0-9]{64}\.opus$/.test(r.path)&&r.range==='bytes=0-1'));
 });
 
+test('transient network faults are retried with the dedicated network budget',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const mock=startMockApi(catalog);
+  const targetObjects=new Map();
+  const cacheDir=await mkdtemp(join(tmpdir(),'b2-migrate-cache-'));
+  let headResets=0;
+  const inner=fakeClient({objects:targetObjects});
+  const flakyClient={async send(command){
+    if(command.constructor.name==='HeadObjectCommand'&&headResets<6){
+      headResets++;
+      const error=new Error('connection reset');
+      error.code='ECONNRESET';
+      throw error;
+    }
+    return inner.send(command);
+  }};
+  try{
+    const {summary}=await runHttp(['--window-days','0','--months','0'],{catalog,mock,targetObjects,cacheDir,deps:{s3Client:flakyClient}});
+    assert.equal(summary.uploaded,summary.objects);
+    assert.equal(headResets,6);
+    assert(summary.retries>=6);
+  }finally{
+    await mock.stop();
+    await rm(cacheDir,{recursive:true,force:true});
+  }
+});
+
 let failed=0;
 for(const entry of tests){
   try{await entry.fn();console.log('ok - '+entry.name);}

@@ -35,6 +35,8 @@ const DEFAULT_CONCURRENCY=5;
 const DEFAULT_WINDOW_DAYS=30;
 const DEFAULT_PRUNE=true;
 const DEFAULT_RETRIES=4;
+const DEFAULT_NETWORK_RETRIES=10;
+const NETWORK_MAX_DELAY_MS=30000;
 const DEFAULT_TIMEOUT_MS=120000;
 const DEFAULT_CACHE_DIR_NAME='anyun-migrate-s3';
 const DEFAULT_CACHE_RESERVE_BYTES=512*1024*1024;
@@ -118,21 +120,32 @@ function sdkError(operation,error){
   return wrapped;
 }
 
+const NETWORK_ERROR_CODES=['ECONNRESET','ETIMEDOUT','EAI_AGAIN','ENOTFOUND','EPIPE','ECONNREFUSED','EHOSTUNREACH','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT'];
+const isNetworkError=error=>NETWORK_ERROR_CODES.includes(error?.code)||error?.name==='TimeoutError';
 function retryable(error){
   const status=error?.status;
   if(status===429||(status>=500&&status<=599))return true;
-  return ['ECONNRESET','ETIMEDOUT','EAI_AGAIN','ENOTFOUND','EPIPE','ECONNREFUSED','EHOSTUNREACH','ENETUNREACH','UND_ERR_CONNECT_TIMEOUT'].includes(error?.code)||error?.name==='TimeoutError';
+  return isNetworkError(error);
 }
 
 const defaultSleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
-async function withRetry(operation,{retries=DEFAULT_RETRIES,baseDelayMs=250,maxDelayMs=8000,sleep=defaultSleep,stats}={}){
+// Transient network faults get their own, much larger budget than policy
+// failures: a short ISP/B2 hiccup must not abort a multi-hundred-object run,
+// while 429/4xx still fail immediately for a human-paced rerun.
+async function withRetry(operation,{retries=DEFAULT_RETRIES,networkRetries=DEFAULT_NETWORK_RETRIES,baseDelayMs=250,maxDelayMs=8000,networkMaxDelayMs=NETWORK_MAX_DELAY_MS,sleep=defaultSleep,stats,networkOnly=false}={}){
   for(let attempt=0;;attempt++){
     try{return await operation();}
     catch(error){
-      if(!retryable(error)||attempt>=retries)throw error;
+      // HTTP-source chains keep policy failures immediate (429 asks for a
+      // human-paced rerun); only transient network faults are retried here.
+      if(networkOnly&&error?.status===429)throw Error('Target request throttled (HTTP 429); no automatic retry');
+      const network=isNetworkError(error);
+      const budget=network?networkRetries:(networkOnly?0:retries);
+      const cap=network?networkMaxDelayMs:maxDelayMs;
+      if(!retryable(error)||attempt>=budget)throw error;
       if(stats)stats.retries=(stats.retries??0)+1;
-      const delay=Math.min(maxDelayMs,baseDelayMs*2**attempt);
+      const delay=Math.min(cap,baseDelayMs*2**attempt);
       await sleep(delay);
     }
   }
@@ -865,10 +878,7 @@ async function syncObject(object,{source,target,retries,sleep,stats,verifyFull,c
   const v1Mode=source.storage==='http';
   const op=operation=>{
     if(!v1Mode)return withRetry(operation,{retries,sleep,stats});
-    return operation().catch(error=>{
-      if(error?.status===429)throw Error('Target request throttled (HTTP 429); no automatic retry');
-      throw error;
-    });
+    return withRetry(operation,{retries,sleep,stats,networkOnly:true});
   };
   const load=async()=>{
     if(object.body)return object.body;

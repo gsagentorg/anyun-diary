@@ -71,6 +71,7 @@ node --env-file=/YOUR-ENV-FILE-HERE scripts/migrate-s3.mjs --dry-run
 - `/api/month/<id>?release=<id>` 取月块（release 钉住；不可用月返回 404）。
 - `/api/audio/<hash>.opus` 307 重定向到存储，跟随重定向取音频字节；`HEAD` 同路径取 `Content-Length`。
 - 音频探长先用 HEAD（跟随 307）取 `Content-Length`；部分签名存储对 HEAD 回 403 时视为「无长度」，自动降级一次 `Range: bytes=0-1` 从 `Content-Range` 取总长（能力降级，不是重试；Range 失败仍立即报错）。
+- **网络瞬断在工具内重试**：目标/源操作命中网络类错误（`ECONNRESET`/`ETIMEDOUT`/`EAI_AGAIN`/`ENOTFOUND`/`EPIPE`/连接不可达/超时）按独立预算重试（默认 10 次、指数退避上限 30s，单操作最长约 90s）；HTTP 源链路同样适用。429 与其他 4xx 仍**立即失败**（429 给出人工重跑提示），语义不变。
 - 请求不带任何凭据；源端任何失败（含 429）**不自动重试**，直接报错退出。
 
 ## 4. 真实迁移

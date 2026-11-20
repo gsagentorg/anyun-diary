@@ -72,7 +72,8 @@ export const GET: RequestHandler = async () => {
         live: d.live_status === 1,
         title: d.title ?? null,
         area,
-        cover: '/brand/cover.jpg',
+        // 品牌图由客户端按运行时品牌基址解析；服务端不再固化品牌路径。
+        cover: null,
         checkedAt: new Date().toISOString(),
       };
     }

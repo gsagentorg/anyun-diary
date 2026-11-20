@@ -7,6 +7,8 @@ import {browseWindow} from '$lib/supply.js';
 import {theme,toggleTheme} from '$lib/theme.svelte.ts';
 import * as publicEnv from '$env/static/public';
 import Chip from '$lib/components/Chip.svelte';
+import BrandImage from '$lib/components/BrandImage.svelte';
+import { brandSrc } from '$lib/brand-runtime';
 import ContinuousBrowse from '$lib/ContinuousBrowse.svelte';
 import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
 import {ListMusic,Sun,Moon,Monitor,Search,HardDrive} from 'lucide-svelte';
@@ -90,10 +92,10 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
   >
     <div class="flex flex-wrap items-center gap-x-4 gap-y-2 py-3">
       <div class="flex items-center gap-2">
-        <img
-          src="/brand/avatar.png"
+        <BrandImage
+          src={brandSrc('avatar.png')}
           alt="安允日记"
-          class="h-8 w-8 shrink-0 rounded-full border border-base-300 object-cover"
+          cls="h-8 w-8 shrink-0 rounded-full border border-base-300 object-cover"
         />
         <div class="min-w-0">
           <h1 class="text-lg font-bold tracking-tight leading-none">安允日记</h1>
@@ -178,10 +180,10 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
       </div>
     {:else if liveInfo && liveInfo.live === false}
       <div class="flex items-center gap-3 rounded-lg border border-base-300 px-3 py-2">
-        <img
-          src="/brand/cover.jpg"
+        <BrandImage
+          src={brandSrc('cover.jpg')}
           alt="直播间封面"
-          class="h-9 w-16 shrink-0 rounded-md object-cover"
+          cls="h-9 w-16 shrink-0 rounded-md object-cover"
         />
         <span class="shrink-0 text-sm">未开播</span>
         {#if liveInfo.title}
@@ -199,10 +201,10 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
     {:else}
       <!-- 兜底：liveInfo 尚未拉到（首次加载/接口瞬时失败）或 live === null → 未开播版式，条不消失 -->
       <div class="flex items-center gap-3 rounded-lg border border-base-300 px-3 py-2">
-        <img
-          src="/brand/cover.jpg"
+        <BrandImage
+          src={brandSrc('cover.jpg')}
           alt="直播间封面"
-          class="h-9 w-16 shrink-0 rounded-md object-cover"
+          cls="h-9 w-16 shrink-0 rounded-md object-cover"
         />
         <span class="shrink-0 text-sm">未开播</span>
         <a

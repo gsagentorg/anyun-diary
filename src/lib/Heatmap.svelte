@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Audio } from './types';
   import { shDayStart } from './playlist-core';
+  import { heatActiveDayCount, heatDomainDays, todayStart } from './heatmap-domain';
   import { fmtDur, dateCard } from './types';
   import {loadMonth} from './backend.svelte';
   import { adopt, makeTrack } from './player.svelte.ts';
@@ -60,10 +61,12 @@
     to = '';
   }
 
-  // 仅筛选已加载音频（上海日界；空串 = 当前已加载窗口）
+  // 日期筛选边界（上海日界；空串 = 未选）
+  const fromDay = $derived(from ? shDayStart(Date.parse(from + 'T00:00:00+08:00') / 1000) : null);
+  const toDay = $derived(to ? shDayStart(Date.parse(to + 'T00:00:00+08:00') / 1000) : null);
+
+  // 仅筛选已加载音频（空串 = 当前已加载窗口）
   const filtered = $derived.by(() => {
-    const fromDay = from ? shDayStart(Date.parse(from + 'T00:00:00+08:00') / 1000) : null;
-    const toDay = to ? shDayStart(Date.parse(to + 'T00:00:00+08:00') / 1000) : null;
     if (fromDay === null && toDay === null) return audios;
     return audios.filter((r) => {
       const d = shDayStart(r.startAt);
@@ -95,7 +98,7 @@
   });
 
   // 聚合：天 × 小时 → 唱歌秒数（切片跨小时时按占比拆分）
-  const { days, cells, maxSeconds } = $derived.by(() => {
+  const { activeDays, cells, maxSeconds } = $derived.by(() => {
     const cellMap = new Map<string, Cell>();
     const daySet = new Map<number, Audio[]>();
     const addDay = (day: number, audio: Audio) => {
@@ -120,12 +123,16 @@
         s = hourEnd;
       }
     }
-    const days = [...daySet.keys()].sort((a, b) => b - a);
+    const activeDays = [...daySet.keys()].sort((a, b) => b - a);
     const cells = [...cellMap.values()];
     for (const c of cells) c.dayAudios = daySet.get(c.day) ?? [];
     const maxSeconds = Math.max(1, ...cells.map((c) => c.seconds));
-    return { days, cells, maxSeconds };
+    return { activeDays, cells, maxSeconds };
   });
+
+  // 展示域：始终渲染到今天（上海日界）。尾部无数据日照常出列、渲染为空单元格。
+  let todayDay = $state(todayStart());
+  const days = $derived(heatDomainDays(activeDays, { today: todayDay, end: toDay }));
 
   let scroller=$state<HTMLDivElement>();let left=$state(0),width=$state(1000);
   const columnWidth=48;
@@ -133,7 +140,16 @@
   const visibleDays=$derived(days.slice(firstColumn,firstColumn+Math.ceil(width/columnWidth)+16));
   function olderSentinel(node:HTMLElement){const observer=new IntersectionObserver(entries=>{if(entries.some(e=>e.isIntersecting))onOlder();},{root:scroller??null,rootMargin:'0px'});observer.observe(node);return {destroy:()=>observer.disconnect()};}
   function heatScroll(){left=scroller?.scrollLeft??0;}
-  onMount(()=>{width=scroller?.clientWidth??1000;});  const cellIndex = $derived(new Map(cells.map((c) => [c.day + '|' + c.hour, c])));
+  onMount(()=>{
+    width=scroller?.clientWidth??1000;
+    // 长时间挂着页面时跨零点也要跟着走；页面不可见时不刷。
+    todayDay=todayStart();
+    const timer=setInterval(()=>{if(document.visibilityState!=='hidden')todayDay=todayStart();},60000);
+    const onVisible=()=>{if(document.visibilityState==='visible')todayDay=todayStart();};
+    document.addEventListener('visibilitychange',onVisible);
+    return ()=>{clearInterval(timer);document.removeEventListener('visibilitychange',onVisible);};
+  });
+  const cellIndex = $derived(new Map(cells.map((c) => [c.day + '|' + c.hour, c])));
   const cellAt = (day: number, hour: number) => cellIndex.get(day + '|' + hour);
 
   let tip = $state<{ x: number; y: number; html: string } | null>(null);
@@ -194,10 +210,10 @@
   >近30天</button>
 </div>
 
-<p class="mt-1 text-2xs opacity-60">统计范围：已加载音频（日期筛选不代表全目录）</p>
+<p class="mt-1 text-2xs opacity-60">统计范围：已加载音频（日期筛选不代表全目录）；列始终到今天，无数据日为空列</p>
 <!-- 统计：活跃天数 / 次数 / 总时长 / 平均（总体） -->
 <div class="mt-2 flex flex-wrap gap-1.5 text-2xs">
-  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">活跃 {days.length} 天</span>
+  <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">活跃 {heatActiveDayCount(activeDays)} 天</span>
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">共 {filtered.length} 首</span>
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">已知总时长 {fmtDur(stats.seconds)}</span>
   <span class="rounded-full border border-base-300 px-2 py-0.5 tabular-nums">平均 {stats.count > 0 ? fmtDur(stats.avg) : '–'}/首</span>
@@ -217,7 +233,7 @@
           <div style:width={firstColumn*columnWidth+'px'} class="shrink-0"></div>
           {#each visibleDays as day (day)}
             {@const dc = dateCard(day)}
-            <div class="flex w-11 shrink-0 flex-col items-center">
+            <div class="flex w-11 shrink-0 flex-col items-center" data-heat-col-header={day}>
               <span class="text-2xs font-semibold tabular-nums">{dc.md}</span>
               <span class="text-2xs opacity-55">{dc.wd}</span>
             </div>
@@ -238,7 +254,7 @@
         <div class="flex flex-1 gap-1">
           <div style:width={firstColumn*columnWidth+'px'} class="shrink-0"></div>
           {#each visibleDays as day (day)}
-            <div class="flex w-11 shrink-0 flex-col gap-1">
+            <div class="flex w-11 shrink-0 flex-col gap-1" data-heat-col={day} data-heat-today={day === todayDay ? 'true' : undefined}>
               {#each Array(24) as _, h}
                 {@const c = cellAt(day, h)}
                 <button

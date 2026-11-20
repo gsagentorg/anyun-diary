@@ -45,13 +45,13 @@ SvelteKit 2（Svelte 5 runes）+ Vite 7 + Tailwind CSS 4 + lucide-svelte；支�
 - 三种视图：泳道时间轴 / 日卡片 / 热力图，共用 Audio 绝对时间模型。
 - 内置播放器：点歌、上/下一首、进度、倍速、歌词、队列及睡眠定时器。
 - 设计 token 位于 src/app.css，保留明暗主题与响应式布局；共享 Chip、Sheet、QueueOverlay、StateHint 位于 src/lib/components/。
-- 配色选型页为 static/design-variants.html。历史视觉说明见 docs/frontend-refactor-plan.md，其中旧数据路线不再适用。
+- 配色选型页为 static/design-variants.html（开发文档页，不是品牌资产）。历史视觉说明见 docs/frontend-refactor-plan.md，其中旧数据路线不再适用。
 
 ## 三视图与交互
 
 - 泳道按绝对时间展示音频、点击即播；仅挂载当前活跃视图，其他视图动态导入，不在后台生成完整 DOM。
 - 日卡按上海自然日聚合，不构造录音父实体。保留响应式卡片、日期、曲数徽标、展开/收起、当天替换列表、歌曲颜色点、序号、标题、时长及当前曲高亮。旧录像偏移改为绝对时间的上海时钟。每页最多 30 天，仅展开一天，歌曲每页最多 60 首。
-- 热力图保留日期/星期列头、24 小时网格、明暗热度渐变、少/多图例、鼠标 tooltip、点击及 Enter/Space 装载当天列表。跨小时和自然日按实际占用秒数分摊；每页最多 31 天，统计不随分页改变。
+- 热力图保留日期/星期列头、24 小时网格、明暗热度渐变、少/多图例、鼠标 tooltip、点击及 Enter/Space 装载当天列表。跨小时和自然日按实际占用秒数分摊。日期域**始终渲染到今天**（上海日界）：今天与域内无数据日照常出列、渲染为空单元格（不跳过、不造假数据）；「活跃天数」只统计有数据的天。跨零点/恢复页面时域尾自动前移。
 - 热力范围独立于队列生成范围，保留日期输入、近 7/30 天、清除范围及本地记忆；只过滤已加载窗口，不隐式请求历史全量。统计保留活跃日、曲数、已知总时长、平均及五档分层。未知时长明确说明，不作为零秒参与平均。
 - 日期面板完整范围成功后才生成并插入。分享 URL 使用 from/to 参数（上海时区、to 包含当天），仍受可用月份限制。
 - 外部播放器导出、M3U 端点、VLC 直开和下载已移除，不恢复旧入口。
@@ -124,7 +124,8 @@ systemctl --user status anyun-diary-frpc.service   # frpc（独立配置/凭据�
 > 注意：frpc 的 `serverAddr` 钉的是内网 LAN 地址（由 frpc 配置提供）。域名在容器/公网 DNS
 > 下若解析到另一台机器，而那边的 frps 不被 nginx 前置——注册“成功”也不会路由（曾导致整站 404）。
 
-### 头像与 App 图标
+### 头像与 App 图标（运行时抓取，不进构建产物）
 
-唯一源文件为 `static/brand/avatar.png`，必须是 **1024×1024、无透明通道的 RGB PNG**。页面直接引用该文件；替换头像时保持文件名和格式。
-`npm run build` 会先验证并直接复制该文件到 iOS AppIcon，不再维护 JPG 或单独转换图标。也可运行 `npm run icons` 立即同步。
+品牌图不是静态资源：源文件在 `assets/brand/`（`avatar.png` 必须 **1024×1024、无透明通道的 RGB PNG**），页面按运行时基址取图——`PUBLIC_BRAND_BASE` > 数据后端同源 `/brand/` > 同源 `/brand/`；同源 `/brand/<file>` 端点从存储 `brand/` 前缀读字节。加载失败重试一次后降级为占位。
+用 `npm run brand:publish` 把品牌图发布到当前环境存储；`static/` 与构建产物里没有品牌图。详见 [品牌图](docs/brand-assets.md)。
+`npm run build` 仍会先验证 `assets/brand/avatar.png` 并复制到 iOS AppIcon；也可运行 `npm run icons` 立即同步。

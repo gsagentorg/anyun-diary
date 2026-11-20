@@ -16,7 +16,7 @@ export function s3Options(env){
  return {bucket:values.BUCKET,prefix:prefix.replace(/\/$/,'')+(prefix?'/':''),audioPrefix,clientOptions:{region:values.REGION,...(values.ENDPOINT?{endpoint:values.ENDPOINT}:{}),forcePathStyle:['true','1'].includes(style),credentials:{accessKeyId:values.ACCESS_KEY_ID,secretAccessKey:values.SECRET_ACCESS_KEY,...(values.SESSION_TOKEN?{sessionToken:values.SESSION_TOKEN}:{})}}};
 }
 export function s3ObjectKey(options,key){if(/^audio\/[a-f0-9]{64}\.opus$/.test(key))return options.audioPrefix+key.slice(6);return options.prefix+key;}
-export function objectCacheControl(key){return ['current.json','manifest.json'].includes(key)?'no-cache, max-age=0, must-revalidate':'public, max-age=31536000, immutable';}
+export function objectCacheControl(key){if(key.startsWith('brand/'))return 'public, max-age=600, must-revalidate';return ['current.json','manifest.json'].includes(key)?'no-cache, max-age=0, must-revalidate':'public, max-age=31536000, immutable';}
 export function createS3Store(options,validKey,client=new S3Client(options.clientOptions)){
  const object=key=>({Bucket:options.bucket,Key:s3ObjectKey(options,validKey(key))});
  return {

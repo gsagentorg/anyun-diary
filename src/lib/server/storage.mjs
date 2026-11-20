@@ -3,7 +3,8 @@ import {resolve,dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createS3Store,s3Options} from './s3-store.mjs';
 export function s3Store(env,client){return createS3Store(s3Options(env),validKey,client);}
-export function validKey(key){if(typeof key!=='string'||! /^((?:current|manifest)\.json|releases\/[a-f0-9]{64}\/manifest\.json|months\/\d{4}-(0[1-9]|1[0-2])\/[a-f0-9]{64}\.json|audio\/[a-f0-9]{64}\.opus)$/.test(key))throw Error('Invalid storage key');return key;}
+// 白名单：目录指针/月块/音频对象，以及发布脚本写入的品牌图（brand/<固定文件名>）。
+export function validKey(key){if(typeof key!=='string'||! /^((?:current|manifest)\.json|releases\/[a-f0-9]{64}\/manifest\.json|months\/\d{4}-(0[1-9]|1[0-2])\/[a-f0-9]{64}\.json|audio\/[a-f0-9]{64}\.opus|brand\/(?:avatar\.png|cover\.jpg))$/.test(key))throw Error('Invalid storage key');return key;}
 export function localStore(root){const path=key=>resolve(root,validKey(key));return {
  async read(key,{signal}={}){signal?.throwIfAborted();try{return new Response(await readFile(path(key),{signal}));}catch(e){if(e.code==='ENOENT')return new Response(null,{status:404});throw e;}},
  async write(key,bytes){const target=path(key);await mkdir(dirname(target),{recursive:true});const temp=target+'.'+randomUUID()+'.tmp';try{await writeFile(temp,bytes);await rename(temp,target);}finally{await unlink(temp).catch(e=>{if(e.code!=='ENOENT')throw e;});}},

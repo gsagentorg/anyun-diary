@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'node:fs/promises';
 
-const source = new URL('../static/brand/avatar.png', import.meta.url);
+const source = new URL('../assets/brand/avatar.png', import.meta.url);
 const target = new URL('../ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png', import.meta.url);
 const image = await readFile(source);
 const invalid = () => { throw new Error('avatar.png 必须是 1024×1024、无透明通道的 RGB PNG；请替换源文件。'); };
@@ -17,4 +17,4 @@ const previous = await readFile(target).catch(error => {
   return null;
 });
 if (!previous?.equals(image)) await writeFile(target, image);
-console.log('App icon synced from static/brand/avatar.png');
+console.log('App icon synced from assets/brand/avatar.png (runtime asset, not bundled)');

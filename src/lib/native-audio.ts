@@ -4,7 +4,7 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 export const usesNativeAudio = () => typeof window !== 'undefined' && Capacitor.getPlatform() === 'ios';
 export interface NativeQueueItem { id: string; audio?: Audio; url: string; title: string; key: string; lyrics?: { t: number; text: string }[]; clipDuration?: number; album?: string; }
 export interface NativeConfig {
-  queue: NativeQueueItem[]; pos: number; shuffle: boolean; skipSame: boolean;
+  queue: NativeQueueItem[]; pos: number; shuffle: boolean; repeatOne?: boolean; skipSame: boolean;
   history: number[]; redo: number[]; played: string[]; rate: number;
   sleepRevision: string; sleepUntil: number | null; sleepStarted: number | null; sleepMode: string; afterTrack: boolean;
 }

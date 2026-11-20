@@ -4,12 +4,6 @@ import MediaPlayer
 import Capacitor
 import OSLog
 
-final class DiaryBridgeViewController: CAPBridgeViewController {
-    override func capacitorDidLoad() {
-        bridge?.registerPluginInstance(NativePlaybackPlugin())
-    }
-}
-
 /// The plugin owns playback, independently of the web view and its lifecycle.
 @objc(NativePlaybackPlugin)
 public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -27,6 +21,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var redo: [Int] = []
     private var played: [String] = []
     private var shuffle = false
+    /// 单曲循环：自然播完时从头重播（手动上/下一首仍按队列走）。
+    private var repeatOne = false
     private var skipSame = true
     private var rate: Float = 1
     private var revision = ""
@@ -103,6 +99,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         notifications.append(center.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: nil, queue: .main) { [weak self] note in
             guard let self, let item = note.object as? AVPlayerItem, item === self.audio.currentItem else { return }
             if self.sleepState.stopAtTrackEnd(at: Date().timeIntervalSince1970 * 1000) { self.finishSleep() }
+            // Repeat-one keeps the current item; start() rewinds a finished item and resumes.
+            else if self.repeatOne { _ = self.start() }
             else { self.step(1, ended: true) }
         })
         notifications.append(center.addObserver(forName: AVAudioSession.interruptionNotification, object: nil, queue: .main) { [weak self] note in
@@ -140,6 +138,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             queue = NativeLyrics.hydrate(items); pos = saved["pos"] as? Int ?? -1
             rate = (saved["rate"] as? NSNumber)?.floatValue ?? 1
             shuffle = saved["shuffle"] as? Bool ?? false
+            repeatOne = saved["repeatOne"] as? Bool ?? false
             skipSame = saved["skipSame"] as? Bool ?? true
             history = saved["history"] as? [Int] ?? []; redo = saved["redo"] as? [Int] ?? []
             played = saved["played"] as? [String] ?? []
@@ -182,6 +181,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.redo = call.getArray("redo", Int.self) ?? []
             self.played = call.getArray("played", String.self) ?? []
             self.shuffle = call.getBool("shuffle") ?? false
+            self.repeatOne = call.getBool("repeatOne") ?? false
             self.skipSame = call.getBool("skipSame") ?? true
             self.rate = Float(call.getDouble("rate") ?? 1)
             self.revision = call.getString("revision") ?? ""
@@ -426,7 +426,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         let displayTime = recovering ? max(lastPosition, time.isFinite ? time : 0) : (time.isFinite ? time : 0)
         let displayDuration = recovering ? lastKnownDuration : (duration.isFinite ? duration : 0)
         var state: [String: Any] = ["pos": pos,
-                "shuffle": shuffle, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
+                "shuffle": shuffle, "repeatOne": repeatOne, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": displayTime, "duration": displayDuration,
                 "playing": audio.timeControlStatus == .playing, "loading": recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),

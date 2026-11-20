@@ -9,7 +9,9 @@ import * as publicEnv from '$env/static/public';
 import Chip from '$lib/components/Chip.svelte';
 import ContinuousBrowse from '$lib/ContinuousBrowse.svelte';
 import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
-import {ListMusic,Sun,Moon,Monitor,Search} from 'lucide-svelte';
+import {ListMusic,Sun,Moon,Monitor,Search,HardDrive} from 'lucide-svelte';
+import {browser} from '$app/environment';
+import {nativeCacheAvailable} from '$lib/native-cache';
 const viewScroll=[0,0,0];
 let cancelRestore=()=>{};
 async function switchView(next:number){
@@ -23,6 +25,9 @@ async function switchView(next:number){
  observer.observe(document.body);restore();
 }
 let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
+let cacheOpen=$state(false);
+// 原生缓存入口只在 App 内出现；网页端没有这层缓存，不给假入口。
+const showCacheEntry=browser&&nativeCacheAvailable();
 let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false);
 let endAt=$state(Math.floor(Date.now()/1000)+1);
 const startAt=$derived(backend.manifest?.queryMonthLimit===2?browseWindow(selected,endAt).startAt:-Infinity);
@@ -131,6 +136,16 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
           {:else if theme.mode === 'light'}<Moon class="h-4 w-4" />
           {:else}<Monitor class="h-4 w-4" />{/if}
         </button>
+        {#if showCacheEntry}
+          <button
+            class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
+            onclick={() => (cacheOpen = true)}
+            aria-label="本地缓存"
+            title="本地缓存"
+          >
+            <HardDrive class="h-4 w-4" />
+          </button>
+        {/if}
         <button
           class="flex items-center gap-1.5 rounded-full border border-base-300 px-3 py-1 text-sm transition hover:bg-base-200 {playlistOpen
             ? 'border-accent text-accent'
@@ -222,4 +237,5 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {#if backend.prompt}{#await import('$lib/components/BackendSheet.svelte') then module}<module.default/>{/await}{/if}
 {#if player.queueOpen}{#await import('$lib/components/QueueOverlay.svelte') then module}<module.default/>{/await}{/if}
 {#if player.lyricsOpen}{#await import('$lib/components/LyricsSheet.svelte') then module}<module.default/>{/await}{/if}
+{#if showCacheEntry}{#await import('$lib/components/CacheSheet.svelte') then module}<module.default open={cacheOpen} onClose={()=>cacheOpen=false}/>{/await}{/if}
 </div>

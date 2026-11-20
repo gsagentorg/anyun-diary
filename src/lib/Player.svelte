@@ -1,12 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, toggleShuffle, reportPlaybackState, setRate, initRate, initDedup, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
+  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
-  import { SLEEP_MODES, isSleepMode, MIN_SLEEP_MINUTES, MIN_SLEEP_SECONDS, sleepCurvePath, sleepCurvePoint, sleepMinutesFromHandle, sleepProgress, sleepSecondsFromHandle, sleepStage } from './sleep-curves';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
+  import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
+  import { PLAY_MODES, playModeLabel } from './play-mode';
+  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, Repeat1, ListOrdered, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
   let progress = $state(0);
   let duration = $state(0);
@@ -15,10 +16,10 @@
   let menuOpen = $state(false);
   let menuPanelEl = $state<HTMLDivElement>();
 
-  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折随机，3=再折同名去重，4=再折避开同名，5=再折睡眠，6=再折队列（+全部进 ⋮）
+  // 功能钮空间自适应折叠：0=全平铺，1=折倍速，2=再折播放模式，3=再折同名去重，4=再折避开同名，5=再折睡眠，6=再折队列（+全部进 ⋮）
   let foldCount = $state(0);
-  let widths = $state<{ rate?: number; shuffle?: number; dedup?: number; skip?: number; sleep?: number; queue?: number }>({});
-  const FOLD_ORDER = ['rate', 'shuffle', 'dedup', 'skip', 'sleep', 'queue'] as const;
+  let widths = $state<{ rate?: number; mode?: number; dedup?: number; skip?: number; sleep?: number; queue?: number }>({});
+  const FOLD_ORDER = ['rate', 'mode', 'dedup', 'skip', 'sleep', 'queue'] as const;
   type FoldKey = (typeof FOLD_ORDER)[number];
   // 左区标题块 / 中区进度条 min-width：<640 收窄（与模板 min-w-[90px] sm:min-w-[110px] 等同步）
   let barEl = $state<HTMLDivElement>();
@@ -32,14 +33,13 @@
   let sleepBtnEl = $state<HTMLButtonElement>();
   let dotsBtn = $state<HTMLButtonElement>();
   let queueBtnEl = $state<HTMLButtonElement>();
-  let shuffleEl = $state<HTMLElement>();
+  let modeEl = $state<HTMLElement>();
   let dotsW = 36;
   let customMin = $state(15);
-  // 直接拖动曲线进度点，保留所选总时长。
   let sleepSvgEl = $state<SVGSVGElement>();
-  let sleepPreviewBase = $state(0); // 预览态拖动开始时选中的整档分钟数；0 表示未拖动
-  let sleepDragging = false;
-  let sleepDragBaseMinutes = 15;
+  // 睡眠曲线拖动：状态用普通变量，避免拖动中每帧触发响应式重算。
+  let sleepDragActive = false;
+  let sleepDragId = -1;
   let dragging = $state(false);
   let playing = $state(false);
   let rateInput = $state(1);
@@ -57,25 +57,23 @@
   const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition));
   const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleep.remaining)));
   const sleepBaseSeconds = $derived(sleepRunning ? Math.max(1, sleep.plannedSeconds) : 0);
-  const sleepPreviewMinutes = $derived(Math.max(MIN_SLEEP_MINUTES, Math.round(Number(customMin) || 0)));
-  // 手柄横坐标：运行中按剩余比例落位；预览态取拖动后的位置，否则停在右端表示整档。
+  // 手柄横坐标：运行中按剩余比例落位；未启动时停在右端表示整档。
   const sleepCurveWidth = $derived.by(() => {
     if (sleepRunning) {
       const base = Math.max(1, sleep.plannedSeconds);
-      const minP = Math.min(180, (180 * MIN_SLEEP_SECONDS) / base);
+      const minP = Math.min(180, (180 * SLEEP_MIN_REMAINING_SECONDS) / base);
       const p = (180 * Math.max(0, sleep.remaining)) / base;
       return Math.max(minP, Math.min(180, p));
     }
-    if (sleepPreviewBase > 0) return Math.max(0, Math.min(180, (180 * sleepPreviewMinutes) / sleepPreviewBase));
     return 180;
   });
   const sleepHandleLabel = $derived(
     sleepRunning
       ? `睡眠结束时间手柄，剩余 ${fmtClockShort(sleep.remaining)}，左右拖动或方向键调整`
-      : `睡眠时长手柄，当前 ${sleepPreviewMinutes} 分钟，左右拖动或方向键调整`,
+      : `睡眠时长手柄（未启动），开始后才能拖动调节进度`,
   );
 
-  onMount(() => { initRate(); initDedup(); initSession(); initSleep(); });
+  onMount(() => { initRate(); initDedup(); initMode(); initSession(); initSleep(); });
 
   $effect(() => {
     const a = getAudio();
@@ -228,54 +226,79 @@
   }
 
   function pick(minutes: number | null, afterTrack = false) {
-    sleepPreviewBase = 0;
     startSleep(minutes, afterTrack);
     // Keep status/capability feedback visible after arming; close explicitly as usual.
   }
 
-  // —— 睡眠曲线右端可拖拽手柄 ——
-  function sleepHandleCoord(e: PointerEvent): number {
+  // —— 睡眠曲线拖动：命中区是整条竖线（不是圆点），手势独占给 SVG 根 ——
+  /** Client point → viewBox x of the sleep curve (accounts for CSS scaling). */
+  function sleepLocalX(clientX: number, clientY: number): number | null {
     const svg = sleepSvgEl;
-    if (!svg) return sleepCurveWidth;
+    if (!svg) return null;
     const matrix = svg.getScreenCTM();
-    if (!matrix) return sleepPoint.x;
-    const point = svg.createSVGPoint();
-    point.x = e.clientX; point.y = e.clientY;
-    return Math.max(0, Math.min(180, point.matrixTransform(matrix.inverse()).x));
+    if (!matrix) return null;
+    return new DOMPoint(clientX, clientY).matrixTransform(matrix.inverse()).x;
   }
 
-  function applySleepHandle(handleX: number) {
-    if (sleepRunning) seekSleepProgress(handleX / 180);
+  function sleepApplyAt(clientX: number, clientY: number) {
+    const x = sleepLocalX(clientX, clientY);
+    if (x == null) return;
+    seekSleepProgress(sleepSeekProgress(x));
   }
 
-  function sleepHandleDown(e: PointerEvent) {
-    if (e.button !== 0 && e.pointerType === 'mouse') return;
+  // 拖动开始：只有落在整条竖线轨道上才算（竖线以外保持原样，不误触）。
+  function onSleepTrackDown(e: PointerEvent) {
+    if (!sleepRunning || sleepDragActive) return;
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    const x = sleepLocalX(e.clientX, e.clientY);
+    if (x == null || !sleepTrackHit(x, sleepPoint.x)) return;
+    // 拖住后必须独占手势，否则 iOS 判定为滚动会发 pointercancel。
     e.preventDefault();
-    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-    sleepDragging = true;
-    if (!sleepRunning && sleepPreviewBase === 0) sleepPreviewBase = sleepPreviewMinutes;
-    sleepDragBaseMinutes = sleepPreviewBase || sleepPreviewMinutes;
+    sleepDragActive = true;
+    sleepDragId = e.pointerId;
+    // 捕获在 <svg> 根上：子元素重渲染不会让捕获失效（iOS 上捕获丢失=拖到一半停住）。
+    try {
+      sleepSvgEl?.setPointerCapture(e.pointerId);
+    } catch {
+      /* 不支持捕获的 UA 仍可在轨道内拖动 */
+    }
+    // preventDefault 会吃掉默认聚焦：手动聚焦手柄，键盘用户接力时焦点就在正确位置。
+    (sleepSvgEl?.querySelector('[data-sleep-handle]') as SVGElement | null)?.focus();
+    sleepApplyAt(e.clientX, e.clientY);
   }
 
-  function sleepHandleMove(e: PointerEvent) {
-    if (!sleepDragging) return;
+  function onSleepTrackMove(e: PointerEvent) {
+    if (!sleepDragActive || e.pointerId !== sleepDragId) return;
     e.preventDefault();
-    applySleepHandle(sleepHandleCoord(e));
+    sleepApplyAt(e.clientX, e.clientY);
   }
 
-  function sleepHandleUp(e: PointerEvent) {
-    if (!sleepDragging) return;
-    sleepDragging = false;
-    (e.currentTarget as Element).releasePointerCapture?.(e.pointerId);
+  function onSleepTrackUp(e: PointerEvent) {
+    if (!sleepDragActive || e.pointerId !== sleepDragId) return;
+    sleepDragActive = false;
+    sleepDragId = -1;
+    try {
+      sleepSvgEl?.releasePointerCapture(e.pointerId);
+    } catch {
+      /* 捕获已随 pointercancel 释放 */
+    }
   }
 
-  function sleepHandleKey(e: KeyboardEvent) {
-    const delta = e.key === 'ArrowLeft' ? -9 : e.key === 'ArrowRight' ? 9 : 0;
+  // pointercancel 在原生媒体浮层抢占手势时出现：停在最后位置，不回弹、不报错。
+  function onSleepTrackCancel(e: PointerEvent) {
+    if (!sleepDragActive) return;
+    sleepDragActive = false;
+    sleepDragId = -1;
+    void e;
+  }
+
+  function onSleepTrackKey(e: KeyboardEvent) {
+    if (!sleepRunning) return;
+    const step = e.shiftKey ? 0.1 : 0.02;
+    const delta = e.key === 'ArrowLeft' ? -step : e.key === 'ArrowRight' ? step : 0;
     if (!delta) return;
     e.preventDefault();
-    if (!sleepRunning && sleepPreviewBase === 0) sleepPreviewBase = sleepPreviewMinutes;
-    sleepDragBaseMinutes = sleepPreviewMinutes;
-    applySleepHandle(sleepPoint.x + delta);
+    seekSleepProgress(sleepSeekProgress(clampCurveX(sleepPoint.x + delta * SLEEP_CURVE_WIDTH)));
   }
 
   // 倍速按钮角标：整数省小数，否则两位小数
@@ -328,7 +351,7 @@
     const res = residentEl;
     if (!bar || !row || !res) return;
     setW('rate', rateBtnEl);
-    setW('shuffle', shuffleEl);
+    setW('mode', modeEl);
     setW('dedup', dedupBtnEl);
     setW('skip', skipBtnEl);
     setW('sleep', sleepBtnEl);
@@ -372,6 +395,18 @@
     recalc();
   });
 
+  // iOS：Safari 对 SVG 子元素的 touch-action 支持不稳；拖动期间用非被动 touchmove 兜底
+  // preventDefault，否则系统会把手势判成滚动并发 pointercancel（外在表现就是"拖不动"）。
+  $effect(() => {
+    const svg = sleepSvgEl;
+    if (!svg) return;
+    const guard = (event: TouchEvent) => {
+      if (sleepDragActive && event.cancelable) event.preventDefault();
+    };
+    svg.addEventListener('touchmove', guard, { passive: false });
+    return () => svg.removeEventListener('touchmove', guard);
+  });
+
   const clock = (epoch: number) =>
     new Date(epoch * 1000).toLocaleTimeString('zh-CN', {
       timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
@@ -390,21 +425,28 @@
   const total = $derived(player.playlist.length);
   const pos = $derived(player.pos >= 0 ? player.pos : (0));
   const pct = $derived(duration > 0 ? Math.min(100, (progress / duration) * 100) : 0);
+  const modeLabel = $derived(playModeLabel(player.mode));
+  const modeHint = $derived(PLAY_MODES.find((m) => m.id === player.mode)?.hint ?? '');
 </script>
 
-{#snippet shuffleControl(variant: 'icon' | 'row')}
+{#snippet modeControl(variant: 'icon' | 'row')}
   <button
     class={(variant === 'icon'
       ? 'flex h-9 w-9 items-center justify-center rounded-md transition hover:bg-base-200 '
       : 'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 ') +
-      (player.shuffle ? 'text-accent' : '')}
-    onclick={toggleShuffle}
-    aria-label="随机播放"
-    aria-pressed={player.shuffle}
-    title={player.shuffle ? '随机播放：开' : '随机播放：关'}
+      (player.mode !== 'sequential' ? 'text-accent' : '')}
+    onclick={() => cyclePlayMode()}
+    aria-label={`播放模式：${modeLabel}`}
+    title={`${modeLabel} · ${modeHint}（点击切换）`}
   >
-    <Shuffle class="h-4 w-4" />
-    {#if variant === 'row'}<span>随机播放{player.shuffle ? '：开' : ''}</span>{/if}
+    {#if player.mode === 'random'}
+      <Shuffle class="h-4 w-4" />
+    {:else if player.mode === 'repeat-one'}
+      <Repeat1 class="h-4 w-4" />
+    {:else}
+      <ListOrdered class="h-4 w-4" />
+    {/if}
+    {#if variant === 'row'}<span>播放模式：{modeLabel}</span>{/if}
   </button>
 {/snippet}
 
@@ -424,26 +466,52 @@
   </label>
   {#if sleepRunning}<p class="mt-1 px-1 text-2xs font-medium">当前运行：{shownSleepMode.label}</p>{/if}
   <p class="px-1 text-2xs leading-relaxed opacity-70">{shownSleepMode.description}</p>
-  <svg bind:this={sleepSvgEl} class="my-1 h-12 w-full text-accent" viewBox="-4 0 188 44" role="group" aria-label={`${shownSleepMode.label}音量变化示意，横轴为时间，纵轴为相对分贝${sleepRunning ? `；当前位置：已过${sleepPercent}%，${currentSleepStage}` : ''}；拖动曲线上的点调整渐弱进度`}>
+  <svg
+    bind:this={sleepSvgEl}
+    class="my-1 h-12 w-full text-accent"
+    viewBox="-4 0 188 44"
+    role="group"
+    aria-label={`${shownSleepMode.label}音量变化示意，横轴为时间，纵轴为相对分贝${sleepRunning ? `；当前位置：已过${sleepPercent}%，${currentSleepStage}；拖动整条竖线调整渐弱进度` : ''}`}
+    style={sleepRunning
+      ? 'touch-action:none;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none'
+      : undefined}
+    onpointerdown={onSleepTrackDown}
+    onpointermove={onSleepTrackMove}
+    onpointerup={onSleepTrackUp}
+    onpointercancel={onSleepTrackCancel}
+    onlostpointercapture={onSleepTrackUp}
+  >
     <path d="M0,38 H180" fill="none" stroke="currentColor" opacity="0.2" />
     <path d={sleepCurvePath(shownSleepMode.id)} fill="none" stroke="currentColor" stroke-width="2" />
     {#if sleepRunning}
       <line x1={sleepPoint.x} x2={sleepPoint.x} y1="1" y2="40" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
-      <g data-sleep-handle role="slider" tabindex="0"
-        aria-label="睡眠渐弱进度，左右拖动曲线上的点"
-        aria-valuemin={0} aria-valuemax={100} aria-valuenow={sleepPercent}
-        class="cursor-ew-resize" style="touch-action:none"
-        onpointerdown={sleepHandleDown} onpointermove={sleepHandleMove}
-        onpointerup={sleepHandleUp} onpointercancel={sleepHandleUp} onkeydown={sleepHandleKey}>
-        <circle cx={sleepPoint.x} cy={sleepPoint.y} r="10" fill="transparent" />
+      <g
+        data-sleep-handle
+        role="slider"
+        tabindex="0"
+        aria-label="睡眠渐弱进度，左右拖动曲线上的竖线调整"
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={sleepPercent}
+        aria-valuetext={`已过 ${sleepPercent}%，${currentSleepStage}`}
+        class="cursor-ew-resize outline-none"
+        style="touch-action:none"
+        onkeydown={onSleepTrackKey}
+      >
+        <!-- 命中区=完整竖线（整高、足够宽），视觉仍是原来的点 + 竖虚线。 -->
+        <rect
+          x={sleepPoint.x - SLEEP_TRACK_HALF_WIDTH}
+          y="0"
+          width={SLEEP_TRACK_HALF_WIDTH * 2}
+          height="44"
+          fill="transparent"
+          pointer-events="all"
+        />
         <circle data-sleep-position cx={sleepPoint.x} cy={sleepPoint.y} r="3.5" fill="currentColor" stroke="var(--color-base-100)" stroke-width="1.5" />
       </g>
     {/if}
   </svg>
   <div class="mb-1 flex justify-between px-1 text-2xs opacity-50"><span>开始</span><span>停止</span></div>
-  {#if !sleepRunning && sleepPreviewBase > 0}
-    <p class="mb-1 px-1 text-2xs text-accent" role="status">自定义 {sleepPreviewMinutes} 分钟</p>
-  {/if}
   {#if sleepRunning}
     <div class="mb-2 flex flex-wrap justify-between gap-x-2 px-1 text-2xs tabular-nums" data-sleep-stage>
       <span>已过 {fmtClockShort(sleepElapsed)} · {sleepPercent}%</span><span class="text-accent">{currentSleepStage}</span>
@@ -468,7 +536,7 @@
       min="1"
       max="600"
       bind:value={customMin}
-      oninput={() => { sleepPreviewBase = 0; }}
+      oninput={() => {}}
       class="w-16 rounded-md border border-base-300 bg-base-200 px-1.5 py-0.5 text-xs tabular-nums"
       aria-label="自定义睡眠分钟数"
     />
@@ -686,10 +754,10 @@
           </div>
         {/if}
 
-        <!-- 折叠级：随机播放（次折） -->
+        <!-- 折叠级：播放模式（次折）：随机 → 单曲循环 → 顺序 -->
         {#if foldCount < 2}
-          <span class="inline-flex" bind:this={shuffleEl}>
-            {@render shuffleControl('icon')}
+          <span class="inline-flex" bind:this={modeEl}>
+            {@render modeControl('icon')}
           </span>
         {/if}
 
@@ -779,7 +847,7 @@
                 class="absolute bottom-full right-0 mb-2 max-h-[70dvh] w-64 max-w-[calc(100vw-1rem)] overflow-y-auto rounded-lg border border-base-300 bg-base-100 p-2 shadow-lg"
               >
                 {#if foldCount >= 1}{@render rateRow()}{/if}
-                {#if foldCount >= 2}<div class="mt-1 border-t border-base-300 pt-1">{@render shuffleControl('row')}</div>{/if}
+                {#if foldCount >= 2}<div class="mt-1 border-t border-base-300 pt-1">{@render modeControl('row')}</div>{/if}
                 {#if foldCount >= 3}
                   <div class="mt-1 border-t border-base-300 pt-1">
                     <button class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition hover:bg-base-200 {player.dedupByName ? 'text-accent' : ''}"

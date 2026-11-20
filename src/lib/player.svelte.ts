@@ -16,7 +16,8 @@ export function setPlayerCatalog(audios: DiaryAudio[]) {
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
-import { isSleepMode, MIN_SLEEP_SECONDS, type SleepMode } from './sleep-curves';
+import { isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
+import { nextPlayMode, isPlayMode, type PlayMode } from './play-mode';
 
 export type { Track };
 
@@ -31,7 +32,8 @@ let nativeSleepRevision = '';
 function nativeConfig() {
   return {
     queue: player.playlist.map(t => ({ id: t.nativeQueueId ?? t.queueEntryId, audio: JSON.parse(JSON.stringify(t.audio)), url: audioUrl(t.audio.opus), title: t.audio.title || '（未识别）', key: trackKey(t), lyrics: t.audio.lyrics ?? [], clipDuration: (t.audio.duration ?? 0), album: typeof t.audio.startAt === 'number' && Number.isFinite(t.audio.startAt) ? `安允日记 · ${dateCard(t.audio.startAt).md}` : '安允日记' })),
-    pos: player.track ? player.pos : -1, shuffle: player.shuffle, skipSame: player.shuffleSkipSameTitle,
+    pos: player.track ? player.pos : -1, shuffle: player.mode === 'random', skipSame: player.shuffleSkipSameTitle,
+    repeatOne: player.mode === 'repeat-one',
     history: [...player.history], redo: [...player.shuffleRedo], played: [...player.playedTitles], rate: player.playbackRate,
     sleepRevision: nativeSleepRevision, sleepUntil: sleep.until, sleepStarted: sleep.started, sleepMode: sleep.mode, afterTrack: sleep.afterTrack,
   };
@@ -65,6 +67,9 @@ function applyNativeState(state: NativeState) {
     }
     player.history = state.history; player.shuffleRedo = state.redo; player.playedTitles = state.played;
     player.shuffle = state.shuffle; player.shuffleSkipSameTitle = state.skipSame;
+    // The native side only carries the random flag; repeat-one is kept as-is until it is sent back.
+    if (state.shuffle) player.mode = 'random';
+    else if (player.mode === 'random') player.mode = 'sequential';
     player.playbackRate = state.rate; player.playing = state.playing; player.loading = state.loading;
     player.error = state.error;
     nativeSleepRevision = state.sleepRevision ?? '';
@@ -94,7 +99,8 @@ export const player = $state<{
   playing: boolean; // 真实播放状态（由 audio 事件驱动 + 看门狗纠偏）
   playlist: Track[];
   pos: number; // 当前播放项在 playlist 里的下标
-  shuffle: boolean; // 随机播放
+  shuffle: boolean; // 随机播放（= mode === 'random' 的镜像，native 桥与旧快照仍读它）
+  mode: PlayMode; // 单一播放模式：随机 / 单曲循环 / 顺序（三态循环切换）
   history: number[]; // 随机模式下已播过的下标（上一首用）
   playedTitles: string[]; // 已播曲目的「曲目标识」（同名歌曲视为同一首，随机不再抽）
   queueOpen: boolean; // 播放队列叠层开关
@@ -112,6 +118,7 @@ export const player = $state<{
   playlist: [],
   pos: -1,
   shuffle: false,
+  mode: 'sequential',
   history: [],
   playedTitles: [],
   queueOpen: false,
@@ -203,6 +210,47 @@ export function setShuffleSkipSameTitle(v: boolean) {
     }
   }
   scheduleSessionSave();
+}
+
+const MODE_KEY = 'anyun-play-mode';
+
+/** 从 localStorage 恢复播放模式（缺省/非法值 → 顺序播放）；仅浏览器环境调用 */
+export function initMode() {
+  if (typeof window === 'undefined') return;
+  try {
+    const raw = window.localStorage.getItem(MODE_KEY);
+    if (isPlayMode(raw)) {
+      player.mode = raw;
+      player.shuffle = raw === 'random';
+    }
+  } catch {
+    /* 忽略读取失败 */
+  }
+}
+
+/** 直接设置播放模式：重置随机历史（模式换了，旧的抽取状态不再有意义） */
+export function setPlayMode(mode: PlayMode) {
+  if (!isPlayMode(mode) || player.mode === mode) return;
+  player.mode = mode;
+  player.shuffle = mode === 'random';
+  player.history = [];
+  player.shuffleRedo = [];
+  player.playedTitles = player.track ? [trackKey(player.track)] : [];
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.setItem(MODE_KEY, mode);
+    } catch {
+      /* 忽略存储失败 */
+    }
+  }
+  scheduleSessionSave();
+}
+
+/** 播放模式三态循环：随机 → 单曲循环 → 顺序 → 随机 */
+export function cyclePlayMode(): PlayMode {
+  const next = nextPlayMode(player.mode);
+  setPlayMode(next);
+  return next;
 }
 
 /** 曲目标识：同名歌曲（含不同场次）视为同一首；无标题的用切片文件名兜底 */
@@ -479,32 +527,59 @@ export function moveTrack(from: number, to: number) {
   scheduleSessionSave();
 }
 
-/** 清空队列：移除除当前播放外的全部（无当前播放则全清） */
+/**
+ * 清空播放列表：停止当前播放并复位播放器状态 —— 当前曲目、进度、播放态、
+ * 媒体会话（metadata/playbackState）、随机历史与会话快照一并清掉。
+ */
 export function clearQueue() {
-  nativeQueueMapped = true;
-  const cur = player.pos >= 0 ? player.playlist[player.pos] : null;
-  if (!cur) {
-    player.playlist = [];
-    player.pos = -1;
-    player.shuffleRedo = [];
-    scheduleSessionSave();
-    return;
+  const a = getAudio();
+  a.pause();
+  try {
+    a.currentTime = 0;
+  } catch {
+    /* 某些 UA 在无 src 时拒绝写 currentTime */
   }
-  player.playlist = [cur];
-  player.pos = 0;
+  a.removeAttribute('src');
+  a.load();
+
+  player.playlist = [];
+  player.pos = -1;
+  player.track = null;
+  player.playing = false;
+  player.loading = false;
   player.history = [];
+  player.playedTitles = [];
   player.shuffleRedo = [];
-  player.playedTitles = [trackKey(cur)];
-  scheduleSessionSave();
+  player.sessionRestored = false;
+  nativeQueueMapped = true;
+
+  setMediaPlaybackState('none');
+  if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = null;
+    } catch {
+      /* 忽略不支持清空 metadata 的 UA */
+    }
+  }
+
+  if (sessionSaveTimer) {
+    clearTimeout(sessionSaveTimer);
+    sessionSaveTimer = null;
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      window.localStorage.removeItem(SESSION_KEY);
+    } catch {
+      /* 隐私模式：静默 */
+    }
+  }
+  // 原生壳：把空队列推给原生侧，否则后台播放在 App 内还会继续。
+  syncNative();
 }
 
-/** 切换随机播放 */
+/** 切到随机/关闭随机（保留为旧调用点的薄封装；UI 已改用三态循环） */
 export function toggleShuffle() {
-  player.shuffle = !player.shuffle;
-  player.history = [];
-  player.shuffleRedo = [];
-  player.playedTitles = player.track ? [trackKey(player.track)] : [];
-  scheduleSessionSave();
+  setPlayMode(player.mode === 'random' ? 'sequential' : 'random');
 }
 
 /** 把当前曲记入随机历史与已播（切走前调用） */
@@ -569,10 +644,11 @@ export function prependTracks(list: Track[] | DiaryAudio[], i = 0) {
   prependAt(list.map(t => makeTrack('audio' in t ? t.audio : t)), i);
 }
 
-/** 在当前播放列表中上/下一首；随机模式：上一曲压栈当前曲并弹历史，下一曲优先按栈弹回（先入后出），栈空才随机 */
+/** 在当前播放列表中上/下一首；随机模式：上一曲压栈当前曲并弹历史，下一曲优先按栈弹回（先入后出），栈空才随机。
+ * 单曲循环 / 顺序：手动上/下一首仍按队列顺序走（循环只影响「自然播完」）。 */
 export function step(delta: number) {
   if (usesNativeAudio()) { ensureAudio(); void nativeAudio!.command(delta > 0 ? 'next' : 'previous').catch(() => {}); return; }
-  if (player.shuffle) {
+  if (player.mode === 'random') {
     if (delta > 0) {
       const nxt = player.shuffleRedo.pop();
       if (nxt != null && nxt >= 0 && nxt < player.playlist.length && nxt !== player.pos) {
@@ -613,6 +689,8 @@ type SessionSnapshot = {
   cur: number; // 当前项下标（-1 = 无当前项）
   t: number; // 当前曲目进度（秒）
   shuffle: boolean;
+  /** 三态播放模式；旧快照只有 shuffle 布尔值 */
+  mode?: PlayMode;
   skipSame: boolean;
   dedup: boolean;
   rate: number;
@@ -627,7 +705,8 @@ function collectSnapshot(): SessionSnapshot | null {
     queue: JSON.parse(JSON.stringify(player.playlist)),
     cur: player.pos,
     t: a && Number.isFinite(a.currentTime) ? a.currentTime : 0,
-    shuffle: player.shuffle,
+    shuffle: player.mode === 'random',
+    mode: player.mode,
     skipSame: player.shuffleSkipSameTitle,
     dedup: player.dedupByName,
     rate: player.playbackRate,
@@ -761,7 +840,8 @@ export function initSession() {
       player.playedTitles = Array.isArray(snap.played) ? snap.played.filter(x => typeof x === 'string') : [];
       player.track = tracks[cur] ?? null;
       player.pos = cur;
-      player.shuffle = !!snap.shuffle;
+      player.mode = isPlayMode(snap.mode) ? snap.mode : snap.shuffle ? 'random' : 'sequential';
+      player.shuffle = player.mode === 'random';
       player.shuffleSkipSameTitle = snap.skipSame !== false;
       player.dedupByName = snap.dedup !== false;
       if (Number.isFinite(snap.rate) && snap.rate > 0) player.playbackRate = clampRate(snap.rate);
@@ -929,8 +1009,11 @@ export function adjustSleepEnd(remainingSeconds: number) {
 /** Seek the curve phase while preserving the selected total duration. */
 export function seekSleepProgress(progress: number) {
   if (sleep.until == null || !Number.isFinite(progress)) return;
-  const t = Math.max(0, Math.min(1, progress));
-  const now = Date.now(), duration = sleep.plannedSeconds * 1000;
+  const duration = sleep.plannedSeconds * 1000;
+  if (!(duration > 0)) return;
+  // 拖动最多只能到剩 1 分钟：手一滑不应该直接把整晚的音乐停掉。
+  const t = Math.max(0, Math.min(sleepSeekLimit(sleep.plannedSeconds), progress));
+  const now = Date.now();
   sleep.started = now - t * duration;
   sleep.until = sleep.started + duration;
   syncSleep(now, true);
@@ -976,6 +1059,18 @@ export function onTrackEnded() {
   }
   if (sleep.afterTrack) {
     stopForSleep();
+    return;
+  }
+  if (player.mode === 'repeat-one' && player.track) {
+    // 自然播完的单曲循环：回到开头重播（手动上/下一首不受影响）
+    if (usesNativeAudio()) return; // 原生侧按 repeatOne 标志自行重播
+    const a = getAudio();
+    try {
+      a.currentTime = 0;
+    } catch {
+      /* 少数 UA 在 ended 后拒绝写进度；play() 仍会从头开始 */
+    }
+    a.play().catch(() => {});
     return;
   }
   step(1);

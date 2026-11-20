@@ -16,6 +16,12 @@
 		504EC3121FED79650016851F /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 504EC3101FED79650016851F /* LaunchScreen.storyboard */; };
 		50B271D11FEDC1A000F3C39B /* public in Resources */ = {isa = PBXBuildFile; fileRef = 50B271D01FEDC1A000F3C39B /* public */; };
 		9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9582B6822FE993A50072D4E8 /* SceneDelegate.swift */; };
+		A70C00022F10000000C0FF02 /* AnyunCacheConstants.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00012F10000000C0FF01 /* AnyunCacheConstants.swift */; };
+		A70C00032F10000000C0FF04 /* AnyunDiskCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00022F10000000C0FF03 /* AnyunDiskCache.swift */; };
+		A70C00042F10000000C0FF06 /* AnyunCacheNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00032F10000000C0FF05 /* AnyunCacheNetwork.swift */; };
+		A70C00052F10000000C0FF08 /* AnyunCacheSchemeHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00042F10000000C0FF07 /* AnyunCacheSchemeHandler.swift */; };
+		A70C00062F10000000C0FF0A /* AnyunCachePlugin.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00052F10000000C0FF09 /* AnyunCachePlugin.swift */; };
+		A70C00072F10000000C0FF0C /* AnyunBridgeViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A70C00062F10000000C0FF0B /* AnyunBridgeViewController.swift */; };
 AB0011111111111111111111 /* NativePlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0022222222222222222222; };
 AB0033333333333333333333 /* NativeLyrics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0044444444444444444444; };
 AB0077777777777777777777 /* NativeRetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0088888888888888888888; };
@@ -33,6 +39,12 @@ AB0055555555555555555555 /* NativeSleep.swift in Sources */ = {isa = PBXBuildFil
 		504EC3131FED79650016851F /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		50B271D01FEDC1A000F3C39B /* public */ = {isa = PBXFileReference; lastKnownFileType = folder; path = public; sourceTree = "<group>"; };
 		9582B6822FE993A50072D4E8 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
+		A70C00012F10000000C0FF01 /* AnyunCacheConstants.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunCacheConstants.swift; sourceTree = "<group>"; };
+		A70C00022F10000000C0FF03 /* AnyunDiskCache.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunDiskCache.swift; sourceTree = "<group>"; };
+		A70C00032F10000000C0FF05 /* AnyunCacheNetwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunCacheNetwork.swift; sourceTree = "<group>"; };
+		A70C00042F10000000C0FF07 /* AnyunCacheSchemeHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunCacheSchemeHandler.swift; sourceTree = "<group>"; };
+		A70C00052F10000000C0FF09 /* AnyunCachePlugin.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunCachePlugin.swift; sourceTree = "<group>"; };
+		A70C00062F10000000C0FF0B /* AnyunBridgeViewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnyunBridgeViewController.swift; sourceTree = "<group>"; };
 		958DCC722DB07C7200EA8C5F /* debug.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = debug.xcconfig; path = ../debug.xcconfig; sourceTree = SOURCE_ROOT; };
 AB0022222222222222222222 /* NativePlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayback.swift; sourceTree = "<group>"; };
 AB0044444444444444444444 /* NativeLyrics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeLyrics.swift; sourceTree = "<group>"; };
@@ -73,6 +85,12 @@ AB0066666666666666666666 /* NativeSleep.swift */ = {isa = PBXFileReference; last
 			isa = PBXGroup;
 			children = (
 				9582B6822FE993A50072D4E8 /* SceneDelegate.swift */,
+				A70C00012F10000000C0FF01 /* AnyunCacheConstants.swift */,
+				A70C00022F10000000C0FF03 /* AnyunDiskCache.swift */,
+				A70C00032F10000000C0FF05 /* AnyunCacheNetwork.swift */,
+				A70C00042F10000000C0FF07 /* AnyunCacheSchemeHandler.swift */,
+				A70C00052F10000000C0FF09 /* AnyunCachePlugin.swift */,
+				A70C00062F10000000C0FF0B /* AnyunBridgeViewController.swift */,
  AB0022222222222222222222 /* NativePlayback.swift */,
  AB0044444444444444444444 /* NativeLyrics.swift */,
  AB0088888888888888888888 /* NativeRetry.swift */,
@@ -172,6 +190,12 @@ AB0066666666666666666666 /* NativeSleep.swift */ = {isa = PBXFileReference; last
 			files = (
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,
+				A70C00022F10000000C0FF02 /* AnyunCacheConstants.swift in Sources */,
+				A70C00032F10000000C0FF04 /* AnyunDiskCache.swift in Sources */,
+				A70C00042F10000000C0FF06 /* AnyunCacheNetwork.swift in Sources */,
+				A70C00052F10000000C0FF08 /* AnyunCacheSchemeHandler.swift in Sources */,
+				A70C00062F10000000C0FF0A /* AnyunCachePlugin.swift in Sources */,
+				A70C00072F10000000C0FF0C /* AnyunBridgeViewController.swift in Sources */,
  AB0011111111111111111111 /* NativePlayback.swift in Sources */,
  AB0033333333333333333333 /* NativeLyrics.swift in Sources */,
  AB0077777777777777777777 /* NativeRetry.swift in Sources */,

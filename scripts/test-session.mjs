@@ -17,6 +17,8 @@ let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[];
 class NativeStub extends EventTarget {
   constructor(config,update){super();this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
   refresh(){return Promise.resolve();} sync(){nativeSyncs.push(structuredClone(this.config()));return Promise.resolve();}
+  // Media-element surface used by clearQueue/stopCurrent (the real adapter has the same three).
+  pause(){this.paused=true;} load(){} removeAttribute(){}
 }
 const stubbed = ViteNodeRunner.prototype.dependencyRequest;
 ViteNodeRunner.prototype.dependencyRequest = function(id,fsPath,callstack) {

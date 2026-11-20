@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, SLEEP_MODES, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
+import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, sleepSeekProgress, sleepSeekLimit, sleepTrackHit, SLEEP_MODES, SLEEP_TRACK_HALF_WIDTH, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
 import { SleepAudio } from '../src/lib/sleep-audio.ts';
 let checks = 0;
 function ok(value, message) { assert.ok(value, message); checks++; }
@@ -20,6 +20,41 @@ ok(sleepGain('companion', 0.25) < sleepGain('gentle', 0.25), 'companion quieter 
 ok(Math.abs(sleepGain('steady', 0.5) - 10 ** (-30 / 20)) < 1e-10, 'steady is linear dB');
 ok(sleepGain('gentle', -1) === 1 && sleepGain('gentle', 2) === 0, 'clamped progress');
 ok(sleepGain('gentle', NaN) === 1 && !isSleepMode('oops'), 'invalid input safe');
+
+// —— 新增曲线：慢起加速 + 末端从仍可听清的音量直接切断（无微弱尾声）——
+// 下降"加速"要在分贝域看：线性增益越接近零压缩越强，会掩盖末段更陡的事实。
+const dbDrop = (mode, a, b) => 20 * Math.log10(sleepGain(mode, a) / sleepGain(mode, b));
+for (const id of ['cliff', 'hold', 'stair']) {
+  ok(SLEEP_MODES.some((mode) => mode.id === id), `${id}: registered`);
+  ok(sleepGain(id, 0.999) > 0.05, `${id}: still audible right before the cut`);
+  ok(sleepGain(id, 1) === 0, `${id}: jumps to silence at the deadline`);
+}
+ok(sleepGain('cliff', 0.2) > 0.97, 'cliff barely drops at the start');
+ok(sleepGain('cliff', 0.25) > sleepGain('gentle', 0.25), 'cliff holds louder than gentle early');
+ok(dbDrop('cliff', 0, 0.25) < dbDrop('cliff', 0.5, 0.75), 'cliff accelerates as it descends');
+ok(dbDrop('cliff', 0.5, 0.75) < dbDrop('cliff', 0.75, 1 - 1e-9), 'cliff steepest at the end');
+ok(sleepGain('hold', 0.8) === 1, 'hold keeps full volume through 80%');
+ok(Math.abs(sleepGain('hold', 0.995) - 10 ** (-12 / 20)) < 1e-3, 'hold settles near -12 dB before cutting');
+ok(Math.abs(sleepGain('stair', 0.3) - sleepGain('stair', 0.45)) < 1e-12, 'stair holds each level steady');
+ok(sleepGain('stair', 0.3) < sleepGain('stair', 0.1), 'stair steps down');
+ok(sleepGain('stair', 0.8) < sleepGain('stair', 0.6) && sleepGain('stair', 0.99) > 0.05, 'stair ends audible then cuts');
+ok(sleepStage('cliff', 0.3) === '缓慢下降' && sleepStage('cliff', 0.7) === '加速下降' && sleepStage('cliff', 0.97) === '即将切断', 'cliff stages');
+ok(sleepStage('hold', 0.5) === '保持音量' && sleepStage('hold', 0.9) === '末段轻降' && sleepStage('hold', 0.99) === '即将切断', 'hold stages');
+ok(sleepStage('stair', 0.5) === '阶梯渐弱' && sleepStage('stair', 0.99) === '即将切断', 'stair stages');
+
+// —— 拖动命中区：整条竖线（不只是一个点）——
+ok(sleepTrackHit(90, 90), 'track hit on the marker line');
+ok(sleepTrackHit(90 + SLEEP_TRACK_HALF_WIDTH - 0.01, 90), 'track hit at the edge of the band');
+ok(sleepTrackHit(90 - SLEEP_TRACK_HALF_WIDTH + 0.01, 90), 'track hit on the left edge');
+ok(!sleepTrackHit(90 + SLEEP_TRACK_HALF_WIDTH + 1, 90), 'track miss beyond the band');
+ok(!sleepTrackHit(60, 90), 'track miss away from the line');
+ok(!sleepTrackHit(NaN, 90) && !sleepTrackHit(90, NaN), 'invalid pointer never hits');
+ok(sleepTrackHit(60, 90, 40), 'custom half width honoured');
+ok(SLEEP_TRACK_HALF_WIDTH * 2 >= 26, 'hit band is wider than a dot');
+ok(sleepSeekProgress(90) === 0.5 && sleepSeekProgress(-10) === 0 && sleepSeekProgress(999) === 1, 'seek progress from curve x');
+ok(sleepSeekProgress(NaN) === 0, 'invalid seek x maps to start');
+ok(sleepSeekLimit(60) === 0 && Math.abs(sleepSeekLimit(600) - 0.9) < 1e-12, 'seek limit keeps one minute');
+ok(sleepSeekLimit(0) === 0 && sleepSeekLimit(NaN) === 0, 'seek limit safe on empty timers');
 
 // Position and stage indicators share the exact geometry of the preview curve.
 for (const { id } of SLEEP_MODES) {
@@ -221,9 +256,13 @@ ok(sleep.plannedSeconds === 900 && sleep.remaining === 450, '15-minute halfway r
 ok(sleep.progress === 0.5 && sleep.until - sleep.started === 900000, 'point and time share stable duration');
 ok(Math.abs(curves.at(-1).values[0] - sleepGain('gentle', 0.5)) < 1e-6, 'audio uses exact dot phase');
 seekSleepProgress(0.95);
-ok(sleep.remaining === 45 && sleep.progress === 0.95, 'quiet end is 95 percent, no minute floor');
+ok(sleep.remaining === MIN_SLEEP_SECONDS && Math.abs(sleep.progress - (1 - MIN_SLEEP_SECONDS / 900)) < 1e-9, 'drag stops at the one-minute floor');
 seekSleepProgress(0.25);
 ok(sleep.remaining === 675 && sleep.progress === 0.25, 'backwards seek restores earlier phase');
 seekSleepProgress(1);
-ok(sleep.until === null && sleep.fired, 'endpoint stops timer');
+ok(sleep.until !== null && !sleep.fired && sleep.remaining === MIN_SLEEP_SECONDS, 'dragging to the end still leaves a minute (stop = cancel button)');
+seekSleepProgress(NaN);
+ok(sleep.until !== null && sleep.remaining === MIN_SLEEP_SECONDS, 'invalid seek input leaves the timer untouched');
+cancelSleep();
+ok(sleep.until === null, 'cancel clears the dragged timer');
 console.log(`sleep: ${checks} checks passed`);

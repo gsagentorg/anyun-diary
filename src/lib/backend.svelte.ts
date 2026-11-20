@@ -3,6 +3,7 @@ import { env } from '$env/dynamic/public';
 import type { Audio } from './types';
 import { createMonthSupply } from './supply.js';
 import { monthIdAt, subtractCalendarMonths } from './month.js';
+import { nativeFetchJSON } from './native-cache';
 export interface MonthRef { id:string; startAt:number; endAt:number; count:number; revision:string; key:string; available:boolean }
 export interface Manifest { queryMonthLimit?:number; schemaVersion:2; timezone:string; generatedAt:number; revision:string; months:MonthRef[] }
 const KEY='anyun-backend-v1';
@@ -17,7 +18,16 @@ export function inspectMonthCache(){return {cachedMonths:Object.keys(backend.mon
 const requests=new Set<AbortController>();
 const inflight=new Map<string,Promise<Audio[]>>();
 let supply=createSupply();
-function createSupply(){return createMonthSupply({maxCachedMonths:MAX_CACHED_MONTHS,manifestUrl:'/api/catalog',monthUrl:(entry:{id:string},manifest:Manifest)=>'/api/month/'+encodeURIComponent(entry.id)+'?release='+encodeURIComponent(manifest.revision),fetch:(url:RequestInfo|URL,options?:RequestInit)=>fetch(apiBase()+url,{...options,cache:String(url).startsWith('/api/month/')?'default':'no-store'})});}
+function createSupply(){return createMonthSupply({maxCachedMonths:MAX_CACHED_MONTHS,manifestUrl:'/api/catalog',monthUrl:(entry:{id:string},manifest:Manifest)=>'/api/month/'+encodeURIComponent(entry.id)+'?release='+encodeURIComponent(manifest.revision),fetch:catalogFetch});}
+/** Catalog JSON goes through the native disk cache inside the App (offline warm start); web uses plain fetch. */
+async function catalogFetch(url:RequestInfo|URL,options?:RequestInit):Promise<Response>{
+ const target=String(url),absolute=apiBase()+target;
+ if(isNativeApp()&&(target.startsWith('/api/catalog')||target.startsWith('/api/month/'))){
+  const cached=await nativeFetchJSON(absolute).catch(()=>null);
+  if(cached&&cached.data!=null)return new Response(JSON.stringify(cached.data),{status:200,headers:{'content-type':'application/json','x-anyun-cache':cached.source??'cache'}});
+ }
+ return fetch(absolute,{...options,cache:target.startsWith('/api/month/')?'default':'no-store'});
+}
 export function isNativeApp(){return typeof window!=='undefined'&&Capacitor.isNativePlatform();}
 export function apiBase(){return isNativeApp()?backend.base:'';}
 export function requestController(){const c=new AbortController();requests.add(c);return c;}

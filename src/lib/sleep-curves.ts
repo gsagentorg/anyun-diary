@@ -4,6 +4,9 @@ export const SLEEP_MODES = [
   { id: 'steady', label: '匀速渐隐', description: '全程按相同分贝速度，稳定地变轻。' },
   { id: 'companion', label: '轻声陪伴', description: '前段降到轻声，留下较长的微弱尾声。' },
   { id: 'late', label: '先听后睡', description: '前 2/3 时间正常听，最后 1/3 柔和渐隐。' },
+  { id: 'cliff', label: '长听快断', description: '开始几乎不降，随后逐渐加速下降，最后从仍能听清的音量直接切断。' },
+  { id: 'hold', label: '平稳后切', description: '绝大部分时间保持原音量，末端小幅下降后干脆切断。' },
+  { id: 'stair', label: '阶梯渐弱', description: '分四级稳定下降，每级都保持可听清的音量，最后切断。' },
   { id: 'off', label: '到时停止（不渐弱）', description: '保持原音量，到时间直接暂停。' },
 ] as const;
 export type SleepMode = (typeof SLEEP_MODES)[number]['id'];
@@ -11,6 +14,19 @@ export function isSleepMode(value: unknown): value is SleepMode {
   return SLEEP_MODES.some((mode) => mode.id === value);
 }
 const smooth = (x: number) => x * x * (3 - 2 * x);
+/** Modes that end on a hard cut: they hold a still-audible level, then jump to silence.
+ * Rationale: a barely-audible tail is more tiring than a clean stop, so these skip the
+ * -60 dB whisper and the final 2% taper used by the gradual modes. */
+const CUT_MODES: ReadonlySet<SleepMode> = new Set(['cliff', 'hold', 'stair']);
+/** Four stable steps (0, -6, -12, -18 dB); each step holds, then crossfades in 10% of its slot. */
+function stairDepth(t: number): number {
+  const levels = [0, 0.1, 0.2, 0.3];
+  const index = Math.min(3, Math.floor(t / 0.25));
+  const local = (t - index * 0.25) / 0.25;
+  const from = levels[index];
+  const to = levels[Math.min(3, index + 1)];
+  return from + (to - from) * smooth(Math.max(0, Math.min(1, (local - 0.9) / 0.1)));
+}
 export function sleepGain(mode: SleepMode, progress: number): number {
   const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
   if (mode === 'off') return 1;
@@ -21,8 +37,15 @@ export function sleepGain(mode: SleepMode, progress: number): number {
     // Reach -18 dB at 25%, then spend the rest of the time fading the quiet tail.
     depth = t < 0.25 ? 0.3 * smooth(t / 0.25) : 0.3 + 0.7 * smooth((t - 0.25) / 0.75);
   } else if (mode === 'late') depth = smooth(Math.max(0, (t - 2 / 3) * 3));
+  // Slow start, accelerating descent: ~-1.8 dB at the midpoint, -14.4 dB right before the cut.
+  else if (mode === 'cliff') depth = 0.24 * t * t * t;
+  // Hold the original level for 82% of the window, then settle to -12 dB and cut.
+  else if (mode === 'hold') depth = t < 0.82 ? 0 : 0.2 * smooth(Math.min(1, (t - 0.82) / 0.15));
+  else if (mode === 'stair') depth = stairDepth(t);
   else depth = smooth(t);
   const gain = Math.pow(10, (-60 * depth) / 20);
+  // Cut modes jump from their last audible level straight to zero at the deadline.
+  if (CUT_MODES.has(mode)) return gain;
   // The last 2% closes the -60 dB tail to true zero, not an abrupt tiny step.
   return gain * (t > 0.98 ? 1 - smooth((t - 0.98) / 0.02) : 1);
 }
@@ -40,8 +63,39 @@ export function sleepCurvePath(mode: SleepMode): string {
   }).join(' ');
 }
 
-/** Curve width in the shared SVG viewBox. */
-export const SLEEP_AXIS_WIDTH = 180;
+/** Curve plot width in the shared 188-wide viewBox. */
+export const SLEEP_CURVE_WIDTH = 180;
+/** Curve width in the shared SVG viewBox (legacy alias used by the handle helpers). */
+export const SLEEP_AXIS_WIDTH = SLEEP_CURVE_WIDTH;
+/**
+ * Half-width of the drag track in viewBox units. The whole vertical line is the hit area
+ * (≈44 px tall × ≈26 px wide in viewBox units; ≈42 px wide on a phone), because a
+ * dot-sized target is unreliable on iOS.
+ */
+export const SLEEP_TRACK_HALF_WIDTH = 13;
+/** Minimum remaining time so a drag near the right edge cannot stop playback instantly.
+ * Literal rather than `MIN_SLEEP_SECONDS` to keep module-init order independent. */
+export const SLEEP_MIN_REMAINING_SECONDS = 60;
+
+/** Clamp a point on the curve axis to the plotted range. */
+export function clampCurveX(x: number): number {
+  return Number.isFinite(x) ? Math.max(0, Math.min(SLEEP_CURVE_WIDTH, x)) : 0;
+}
+/** Curve x coordinate to fade progress (0 = start, 1 = deadline). */
+export function sleepSeekProgress(x: number): number {
+  return clampCurveX(x) / SLEEP_CURVE_WIDTH;
+}
+/** Hit test for the drag track: the full vertical line, not just the marker dot. */
+export function sleepTrackHit(pointerX: number, handleX: number, halfWidth = SLEEP_TRACK_HALF_WIDTH): boolean {
+  if (!Number.isFinite(pointerX) || !Number.isFinite(handleX)) return false;
+  const half = Number.isFinite(halfWidth) && halfWidth > 0 ? halfWidth : SLEEP_TRACK_HALF_WIDTH;
+  return Math.abs(pointerX - handleX) <= half;
+}
+/** Progress a drag may reach without dropping below the minimum remaining time. */
+export function sleepSeekLimit(plannedSeconds: number): number {
+  if (!Number.isFinite(plannedSeconds) || plannedSeconds <= 0) return 0;
+  return Math.max(0, 1 - Math.min(plannedSeconds, SLEEP_MIN_REMAINING_SECONDS) / plannedSeconds);
+}
 /** A dragged end may never shorten the timer below one minute. */
 export const MIN_SLEEP_SECONDS = 60;
 export const MIN_SLEEP_MINUTES = 1;
@@ -74,6 +128,10 @@ export function sleepStage(mode: SleepMode, progress: number): string {
   if (t >= 1) return '已结束';
   if (mode === 'off') return '保持音量';
   if (mode === 'late' && t < 2 / 3) return '保持音量';
+  // Cut modes announce the jump instead of the whisper tail.
+  if (mode === 'cliff') return t >= 0.94 ? '即将切断' : t < 0.55 ? '缓慢下降' : '加速下降';
+  if (mode === 'hold') return t < 0.82 ? '保持音量' : t >= 0.96 ? '即将切断' : '末段轻降';
+  if (mode === 'stair') return t >= 0.96 ? '即将切断' : '阶梯渐弱';
   if (t >= 0.98) return '即将停止';
   if (mode === 'companion') return t < 0.25 ? '降至轻声' : '轻声尾段';
   if (t >= 0.8) return '轻声尾段';

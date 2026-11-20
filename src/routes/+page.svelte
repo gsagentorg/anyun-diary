@@ -2,11 +2,12 @@
 import {onMount,untrack,tick} from 'svelte';
 import {page} from '$app/state';
 import {player,setPlayerCatalog} from '$lib/player.svelte.ts';
-import {backend,initBackend,fetchIndex,loadMonth,currentMonthId,isNativeApp} from '$lib/backend.svelte';
+import {backend,initBackend,fetchIndex,recoverCatalog,loadMonth,currentMonthId,isNativeApp} from '$lib/backend.svelte';
 import {browseWindow} from '$lib/supply.js';
 import {theme,toggleTheme} from '$lib/theme.svelte.ts';
 import * as publicEnv from '$env/static/public';
 import Chip from '$lib/components/Chip.svelte';
+import RefreshMenu from '$lib/components/RefreshMenu.svelte';
 import BrandImage from '$lib/components/BrandImage.svelte';
 import { brandSrc } from '$lib/brand-runtime';
 import ContinuousBrowse from '$lib/ContinuousBrowse.svelte';
@@ -46,7 +47,13 @@ onMount(()=>{
  try{const v=JSON.parse(localStorage.getItem('anyun-view-v1')??'{}');if(Number.isInteger(v.view)&&v.view>=0&&v.view<3)view=v.view;if(typeof v.plOpen==='boolean')playlistOpen=v.plOpen;rangeFrom=typeof v.rangeFrom==='string'?v.rangeFrom:'';rangeTo=typeof v.rangeTo==='string'?v.rangeTo:'';}catch{}
  const from=page.url.searchParams.get('from')??'',to=page.url.searchParams.get('to')??'';
  if(/^\d{4}-\d{2}-\d{2}$/.test(from)&&/^\d{4}-\d{2}-\d{2}$/.test(to)&&from<=to){rangeFrom=from;rangeTo=to;}
- ready=true;initBackend();const refresh=()=>{if(document.visibilityState==='hidden')return;endAt=Math.floor(Date.now()/1000)+1;selected=currentMonthId();void fetchIndex();};const timer=setInterval(refresh,30000);document.addEventListener('visibilitychange',refresh);window.addEventListener('pageshow',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);window.removeEventListener('pageshow',refresh);};
+ ready=true;initBackend();
+ const bump=()=>{endAt=Math.floor(Date.now()/1000)+1;selected=currentMonthId();};
+ // 常规 30s 心跳：普通 fetchIndex，健康在途请求不会被强制取消（backend 内部按期限去重/退休）。
+ const refresh=()=>{if(document.visibilityState==='hidden')return;bump();void fetchIndex();};
+ // 回前台/外联恢复：走合并恢复入口，挂死的残留请求可被退休并重新发起。
+ const onLifecycle=()=>{if(document.visibilityState==='hidden')return;bump();recoverCatalog();};
+ const timer=setInterval(refresh,30000);document.addEventListener('visibilitychange',onLifecycle);window.addEventListener('pageshow',onLifecycle);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',onLifecycle);window.removeEventListener('pageshow',onLifecycle);};
 });
 $effect(()=>{if(ready)try{localStorage.setItem('anyun-view-v1',JSON.stringify({view,plOpen:playlistOpen,rangeFrom,rangeTo}));}catch{}});
 $effect(()=>{const snapshot=Object.values(backend.months).flat();untrack(()=>setPlayerCatalog(snapshot));});
@@ -120,6 +127,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
             </button>
           {/each}
         </div>
+        <RefreshMenu />
         <button
           class="rounded-full border border-base-300 p-1.5 transition hover:border-accent"
           onclick={() => (searchOpen = true)}
@@ -226,7 +234,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {:else}<button class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm" onclick={()=>playlistOpen=true}><span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4"/> 播放列表</span><span class="text-xs opacity-60">展开</span></button>{/if}
 </div></div>
 {#if player.error&&!player.track}<p role="alert" class="text-xs text-warning">{player.error}</p>{/if}
-{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>void fetchIndex()}>重试目录</button></p>{:else if !backend.manifest}<BrowseSkeleton/>{/if}
+{#if backend.error}<p role="alert">{backend.error} <button onclick={()=>recoverCatalog({force:true})}>重试目录</button></p>{:else if !backend.manifest}<BrowseSkeleton/>{/if}
 {#if backend.manifest}
 {#if view===2&&months.length&&!Object.keys(backend.summaries).length}
 {#if backend.errors[months[0].id]}<p role="alert">{backend.errors[months[0].id]} <button onclick={()=>void loadMonth(months[0].id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label="正在加载热力数据…"/>{/if}

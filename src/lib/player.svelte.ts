@@ -67,8 +67,9 @@ function applyNativeState(state: NativeState) {
     }
     player.history = state.history; player.shuffleRedo = state.redo; player.playedTitles = state.played;
     player.shuffle = state.shuffle; player.shuffleSkipSameTitle = state.skipSame;
-    // The native side only carries the random flag; repeat-one is kept as-is until it is sent back.
+    // Native owns its persisted mode; older bridges without repeatOne keep the prior non-random mode.
     if (state.shuffle) player.mode = 'random';
+    else if (typeof state.repeatOne === 'boolean') player.mode = state.repeatOne ? 'repeat-one' : 'sequential';
     else if (player.mode === 'random') player.mode = 'sequential';
     player.playbackRate = state.rate; player.playing = state.playing; player.loading = state.loading;
     player.error = state.error;

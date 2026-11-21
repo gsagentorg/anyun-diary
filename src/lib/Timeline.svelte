@@ -1,7 +1,15 @@
 <script lang="ts">
-  import {loadMonth} from './backend.svelte';
+  import {loadMonth,backend} from './backend.svelte';
+  import {onDestroy} from 'svelte';
+  import {createLatestOperation} from './interactions.js';
+  import {createOfflineAvailability,offlineRowHint,resolveBrowseAudios} from './offline-availability';
+  const availability=createOfflineAvailability();
+  const playbackOperation=createLatestOperation();
+  onDestroy(()=>playbackOperation.cancel());
+  $effect(()=>{void backend.generation;void backend.base;playbackOperation.cancel();});
+  $effect(()=>availability.setTargets(laneWidth>0?visibleLanes.flatMap(lane=>lane.audios.map(audio=>audioUrl(audio.opus))):[],backend.generation+':'+backend.base));
   import type { Audio } from './types';
-  import { fmtDur, dateCard, hueOf } from './types';
+  import { fmtDur, dateCard, hueOf, audioUrl } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playAudio, adopt, makeTrack } from './player.svelte.ts';
   import { buildLaneScale, lstarForRange, lstarToRgb, layoutSongs } from './lane-scale';
@@ -83,7 +91,7 @@
     const c = b.audio;
     tip = {
       x: e.clientX, y: e.clientY,
-      html: `${c.title || '（未识别）'} · ${clock(b.start)}–${clock(b.end)} · ${fmtDur(b.end - b.start)}`,
+      html: `${c.title || '（未识别）'} · ${clock(b.start)}–${clock(b.end)} · ${fmtDur(b.end - b.start)}${offlineRowHint($availability,audioUrl(c.opus))?' · '+offlineRowHint($availability,audioUrl(c.opus)):''}`,
     };
   }
   function showBlank(e: MouseEvent, s: Seg) {
@@ -92,12 +100,15 @@
       html: '空 ' + fmtDur(s.minutes * 60) + ' · 压至 1/' + Math.round(s.c ?? 1),
     };
   }
-  async function playSong(b: SongBlock) {
-    const full=await loadMonth(b.audio.monthId);playAudio(full.find(a=>a.id===b.audio.id)??b.audio);
+  async function resolveAndPlay(songs:Audio[],replace=false) {
+    const context=backend.generation+':'+backend.base;
+    try {
+      await playbackOperation.run((signal:AbortSignal)=>resolveBrowseAudios(songs,loadMonth,{signal,isCurrent:()=>context===backend.generation+':'+backend.base}),
+        (full:Audio[])=>{if(replace)adopt(full.map(makeTrack),0);else if(full[0])playAudio(full[0]);});
+    } catch(error) { if((error as Error)?.name!=='AbortError')throw error; }
   }
-  async function playDay(lane: typeof lanes[number]) {
-    const full=await loadMonth(lane.audios[0].monthId);adopt(lane.audios.map(audio=>makeTrack(full.find(a=>a.id===audio.id)??audio)), 0);
-  }
+  function playSong(b:SongBlock){return resolveAndPlay([b.audio]);}
+  function playDay(lane:typeof lanes[number]){return resolveAndPlay(lane.audios,true);}
 
   const xPct = (abs: number, dayStart: number) =>
     Math.min(100, Math.max(0, ((abs - dayStart) / DAY) * 100));
@@ -199,10 +210,16 @@
               {@const x2 = xPct(b.end, lane.dayStart)}
               {@const hue = hueOf(b.audio.title)}
               {@const active = player.track?.audio.id === b.audio.id}
+              {@const stableUrl=audioUrl(b.audio.opus)}
+              {@const offlineHint=offlineRowHint($availability,stableUrl)}
               <div
                 class="absolute top-2.5 h-5 rounded-sm transition hover:brightness-110"
                 class:ring-2={active}
                 class:ring-accent={active}
+                class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'}
+                data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')}
+                aria-label={(b.audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')}
+                title={(b.audio.title||'（未识别）')+(offlineHint?' · '+offlineHint:'')}
                 style:left={x1 + '%'}; style:width={Math.max(x2 - x1, 0.15) + '%'}
                 style:background="hsl({hue} var(--color-song-hue-sat) var(--color-song-hue-light))"
                 role="button" tabindex="0"
@@ -249,8 +266,14 @@
                 {@const visLeft = rect.left}
                 {@const hue = hueOf(b.audio.title)}
                 {@const active = player.track?.audio.id === b.audio.id}
+                {@const stableUrl=audioUrl(b.audio.opus)}
+                {@const offlineHint=offlineRowHint($availability,stableUrl)}
                 <div
                   class="absolute top-0 h-12 cursor-pointer"
+                  class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'}
+                  data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')}
+                  aria-label={(b.audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')}
+                  title={(b.audio.title||'（未识别）')+(offlineHint?' · '+offlineHint:'')}
                   style:left={visLeft - HIT_PAD + 'px'} style:width={visW + HIT_PAD * 2 + 'px'}
                   role="button" tabindex="0"
                   onclick={() => playSong(b)}
@@ -293,3 +316,6 @@
     {tip.html}
   </div>
 {/if}
+<style>
+  .offline-missing { opacity: 0.55; }
+</style>

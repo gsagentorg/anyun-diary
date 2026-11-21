@@ -85,6 +85,12 @@ assert.equal(m.player.track.audio.id,'native-owned','native queue wins over both
 assert.equal(m.player.playing,true);assert.equal(m.sleep.until,nativeState.sleepUntil);
 assert.deepEqual(m.player.history,[0]);assert.deepEqual(m.player.shuffleRedo,[0]);
 assert.equal(store.get('anyun-session-v2'),migrated);
+nativeUpdate({...nativeState,shuffle:false,repeatOne:true});
+assert.equal(m.player.mode,'repeat-one','native cold restoration retains repeat-one instead of replacing it with sequential');
+nativeUpdate({...nativeState,shuffle:false,repeatOne:false});
+assert.equal(m.player.mode,'sequential','native sequential snapshot clears stale repeat-one UI');
+nativeUpdate({...nativeState,shuffle:true,repeatOne:false});
+assert.equal(m.player.mode,'random','native random snapshot wins over non-random flags');
 // Real old Swift state: no audio snapshot and duplicate ids; snapshot() strips lyrics.
 const oldItem={id:'duplicate',url:'https://audio.example/legacy.opus',title:'Legacy song',key:'Legacy song',clipDuration:91};
 nativeState={...nativeState,queue:[oldItem,{...oldItem}],pos:1,playing:false,loading:false,position:43};

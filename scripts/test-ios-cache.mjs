@@ -79,7 +79,7 @@ ok(core.includes('policyDefaultsKey = "anyun.cache.policy.v1"'), '策略持久�
 
 // 方法名：TS 列表 ⇄ Swift CAPPluginMethod(name:) 双向覆盖
 const tsMethods = [...tsSource.matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]);
-const declared = ['configure', 'stats', 'clear', 'setPolicy', 'fetchJSON'];
+const declared = ['configure', 'stats', 'clear', 'setPolicy', 'fetchJSON', 'mediaStatus'];
 const swiftMethods = [...plugin.matchAll(/CAPPluginMethod\(name: "([a-zA-Z]+)"/g)].map((m) => m[1]);
 eq([...swiftMethods].sort().join(','), [...declared].sort().join(','), 'Swift 暴露的方法集合与契约一致');
 for (const name of declared) {
@@ -159,7 +159,9 @@ ok(disk.includes('AnyunDownloadOutcome') && disk.includes('case transient'), '�
 ok(disk.includes('skippedKeys.contains(key)') && disk.includes('AnyunCacheOversizeError.oversize'), '超限后不再反复下载');
 ok(disk.includes('epoch += 1') && disk.includes('.task.cancel()'), 'clear 推进 epoch 并取消在途，不复活');
 ok(disk.includes('releaseDataSlot') && disk.includes('releaseFileSlot'), '槽位由 worker 按 id 释放（旧任务不释放新槽）');
-ok(!/onCancel:[\s\S]{0,80}worker\.cancel/.test(disk), '订阅者取消不杀共享 worker（旧缺陷已修）');
+const sharedDataDownload = disk.slice(disk.indexOf('func downloadOnce('), disk.indexOf('private func commitData('));
+ok(!/onCancel:[\s\S]{0,80}worker\.cancel/.test(sharedDataDownload), 'scheme 共享 data worker：订阅者取消不杀其他订阅（旧缺陷已修）');
+ok(disk.includes('onCancel: { worker.cancel() }'), '当前曲 SWR 私有订阅取消会终止文件 worker');
 ok(disk.includes('requireExisting: true') && handler.includes('revalidateMedia(key: key, original: entry, response: response)'), '后台 revalidate 不复活已清条目');
 ok(disk.includes('actual == file.bytes') && disk.includes('incompleteFile'), '提交前校验真实字节数，残片不当完整');
 ok(network.includes('func downloadFile(') && network.includes('expectedContentLength'), '流式下载有 Content-Length 预检');

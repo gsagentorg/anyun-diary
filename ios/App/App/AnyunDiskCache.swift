@@ -22,6 +22,7 @@
 
 import Foundation
 import CryptoKit
+import Darwin
 
 /// 原始 URL 的 SHA-256（十六进制小写）。插件、播放层与 scheme handler 必须用同一个键。
 /// 播放层的键源永远是**稳定源 URL**（队列里的 https 地址）；签名目标只存在于单次内存下载
@@ -192,6 +193,20 @@ actor AnyunDiskCache {
     /// 有界（最多128）超限键记忆；瞬时网络错误不进入此集合。
     /// clear（media/all）会清空该集合，允许策略调整或用户再次清除后重新尝试。
     private var skippedKeys: Set<String> = []
+    private var mediaRefreshOwners: [String: UUID] = [:]
+    private var mediaRefreshAttempts: [String: Double] = [:]
+    static let mediaRefreshCooldown: TimeInterval = 60
+
+    // Actor-local memo is never authoritative without a fresh open/stat/read.
+    private struct MediaProbeMemo {
+        let entry: AnyunCacheEntry
+        let fingerprint: AnyunMediaFileValidation.Fingerprint
+        let complete: Bool
+    }
+    static let mediaProbeMemoLimit = 4096
+    private var mediaProbeMemos: [String: MediaProbeMemo] = [:]
+    private var mediaProbeMemoOrder: [String] = []
+    private var mediaProbeValidationCount = 0
 
     init(
         directoryName: String = AnyunCacheConstants.cacheDirectoryName,
@@ -236,6 +251,70 @@ actor AnyunDiskCache {
         return AnyunPlaybackLookup(url: link, mediaEpoch: mediaEpoch)
     }
 
+    /// Pure read, including cold start: no index repair/sweep, LRU, lease or network.
+    /// Definite absence/invalid content is false; transient IO throws for bridge unknown.
+    func mediaStatus(urls: [String]) throws -> [Bool] {
+        guard urls.count <= 100, urls.allSatisfy(AnyunPlaybackCache.isStableMediaSource) else { throw AnyunCacheError.badURL }
+        if urls.isEmpty { return [] }
+        let snapshot = try mediaProbeEntries()
+        return try urls.map { raw in
+            let key = AnyunCacheKey.hash(raw)
+            guard let entry = snapshot[key], entry.kind == .media, entry.bytes > 0 else { return false }
+            let url = layout.mediaFile(forKey: key)
+            guard let before = try AnyunMediaFileValidation.fingerprint(url) else { return false }
+            guard before.isRegular, before.size == Int64(entry.bytes) else { return false }
+            // Always open: file protection/ACL changes must not become stale cached=true.
+            let handle: FileHandle
+            do { handle = try FileHandle(forReadingFrom: url) }
+            catch {
+                if try AnyunMediaFileValidation.fingerprint(url) == nil { return false }
+                throw error
+            }
+            defer { try? handle.close() }
+            guard try AnyunMediaFileValidation.fingerprint(handle) == before else { throw AnyunDiskCacheFailure.ioFailure }
+            let complete: Bool
+            if let memo = mediaProbeMemos[key], memo.entry == entry, memo.fingerprint == before {
+                // Tiny real read detects protection/read failure after successful open too.
+                guard let byte = try handle.read(upToCount: 1), byte.count == 1 else { throw AnyunDiskCacheFailure.ioFailure }
+                complete = memo.complete
+            } else {
+                mediaProbeValidationCount += 1
+                complete = try AnyunMediaFileValidation.completeOpus(handle: handle, bytes: entry.bytes)
+            }
+            // Concurrent path/inode/content change must not publish a result for old bytes.
+            guard try AnyunMediaFileValidation.fingerprint(handle) == before,
+                  try AnyunMediaFileValidation.fingerprint(url) == before else { throw AnyunDiskCacheFailure.ioFailure }
+            if mediaProbeMemos[key] == nil {
+                if mediaProbeMemoOrder.count >= Self.mediaProbeMemoLimit {
+                    mediaProbeMemos.removeValue(forKey: mediaProbeMemoOrder.removeFirst())
+                }
+                mediaProbeMemoOrder.append(key)
+            }
+            mediaProbeMemos[key] = MediaProbeMemo(entry: entry, fingerprint: before, complete: complete)
+            return complete
+        }
+    }
+
+    /// Do not call ensureIndexLoaded: its startup repair/eviction intentionally mutates disk.
+    private func mediaProbeEntries() throws -> [String: AnyunCacheEntry] {
+        if indexLoaded { return entries }
+        let data: Data
+        do { data = try Data(contentsOf: indexPath) }
+        catch {
+            if try AnyunMediaFileValidation.fingerprint(indexPath) == nil { return [:] }
+            throw error
+        }
+        let decoded = try JSONDecoder().decode(AnyunCacheIndexFile.self, from: data)
+        var snapshot: [String: AnyunCacheEntry] = [:]
+        for entry in decoded.entries where AnyunCacheLayout.isValidKey(entry.key) { snapshot[entry.key] = entry }
+        return snapshot
+    }
+
+    /// Read-only observability; no URLs or startup maintenance.
+    func mediaProbeDiagnostics() -> (validations: Int, memoEntries: Int) {
+        return (mediaProbeValidationCount, mediaProbeMemos.count)
+    }
+
     func releasePlaybackLeases() {
         recentLeaseKeys = []
         prunePlaybackLeases()
@@ -253,7 +332,9 @@ actor AnyunDiskCache {
     func invalidate(key: String) {
         guard AnyunCacheLayout.isValidKey(key) else { return }
         entries[key] = nil
+        forgetMediaProbe(key)
         jsonRequests[key] = nil
+        mediaRefreshOwners[key] = nil
         try? FileManager.default.removeItem(at: layout.mediaFile(forKey: key))
         persistIndex()
     }
@@ -267,6 +348,11 @@ actor AnyunDiskCache {
             return nil
         }
         return entry
+    }
+
+    private func forgetMediaProbe(_ key: String) {
+        mediaProbeMemos[key] = nil
+        mediaProbeMemoOrder.removeAll { $0 == key }
     }
 
     private func rememberOversize(_ key: String) {
@@ -402,7 +488,9 @@ actor AnyunDiskCache {
             lastModified: payload.lastModified ?? previous?.lastModified,
             contentType: payload.contentType ?? previous?.contentType
         )
+        mediaRefreshOwners[key] = nil
         entries[key] = entry
+        forgetMediaProbe(key)
         jsonRequests[key] = nil // any replacement invalidates outstanding JSON validators
         evict(protecting: key)
         persistIndex()
@@ -459,6 +547,7 @@ actor AnyunDiskCache {
         entry.lastAccess = now
         entries[key] = entry
         jsonRequests[key] = nil
+        mediaRefreshOwners[key] = nil
         persistIndex()
     }
 
@@ -597,10 +686,78 @@ actor AnyunDiskCache {
         return result
     }
 
+    /// Shares the prefetch lane; called only after returning/attaching a cached lease.
+    func refreshMediaFileIfStale(
+        key: String, expectedMediaEpoch: Int, now: Double = Date().timeIntervalSince1970,
+        operation: @escaping @Sendable (AnyunCacheEntry, Int) async throws -> AnyunDownloadedFile
+    ) async throws {
+        ensureIndexLoaded()
+        try Task.checkCancellation()
+        guard expectedMediaEpoch == mediaEpoch else { throw AnyunCacheError.cancelled }
+        guard let original = validatedEntry(key: key), original.kind == .media,
+              now - original.createdAt > Double(policyProvider().mediaRevalidateSeconds),
+              now - (mediaRefreshAttempts[key] ?? -Double.infinity) >= Self.mediaRefreshCooldown else { return }
+        guard inFlightFiles[key] == nil, mediaRefreshOwners[key] == nil else { return }
+        let slotID = UUID()
+        mediaRefreshOwners[key] = slotID // ownership starts before any actor suspension
+        defer { if mediaRefreshOwners[key] == slotID { mediaRefreshOwners[key] = nil } }
+        await cancelFileDownloads(except: key)
+        try Task.checkCancellation()
+        // LRU touches during the cancellation await must not suppress a needed refresh.
+        guard expectedMediaEpoch == mediaEpoch, mediaRefreshOwners[key] == slotID, let current = entries[key],
+              current.createdAt == original.createdAt, current.bytes == original.bytes,
+              current.etag == original.etag, current.lastModified == original.lastModified,
+              inFlightFiles.isEmpty else { return }
+        let capturedEpoch = mediaEpoch
+        let budget = policyProvider().maxBytes
+        if mediaRefreshAttempts.count >= 128 { mediaRefreshAttempts.removeAll(keepingCapacity: true) }
+        mediaRefreshAttempts[key] = now
+        let worker = Task.detached(priority: .utility) { () -> AnyunCacheEntry in
+            do {
+                let file = try await operation(original, budget)
+                let entry = try await self.commitMediaRefresh(key: key, file: file, original: original, slotID: slotID, capturedEpoch: capturedEpoch)
+                await self.releaseFileSlot(key: key, slotID: slotID)
+                return entry
+            } catch {
+                await self.releaseFileSlot(key: key, slotID: slotID)
+                throw error // validated cached bytes remain on network/validation failure
+            }
+        }
+        inFlightFiles[key] = InFlightFile(id: slotID, epoch: capturedEpoch, task: worker)
+        try await withTaskCancellationHandler {
+            _ = try await worker.value
+            try Task.checkCancellation()
+        } onCancel: { worker.cancel() }
+    }
+
+    private func commitMediaRefresh(key: String, file: AnyunDownloadedFile, original: AnyunCacheEntry, slotID: UUID, capturedEpoch: Int) throws -> AnyunCacheEntry {
+        guard inFlightFiles[key]?.id == slotID, inFlightFiles[key]?.task.isCancelled == false,
+              mediaEpoch == capturedEpoch, mediaRefreshOwners[key] == slotID,
+              validatedEntry(key: key)?.kind == .media else {
+            try? FileManager.default.removeItem(at: file.fileURL)
+            throw AnyunCacheError.cancelled
+        }
+        if file.notModified {
+            guard original.etag != nil || original.lastModified != nil,
+                  let existing = entries[key],
+                  AnyunMediaFileValidation.isCompleteOpus(layout.mediaFile(forKey: key), bytes: existing.bytes) else {
+                throw AnyunCacheError.cancelled
+            }
+            var entry = entries[key]!
+            entry.createdAt = Date().timeIntervalSince1970 // only age; bytes/validators/LRU/lease unchanged
+            entries[key] = entry
+            mediaRefreshOwners[key] = nil
+            persistIndex()
+            return entry
+        }
+        return try commitFile(key: key, file: file, slotID: slotID, capturedEpoch: capturedEpoch)
+    }
+
     private func commitFile(key: String, file: AnyunDownloadedFile, slotID: UUID, capturedEpoch: Int) throws -> AnyunCacheEntry {
         let manager = FileManager.default
         let discard = { try? manager.removeItem(at: file.fileURL) }
-        guard inFlightFiles[key]?.id == slotID, mediaEpoch == capturedEpoch else {
+        guard inFlightFiles[key]?.id == slotID, mediaEpoch == capturedEpoch,
+              inFlightFiles[key]?.task.isCancelled == false, !file.notModified else {
             discard()
             throw AnyunCacheError.cancelled
         }
@@ -625,11 +782,8 @@ actor AnyunDiskCache {
         ensureDirectory()
         let target = layout.mediaFile(forKey: key)
         do {
-            // 先删旧再改名：此刻没有任何读者依赖 <key>.bin —— 播放永远读 playback/ 硬链接租约。
-            if manager.fileExists(atPath: target.path) {
-                try manager.removeItem(at: target)
-            }
-            try manager.moveItem(at: file.fileURL, to: target)
+            // Atomic replacement retains old bytes on IO failure; active lease keeps its inode.
+            guard Darwin.rename(file.fileURL.path, target.path) == 0 else { throw AnyunDiskCacheFailure.ioFailure }
         } catch {
             discard()
             throw AnyunDiskCacheFailure.ioFailure
@@ -642,11 +796,13 @@ actor AnyunDiskCache {
             bytes: actual,
             createdAt: now,
             lastAccess: now,
-            etag: file.etag ?? previous?.etag,
-            lastModified: file.lastModified ?? previous?.lastModified,
+            etag: file.etag, // a full 200 is a new representation; never retain old validators
+            lastModified: file.lastModified,
             contentType: file.contentType ?? previous?.contentType
         )
+        mediaRefreshOwners[key] = nil
         entries[key] = entry
+        forgetMediaProbe(key)
         jsonRequests[key] = nil // any replacement invalidates outstanding JSON validators
         evict(protecting: key)
         persistIndex()
@@ -661,6 +817,7 @@ actor AnyunDiskCache {
         if inFlightFiles[key]?.id == slotID {
             inFlightFiles[key] = nil
         }
+        if mediaRefreshOwners[key] == slotID { mediaRefreshOwners[key] = nil }
     }
 
     // MARK: - 清理与统计
@@ -686,10 +843,14 @@ actor AnyunDiskCache {
         }
         if touchesMedia {
             mediaEpoch += 1
+            mediaRefreshOwners.removeAll()
+            mediaRefreshAttempts.removeAll()
             for inflight in inFlightFiles.values {
                 inflight.task.cancel()
             }
             skippedKeys.removeAll()
+            mediaProbeMemos.removeAll()
+            mediaProbeMemoOrder.removeAll()
         }
 
         // 2) 删条目与文件。播放中的租约（playback/ 硬链接）不在这里动：字节由租约层
@@ -827,7 +988,9 @@ actor AnyunDiskCache {
             if total <= policy.maxBytes && count <= policy.maxEntries { break }
             try? FileManager.default.removeItem(at: fileURL(forKey: candidate.key))
             entries.removeValue(forKey: candidate.key)
+            forgetMediaProbe(candidate.key)
             jsonRequests[candidate.key] = nil
+            mediaRefreshOwners[candidate.key] = nil
             total -= candidate.bytes
             count -= 1
         }
@@ -839,51 +1002,96 @@ enum AnyunMediaFileValidation {
     static func isCompleteOpus(_ url: URL, bytes: Int) -> Bool {
         guard bytes > 0, let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
+        return (try? completeOpus(handle: handle, bytes: bytes)) ?? false
+    }
+
+    /// False is definite framing/length/CRC/EOS failure; read errors propagate to probe.
+    static func completeOpus(handle: FileHandle, bytes: Int) throws -> Bool {
+        guard bytes > 0 else { return false }
         var consumed = 0
         var first = true
         var ended = false
         var serial: Data?
         var expectedSequence: UInt32 = 0
-        do {
-            while consumed < bytes {
-                guard !ended, let headerData = try handle.read(upToCount: 27), headerData.count == 27 else { return false }
-                var header = Array(headerData)
-                guard Array(header[0..<4]) == Array("OggS".utf8), header[4] == 0 else { return false }
-                let sequence = UInt32(header[18]) | UInt32(header[19]) << 8 | UInt32(header[20]) << 16 | UInt32(header[21]) << 24
-                guard sequence == expectedSequence else { return false }
-                expectedSequence &+= 1
-                let pageSerial = Data(header[14..<18])
-                if let serial { guard serial == pageSerial else { return false } } else { serial = pageSerial }
-                let segmentCount = Int(header[26])
-                let lacing: Data
-                if segmentCount == 0 { lacing = Data() }
-                else {
-                    guard let data = try handle.read(upToCount: segmentCount), data.count == segmentCount else { return false }
-                    lacing = data
-                }
-                let length = lacing.reduce(0) { $0 + Int($1) }
-                let body: Data
-                if length == 0 { body = Data() }
-                else {
-                    guard let data = try handle.read(upToCount: length), data.count == length else { return false }
-                    body = data
-                }
-                if first {
-                    guard header[5] & 2 != 0, body.count >= 19, body.starts(with: Data("OpusHead".utf8)) else { return false }
-                    first = false
-                }
-                let storedCRC = UInt32(header[22]) | UInt32(header[23]) << 8 | UInt32(header[24]) << 16 | UInt32(header[25]) << 24
-                header.replaceSubrange(22...25, with: [0, 0, 0, 0])
-                var crc: UInt32 = 0
-                for byte in Data(header) + lacing + body {
-                    crc = (crc << 8) ^ crcTable[Int((crc >> 24) ^ UInt32(byte))]
-                }
-                guard crc == storedCRC else { return false }
-                consumed += 27 + segmentCount + length
-                ended = header[5] & 4 != 0
+        while consumed < bytes {
+            guard !ended, let headerData = try handle.read(upToCount: 27), headerData.count == 27 else { return false }
+            var header = Array(headerData)
+            guard Array(header[0..<4]) == Array("OggS".utf8), header[4] == 0 else { return false }
+            let sequence = UInt32(header[18]) | UInt32(header[19]) << 8 | UInt32(header[20]) << 16 | UInt32(header[21]) << 24
+            guard sequence == expectedSequence else { return false }
+            expectedSequence &+= 1
+            let pageSerial = Data(header[14..<18])
+            if let serial { guard serial == pageSerial else { return false } } else { serial = pageSerial }
+            let segmentCount = Int(header[26])
+            let lacing: Data
+            if segmentCount == 0 { lacing = Data() }
+            else {
+                guard let data = try handle.read(upToCount: segmentCount), data.count == segmentCount else { return false }
+                lacing = data
             }
-            return !first && ended && consumed == bytes
-        } catch { return false }
+            let length = lacing.reduce(0) { $0 + Int($1) }
+            let body: Data
+            if length == 0 { body = Data() }
+            else {
+                guard let data = try handle.read(upToCount: length), data.count == length else { return false }
+                body = data
+            }
+            if first {
+                guard header[5] & 2 != 0, body.count >= 19, body.starts(with: Data("OpusHead".utf8)) else { return false }
+                first = false
+            }
+            let storedCRC = UInt32(header[22]) | UInt32(header[23]) << 8 | UInt32(header[24]) << 16 | UInt32(header[25]) << 24
+            header.replaceSubrange(22...25, with: [0, 0, 0, 0])
+            var crc: UInt32 = 0
+            for byte in Data(header) + lacing + body {
+                crc = (crc << 8) ^ crcTable[Int((crc >> 24) ^ UInt32(byte))]
+            }
+            guard crc == storedCRC else { return false }
+            consumed += 27 + segmentCount + length
+            ended = header[5] & 4 != 0
+        }
+        return !first && ended && consumed == bytes
+    }
+
+    /// POSIX nanosecond identity/content/permission state, not rounded Foundation dates.
+    struct Fingerprint: Equatable {
+        let device: Int32
+        let inode: UInt64
+        let size: Int64
+        let modifiedSeconds: Int
+        let modifiedNanos: Int
+        let changedSeconds: Int
+        let changedNanos: Int
+        let mode: UInt16
+        let owner: UInt32
+        let group: UInt32
+        let flags: UInt32
+        var isRegular: Bool { return mode & UInt16(S_IFMT) == UInt16(S_IFREG) }
+
+        init(_ value: stat) {
+            device = value.st_dev; inode = value.st_ino; size = value.st_size
+            modifiedSeconds = value.st_mtimespec.tv_sec; modifiedNanos = value.st_mtimespec.tv_nsec
+            changedSeconds = value.st_ctimespec.tv_sec; changedNanos = value.st_ctimespec.tv_nsec
+            mode = value.st_mode; owner = value.st_uid; group = value.st_gid; flags = value.st_flags
+        }
+    }
+
+    static func fingerprint(_ url: URL) throws -> Fingerprint? {
+        var value = stat()
+        guard Darwin.lstat(url.path, &value) == 0 else {
+            let code = errno
+            if code == ENOENT || code == ENOTDIR { return nil }
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+        }
+        return Fingerprint(value)
+    }
+
+    static func fingerprint(_ handle: FileHandle) throws -> Fingerprint {
+        var value = stat()
+        guard Darwin.fstat(handle.fileDescriptor, &value) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return Fingerprint(value)
     }
 
     private static let crcTable: [UInt32] = (0..<256).map { value in

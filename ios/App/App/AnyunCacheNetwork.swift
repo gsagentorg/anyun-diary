@@ -43,6 +43,8 @@ struct AnyunDownloadedFile: Sendable {
     let etag: String?
     let lastModified: String?
     let contentType: String?
+    // Default preserves all existing prefetch/fixture initializers. A 304 owns no file.
+    var notModified: Bool = false
 }
 
 final class AnyunCacheNetwork {
@@ -126,6 +128,8 @@ final class AnyunCacheNetwork {
         _ url: URL,
         to destination: URL,
         maxBytes: Int,
+        etag: String? = nil,
+        lastModified: String? = nil,
         idleTimeout: TimeInterval = AnyunCacheNetwork.mediaIdleTimeout,
         resourceTimeout: TimeInterval = AnyunCacheNetwork.mediaResourceTimeout
     ) async throws -> AnyunDownloadedFile {
@@ -141,6 +145,8 @@ final class AnyunCacheNetwork {
         request.httpMethod = "GET"
         request.timeoutInterval = idleTimeout
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        if let etag, !etag.isEmpty { request.setValue(etag, forHTTPHeaderField: "If-None-Match") }
+        if let lastModified, !lastModified.isEmpty { request.setValue(lastModified, forHTTPHeaderField: "If-Modified-Since") }
 
         let manager = FileManager.default
         try? manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: nil)
@@ -158,7 +164,7 @@ final class AnyunCacheNetwork {
                 configuration.timeoutIntervalForResource = resourceTimeout
                 configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
                 configuration.urlCache = nil
-                let sink = AnyunFileSink(destination: destination, maxBytes: maxBytes, continuation: continuation)
+                let sink = AnyunFileSink(destination: destination, maxBytes: maxBytes, allowsNotModified: etag != nil || lastModified != nil, continuation: continuation)
                 let session = URLSession(configuration: configuration, delegate: sink, delegateQueue: nil)
                 sink.attach(session)
                 let task = session.dataTask(with: request)
@@ -214,6 +220,8 @@ final class AnyunTaskBox: @unchecked Sendable {
 private final class AnyunFileSink: NSObject, URLSessionDataDelegate {
     private let destination: URL
     private let maxBytes: Int
+    private let allowsNotModified: Bool
+    private var notModified = false
     private let continuation: CheckedContinuation<AnyunDownloadedFile, Error>
 
     private var sessionRef: URLSession?
@@ -224,9 +232,10 @@ private final class AnyunFileSink: NSObject, URLSessionDataDelegate {
     private var failure: Error?
     private var resumed = false
 
-    init(destination: URL, maxBytes: Int, continuation: CheckedContinuation<AnyunDownloadedFile, Error>) {
+    init(destination: URL, maxBytes: Int, allowsNotModified: Bool, continuation: CheckedContinuation<AnyunDownloadedFile, Error>) {
         self.destination = destination
         self.maxBytes = maxBytes
+        self.allowsNotModified = allowsNotModified
         self.continuation = continuation
     }
 
@@ -247,6 +256,12 @@ private final class AnyunFileSink: NSObject, URLSessionDataDelegate {
             noteFailure(AnyunCacheError.http(0))
             dataTask.cancel()
             completionHandler(.cancel)
+            return
+        }
+        if http.statusCode == 304, allowsNotModified {
+            notModified = true
+            headers = http.allHeaderFields
+            completionHandler(.allow)
             return
         }
         guard http.statusCode == 200, http.value(forHTTPHeaderField: "Content-Range") == nil else {
@@ -278,6 +293,11 @@ private final class AnyunFileSink: NSObject, URLSessionDataDelegate {
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        if notModified {
+            noteFailure(AnyunDiskCacheFailure.incompleteFile) // 304 must never deliver a body
+            dataTask.cancel()
+            return
+        }
         guard failure == nil, let handle = handle else { return }
         bytes += data.count
         if bytes > maxBytes {
@@ -316,6 +336,12 @@ private final class AnyunFileSink: NSObject, URLSessionDataDelegate {
             try? FileManager.default.removeItem(at: destination)
             resumed = true
             continuation.resume(throwing: thrown)
+            return
+        }
+        if notModified {
+            try? FileManager.default.removeItem(at: destination)
+            resumed = true
+            continuation.resume(returning: AnyunDownloadedFile(fileURL: destination, bytes: 0, etag: nil, lastModified: nil, contentType: nil, notModified: true))
             return
         }
         guard bytes > 0 else {

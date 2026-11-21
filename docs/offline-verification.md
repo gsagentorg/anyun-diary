@@ -22,3 +22,22 @@ Status: feature-line work; not deployed and no data publication. Background-reco
 ## Reproduce
 
 Use npm run test:web-offline, npm run test:catalog-offline, npm run check and npm run build. For installed-browser tests set PLAYWRIGHT_MODULE and CHROMIUM_PATH, then run npm run test:web-offline-browser or npm run test:offline-app-browser. The production application test requires the Node build directory; the Capacitor Web build is not a Swift/iOS build.
+
+## Full feature-table closure integration (local, not published)
+
+- NativeSleep now implements the three hard-cut modes with the same TS formulas; the required macOS entry compiles the actual Swift and compares a dense grid/boundaries against the actual TypeScript implementation. Linux source checks passed; actual Swift remains unverified.
+- Current AVPlayer local-hit path now schedules conditional file-based SWR only after attaching the local lease. A refresh cannot reinstall or resume the current player. Single-lane cancellation, UUID/epoch ownership, 304-only age update, atomic full-200 replacement and bounded failure cooldown have source/fixture coverage; real URLSession/AVPlayer execution still requires macOS/iPhone.
+- NativeLyrics restores from the same persisted queue entry or its audio snapshot, not a bundled site-wide lyric table. The old build hook only removes its exact obsolete generated file. Historical data.json is kept locally but no longer tracked; new builds need no catalog/lyrics data in source. No history rewrite or source-audio changes occurred.
+- Native mode reconciliation now honors the persisted repeatOne flag; a regression covers repeat-one, sequential and random snapshots.
+- Parent reruns: availability 59, runtime-lyrics cleanup/source 13, native-offline source 79, native-sleep source 12, iOS source 142; session/native bridge passed; check 0 errors/0 warnings. Source checks explicitly do not execute Swift. Required-Swift mode was observed to fail without the toolchain.
+- Fresh Node build plus the real production UI harness passed **8/8**: mode order, secondary clear including current playback, non-dot sleep-line drag and cancellation/minimum time, refresh without restarting playback, confirmed-only reload, cached-vs-uncached offline playback, cross-origin images without ACAO/crossorigin and heatmap through today. See feature-table-browser.md. Separate offline cold-reopen playback also passed.
+- Full npm test still stops at the unchanged pre-existing architecture/upload-blob policy assertion; interactions, migration 44 and queue-budget were run separately and passed. This is not a green-full-suite claim.
+- Custom curve editor remains an unresolved product choice, not silently abandoned. Swift/Xcode/App-target/iPhone and publication remain separate acceptance/authorization gates.
+
+### Stable frontend re-verification after interrupted integration
+
+The final five-component offline marking snapshot was independently checked again: check 0 errors/0 warnings; offline-availability 131 behavior/real-template assertions; runtime-lyrics 13 cleanup/source checks. A fresh Node build, all eight production Chromium feature scenarios and the cold shell/catalog/Blob playback test passed. A subsequent Capacitor web build also passed. The exact obsolete native-lyrics.json is absent from static/, build/client/ and cap/; the local historical data file remains unchanged and untracked. The earlier failed Capacitor build was captured during a concurrent intermediate edit, inspected before retry, and superseded only after the corrected stable-source build succeeded. Capacitor web success is not an App-target/Swift build claim.
+
+### Native probe review follow-up
+
+Parent reviewed the final probe increment and reran native-offline 119 source contracts, native-sleep 12 source contracts, ios-cache 142 source assertions, native-cache 59 checks and native-audio bridge tests. Transient probe IO now propagates to unknown without index invalidation; repeated integrity results use bounded, fingerprint-guarded memoization with fresh open/read checks. See native-table-closure.md for unexecuted macOS fixtures and performance boundaries. Both native-offline and runtime-lyrics required-Swift commands were observed to fail on this Linux host; there is still no native compilation/device acceptance claim.

@@ -22,6 +22,7 @@
 //
 
 import Foundation
+import Darwin
 
 func check(_ condition: Bool, _ message: String) {
     if !condition {
@@ -116,6 +117,10 @@ struct AnyunCacheTests {
         await testFileClearAndLaneCancellation()
         await testScopedClearAndRevalidateABA()
         await testJSONRequestOwnership()
+        await testNativeMediaSWR()
+        await testMediaStatus()
+        await testMediaStatusReadOnlyAndMemo()
+        await testMediaStatusMemoBound()
         print("AnyunCache: layout/lease/LRU/oversize/coalesce/cancel/epoch/JSON-ownership-ABA/integrity/sweep passed (macOS, no network)")
     }
 
@@ -666,6 +671,233 @@ struct AnyunCacheTests {
         _ = try! await storeJSON(cache, b, newData)
         await cache.finishJSONRequest(a)
         await cache.finishJSONRequest(b)
+    }
+
+    static func testNativeMediaSWR() async {
+        let cache = AnyunDiskCache(directoryName: "anyun-swr-test-\(UUID().uuidString)", policyProvider: { makePolicy(maxBytes: 4096) })
+        defer { try? FileManager.default.removeItem(at: cache.layout.root) }
+        let key = anyunKey("native-swr"), valid = opusFixture(bytes: 120)
+        let payload = AnyunDownloadedPayload(data: valid, etag: "original", lastModified: "old-date", contentType: "audio/ogg")
+        let seeded = try! await cache.store(key: key, kind: .media, payload: payload)
+        let lease = await cache.acquirePlaybackLease(key: key)
+        let initial = await cache.lookup(key: key)!
+        let runs = Counter()
+        let staleNow = seeded.createdAt + 604801
+        let unchanged: @Sendable (AnyunCacheEntry, Int) async throws -> AnyunDownloadedFile = { entry, budget in
+            check(entry.etag == "original" && entry.lastModified == "old-date", "SWR sends original validators")
+            check(budget == 4096, "SWR receives bounded budget")
+            await runs.bump()
+            return AnyunDownloadedFile(fileURL: cache.layout.incomingFile(named: "304.part"), bytes: 0, etag: nil, lastModified: nil, contentType: nil, notModified: true)
+        }
+        try! await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: lease.mediaEpoch, now: seeded.createdAt + 604800, operation: unchanged)
+        check(await runs.value == 0, "fresh/exact-window hit never requests network")
+        try! await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: lease.mediaEpoch, now: staleNow, operation: unchanged)
+        let persisted304 = try! JSONDecoder().decode(AnyunCacheIndexFile.self, from: Data(contentsOf: cache.layout.indexFile)).entries.first!
+        check(persisted304.lastAccess == initial.lastAccess && persisted304.lastModified == initial.lastModified, "304 preserves original LRU and validators")
+        let confirmed = await cache.lookup(key: key)!
+        check(confirmed.createdAt >= seeded.createdAt && confirmed.bytes == initial.bytes && confirmed.etag == initial.etag, "native 304 only confirms original age")
+        check((try! Data(contentsOf: lease.url!)) == valid, "304 keeps active lease bytes")
+        try! await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: lease.mediaEpoch, now: staleNow + 1, operation: unchanged)
+        check(await runs.value == 1, "SWR failure/success cooldown prevents repeated network")
+
+        // Failure and malformed full body preserve the old complete entry.
+        for bad in [false, true] {
+            do {
+                try await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: lease.mediaEpoch, now: staleNow + (bad ? 122 : 61)) { _, _ in
+                    if !bad { throw AnyunCacheError.http(503) }
+                    return try writeTempDownload(Data(repeating: 0, count: 120), to: cache.layout.incomingFile(named: "bad-swr.part"))
+                }
+                check(false, "failed SWR must not be reported successful")
+            } catch { }
+            check(await cache.read(key: key) == valid, "network/malformed SWR preserves old bytes")
+        }
+        try! await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: lease.mediaEpoch, now: staleNow + 183) { _, _ in
+            try writeTempDownload(opusFixture(bytes: 160), to: cache.layout.incomingFile(named: "new-swr.part"))
+        }
+        check(await cache.lookup(key: key)?.bytes == 160, "native SWR full 200 replaces complete cache")
+        check(await cache.lookup(key: key)?.etag == nil, "full 200 without validators drops old etag")
+        check((try! Data(contentsOf: lease.url!)) == valid, "200 never replaces active lease inode")
+
+        // Every late response mode must lose after clear, same-key replacement, cancellation or switch.
+        var scenarioClock = staleNow + 1000
+        for scenario in ["clear", "replacement", "cancel", "switch", "eviction"] {
+            for is304 in [false, true] {
+                scenarioClock += 100
+                let requestNow = scenarioClock
+                _ = try! await cache.store(key: key, kind: .media, payload: payload)
+                let epoch = await cache.acquirePlaybackLease(key: key).mediaEpoch
+                let gate = Gate(), entered = Counter(), temp = cache.layout.incomingFile(named: "late.part")
+                let task = Task {
+                    try await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: epoch, now: requestNow) { _, _ in
+                        await entered.bump(); await gate.wait() // intentionally ignores cancellation
+                        if is304 { return AnyunDownloadedFile(fileURL: temp, bytes: 0, etag: nil, lastModified: nil, contentType: nil, notModified: true) }
+                        return try writeTempDownload(opusFixture(bytes: 180), to: temp)
+                    }
+                }
+                await waitUntil { await entered.value > 0 }
+                check(await entered.value == 1, "stale refresh starts once")
+                let duplicates = Counter()
+                try! await cache.refreshMediaFileIfStale(key: key, expectedMediaEpoch: epoch, now: requestNow + 61) { _, _ in
+                    await duplicates.bump(); return try writeTempDownload(valid, to: temp)
+                }
+                check(await duplicates.value == 0, "same-key stale refresh is deduplicated")
+                var cancelLane: Task<Void, Never>?
+                if scenario == "clear" { _ = await cache.clear(scope: "media") }
+                else if scenario == "replacement" { _ = try! await cache.store(key: key, kind: .media, payload: payload) }
+                else if scenario == "cancel" { task.cancel(); await waitUntil { await cache.isFileDownloadCancelled(key: key) } }
+                else if scenario == "switch" {
+                    cancelLane = Task { await cache.cancelFileDownloads(except: anyunKey("next-track")) }
+                    await waitUntil { await cache.isFileDownloadCancelled(key: key) }
+                } else {
+                    _ = try! await cache.store(key: anyunKey("large-other"), kind: .media, payload: payloadOf(4096))
+                }
+                let before = await cache.lookup(key: key)
+                await gate.open()
+                do { try await task.value; check(false, "late SWR must be rejected: " + scenario) } catch { }
+                if let cancelLane { await cancelLane.value }
+                let after = await cache.lookup(key: key)
+                check(after?.createdAt == before?.createdAt && after?.bytes == before?.bytes, "late 200/304 cannot revive or overwrite: " + scenario)
+                check(!FileManager.default.fileExists(atPath: temp.path), "late SWR temporary file cleaned")
+            }
+        }
+    }
+
+    static func testMediaStatus() async {
+        let cache = AnyunDiskCache(directoryName: "anyun-status-test-\(UUID().uuidString)", policyProvider: { makePolicy(maxBytes: 4096) })
+        defer { try? FileManager.default.removeItem(at: cache.layout.root) }
+        let url = "https://example.invalid/api/audio/fixture.opus", missing = "https://example.invalid/api/audio/missing.opus"
+        let key = anyunKey(url), valid = opusFixture(bytes: 120)
+        let entry = try! await cache.store(key: key, kind: .media, payload: AnyunDownloadedPayload(data: valid, etag: nil, lastModified: nil, contentType: nil))
+        check(try! await cache.mediaStatus(urls: [url, missing, url]) == [true, false, true], "mediaStatus preserves input order/duplicates and complete hits")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: cache.layout.playbackDirectory.path)) ?? []
+        let downloads = await cache.inFlightCount()
+        check(names.isEmpty && downloads == 0, "mediaStatus never makes leases or downloads")
+        // Inspect index directly: no access-age write/touch from probing.
+        let index = try! JSONDecoder().decode(AnyunCacheIndexFile.self, from: Data(contentsOf: cache.layout.indexFile))
+        check(index.entries.first?.lastAccess == entry.lastAccess, "mediaStatus leaves LRU untouched")
+        for bad in [[String](repeating: url, count: 101), ["file:///private/data"], ["http://example.invalid/a"], [url + "?signature=synthetic"], [url + "#fragment"], ["https://user:pass@example.invalid/a"]] {
+            do { _ = try await cache.mediaStatus(urls: bad); check(false, "mediaStatus rejects invalid batch/source") } catch { }
+        }
+        check((try! await cache.mediaStatus(urls: [])).isEmpty, "mediaStatus accepts empty batch")
+        try! (Data(valid.dropLast()) + Data([1])).write(to: cache.layout.mediaFile(forKey: key), options: .atomic)
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "mediaStatus rejects CRC-corrupt same-length media")
+        _ = await cache.clear(scope: "media")
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "mediaStatus reflects clear")
+    }
+
+    static func testMediaStatusReadOnlyAndMemo() async {
+        let directory = "anyun-probe-test-\(UUID().uuidString)"
+        let cache = AnyunDiskCache(directoryName: directory, policyProvider: { makePolicy(maxBytes: 4096) })
+        let fm = FileManager.default, root = cache.layout.root
+        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path); try? fm.removeItem(at: root) }
+        let url = "https://example.invalid/api/audio/probe.opus", key = anyunKey(url)
+        let valid = opusFixture(bytes: 120), file = cache.layout.mediaFile(forKey: key)
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "cold missing index is a miss")
+        check(!fm.fileExists(atPath: root.path), "cold probe creates no directory/index")
+        _ = try! await cache.store(key: key, kind: .media, payload: AnyunDownloadedPayload(data: valid, etag: nil, lastModified: nil, contentType: nil))
+        let originalIndex = try! Data(contentsOf: cache.layout.indexFile)
+        check(geteuid() != 0, "permission regression requires an unprivileged macOS test process")
+        check(try! await cache.mediaStatus(urls: [url, url]) == [true, true], "memo starts with complete fixture")
+        let first = await cache.mediaProbeDiagnostics()
+        for _ in 0..<20 { check(try! await cache.mediaStatus(urls: [url]) == [true], "repeat positive probe") }
+        check(await cache.mediaProbeDiagnostics().validations == first.validations, "repeat positive probes never rescan CRC")
+
+        // Same inode/size/mtime: ctime still invalidates a previously positive memo.
+        let before = try! AnyunMediaFileValidation.fingerprint(file)!
+        let oldDate = (try! fm.attributesOfItem(atPath: file.path))[.modificationDate]!
+        usleep(10_000)
+        let writer = try! FileHandle(forWritingTo: file)
+        try! writer.seek(toOffset: UInt64(valid.count - 1)); try! writer.write(contentsOf: Data([1])); try! writer.close()
+        try! fm.setAttributes([.modificationDate: oldDate], ofItemAtPath: file.path)
+        let changed = try! AnyunMediaFileValidation.fingerprint(file)!
+        check(before.inode == changed.inode && before.size == changed.size && before != changed, "in-place CRC change alters fingerprint even with restored mtime")
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "same-inode same-length corruption invalidates positive memo")
+        let negative = await cache.mediaProbeDiagnostics()
+        check(try! await cache.mediaStatus(urls: [url, url]) == [false, false], "negative memo preserves false result")
+        check(await cache.mediaProbeDiagnostics().validations == negative.validations, "repeat negative probes never rescan CRC")
+        try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        do { _ = try await cache.mediaStatus(urls: [url]); check(false, "protected negative memo must throw rather than reuse false") } catch { }
+        try! fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "negative permission recovery revalidates corruption")
+        try! valid.write(to: file, options: .atomic)
+        check(try! await cache.mediaStatus(urls: [url]) == [true], "atomic inode replacement invalidates negative memo")
+
+        // A positive memo is not permission authority either.
+        try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+        do { _ = try await cache.mediaStatus(urls: [url]); check(false, "temporary open permission failure must throw") } catch { }
+        check(!AnyunMediaFileValidation.isCompleteOpus(file, bytes: valid.count), "legacy Bool validator still returns false on IO failure")
+        check(try! Data(contentsOf: cache.layout.indexFile) == originalIndex, "open failure preserves durable index")
+        try! fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
+        check(try! await cache.mediaStatus(urls: [url]) == [true], "temporary open permission recovers without redownload")
+        try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+        do { _ = try await cache.mediaStatus(urls: [url]); check(false, "temporary stat permission failure must throw") } catch { }
+        try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        check(try! await cache.mediaStatus(urls: [url]) == [true], "temporary stat permission recovers without redownload")
+        let closed = try! FileHandle(forReadingFrom: file); try! closed.close()
+        do { _ = try AnyunMediaFileValidation.completeOpus(handle: closed, bytes: valid.count); check(false, "read failure must throw instead of false") } catch { }
+
+        try! Data(valid.dropLast()).write(to: file, options: .atomic)
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "bad length is definite miss without index repair")
+        try! fm.removeItem(at: file)
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "definite missing file never removes index")
+        try! valid.write(to: file, options: .atomic)
+        check(try! await cache.mediaStatus(urls: [url]) == [true], "restored missing file uses retained in-memory entry")
+        check(try! Data(contentsOf: cache.layout.indexFile) == originalIndex, "all warm probes preserve index bytes and LRU")
+
+        // Cold status must not invoke ensureIndexLoaded's repair, sweep or eviction.
+        let orphan = cache.layout.mediaFile(forKey: anyunKey("synthetic-orphan"))
+        let incoming = cache.layout.incomingFile(named: "synthetic-leftover")
+        try! valid.write(to: orphan); try! valid.write(to: incoming)
+        try! fm.removeItem(at: file)
+        let cold = AnyunDiskCache(directoryName: directory, policyProvider: { makePolicy(maxBytes: 1) })
+        check(try! await cold.mediaStatus(urls: [url]) == [false], "cold missing entry is definite miss")
+        check(try! Data(contentsOf: cold.layout.indexFile) == originalIndex && fm.fileExists(atPath: orphan.path) && fm.fileExists(atPath: incoming.path), "cold probe never repairs index sweeps or evicts")
+        try! valid.write(to: file)
+        check(try! await cold.mediaStatus(urls: [url]) == [true], "cold restored file remains indexed after missing probe")
+        let coldIndex = try! Data(contentsOf: cold.layout.indexFile)
+        try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: cold.layout.indexFile.path)
+        do { _ = try await cold.mediaStatus(urls: [url]); check(false, "cold protected index must throw") } catch { }
+        try! fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: cold.layout.indexFile.path)
+        check(try! Data(contentsOf: cold.layout.indexFile) == coldIndex, "cold index IO failure never resets or rewrites index")
+        check(try! await cold.mediaStatus(urls: [url]) == [true], "cold index protection recovers")
+
+        // Explicit entry version changes, identical replacement, eviction and clear revoke memos.
+        let prior = await cache.mediaProbeDiagnostics().validations
+        _ = try! await cache.store(key: key, kind: .media, payload: AnyunDownloadedPayload(data: valid, etag: nil, lastModified: nil, contentType: nil))
+        check(try! await cache.mediaStatus(urls: [url]) == [true], "identical store replacement is reverified")
+        check(await cache.mediaProbeDiagnostics().validations == prior + 1, "entry replacement invalidates memo")
+        _ = try! await cache.store(key: anyunKey("evict-probe"), kind: .media, payload: payloadOf(4096))
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "eviction never reuses positive memo")
+        check(await cache.mediaProbeDiagnostics().memoEntries == 0, "eviction discards probe memo")
+        _ = await cache.clear(scope: "media")
+        check(try! await cache.mediaStatus(urls: [url]) == [false], "clear never reuses positive memo")
+        check(await cache.mediaProbeDiagnostics().memoEntries == 0, "clear releases memo memory")
+    }
+
+    static func testMediaStatusMemoBound() async {
+        let directory = "anyun-probe-bound-\(UUID().uuidString)"
+        let cache = AnyunDiskCache(directoryName: directory)
+        let fm = FileManager.default, root = cache.layout.root
+        defer { try? fm.removeItem(at: root) }
+        try! fm.createDirectory(at: root, withIntermediateDirectories: true)
+        let fixture = root.appendingPathComponent("synthetic-fixture")
+        try! opusFixture(bytes: 120).write(to: fixture)
+        var urls: [String] = [], entries: [AnyunCacheEntry] = []
+        for i in 0...AnyunDiskCache.mediaProbeMemoLimit {
+            let url = "https://example.invalid/api/audio/bound-\(i).opus", key = anyunKey(url)
+            urls.append(url)
+            try! fm.linkItem(at: fixture, to: cache.layout.mediaFile(forKey: key))
+            entries.append(AnyunCacheEntry(key: key, kind: .media, bytes: 120, createdAt: 1, lastAccess: 1, etag: nil, lastModified: nil, contentType: nil))
+        }
+        try! JSONEncoder().encode(AnyunCacheIndexFile(version: 1, entries: entries)).write(to: cache.layout.indexFile)
+        for offset in stride(from: 0, to: urls.count, by: 100) {
+            let batch = Array(urls[offset..<min(offset + 100, urls.count)])
+            check((try! await cache.mediaStatus(urls: batch)).allSatisfy { $0 }, "bounded memo fixture batch complete")
+        }
+        let full = await cache.mediaProbeDiagnostics()
+        check(full.memoEntries == AnyunDiskCache.mediaProbeMemoLimit && full.validations == urls.count, "probe memo memory is bounded")
+        check(try! await cache.mediaStatus(urls: [urls[0]]) == [true], "discarded memo revalidates on demand")
+        check(await cache.mediaProbeDiagnostics().validations == full.validations + 1, "FIFO memo eviction triggers fresh full validation")
     }
 
     static func testScopedClearAndRevalidateABA() async {

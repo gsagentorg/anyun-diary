@@ -2,7 +2,11 @@
   import Sheet from './Sheet.svelte';
   import StateHint from './StateHint.svelte';
   import { player, playAt, removeAt, clearQueue, moveTrack } from '$lib/player.svelte.ts';
-  import { fmtDur } from '$lib/types';
+  import { fmtDur, audioUrl } from '$lib/types';
+  import { backend } from '$lib/backend.svelte';
+  import { createOfflineAvailability, offlineRowHint } from '$lib/offline-availability';
+  const availability = createOfflineAvailability();
+  $effect(() => availability.setTargets(player.queueOpen ? list.map(t => audioUrl(t.audio.opus)) : [], backend.generation + ':' + backend.base));
   import { X, MoreHorizontal, Trash2 } from 'lucide-svelte';
 
   const list = $derived(player.playlist);
@@ -154,6 +158,8 @@
   {:else}
     <ol class="mt-3 space-y-1 text-xs">
       {#each list as t, i (t.queueEntryId)}
+        {@const stableUrl = audioUrl(t.audio.opus)}
+        {@const offlineHint = offlineRowHint($availability, stableUrl)}
         <li>
           <div
             class="flex items-center gap-1 rounded border-l-2 px-1 py-0.5 {i === player.pos
@@ -162,6 +168,8 @@
               ? 'relative z-20 scale-105 bg-base-100 shadow-lg ring-1 ring-accent select-none'
               : ''}"
             style={dragMode && dragIdx === i ? `transform: translateY(${dragDelta}px)` : undefined}
+            class:offline-missing={!$availability.online && $availability.statuses[stableUrl] === 'missing'}
+            data-offline-availability={$availability.online ? undefined : ($availability.statuses[stableUrl] ?? 'unknown')}
             role="group"
             aria-label={"队列第 " + (i + 1) + " 项"}
             aria-current={i === player.pos ? 'true' : undefined}
@@ -172,6 +180,7 @@
           >
             <button
               class="flex min-w-0 flex-1 items-center gap-2 rounded px-1 py-0.5 text-left transition hover:bg-base-200"
+              title={offlineHint || undefined}
               onclick={() => {
                 if (wasDragged) {
                   wasDragged = false;
@@ -181,7 +190,7 @@
               }}
             >
               <span class="w-6 shrink-0 text-2xs tabular-nums opacity-50">{i + 1}</span>
-              <span class="truncate font-medium">{t.audio.title || '（未识别）'}</span>
+              <span class="min-w-0"><span class="block truncate font-medium">{t.audio.title || '（未识别）'}</span>{#if offlineHint}<span class="block text-2xs opacity-60">{offlineHint}</span>{/if}</span>
               <span class="ml-auto shrink-0 text-2xs tabular-nums opacity-50">
                 {fmtDur((t.audio.duration ?? 0))}
               </span>
@@ -209,3 +218,7 @@
     </div>
   {/if}
 </Sheet>
+
+<style>
+  .offline-missing { opacity: 0.55; }
+</style>

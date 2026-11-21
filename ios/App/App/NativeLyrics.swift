@@ -1,23 +1,33 @@
 import Foundation
+import CoreFoundation
 
 /// Matches the web metadata rule: latest timestamp, first line of a simultaneous group.
 enum NativeLyrics {
-    static let bundled: [String: [[String: Any]]] = {
-        guard let url = Bundle.main.url(forResource: "native-lyrics", withExtension: "json", subdirectory: "public"),
-              let data = try? Data(contentsOf: url),
-              let catalog = try? JSONSerialization.jsonObject(with: data) as? [String: [[String: Any]]] else { return [:] }
-        return catalog
-    }()
-
-    /// Repair older persisted queues and incomplete JS metadata without changing playback.
-    static func hydrate(_ items: [[String: Any]], catalog: [String: [[String: Any]]] = bundled) -> [[String: Any]] {
+    /// Restore only from the same queue entry's persisted runtime snapshot.
+    /// A nonempty top-level snapshot wins; absent/empty lyrics may be repaired
+    /// from audio.lyrics, never from another entry or a newer catalog release.
+    static func hydrate(_ items: [[String: Any]]) -> [[String: Any]] {
         items.map { item in
             guard (item["lyrics"] as? [[String: Any]])?.isEmpty != false,
-                  let id = item["id"] as? String, let lines = catalog[id], !lines.isEmpty else { return item }
+                  let audio = item["audio"] as? [String: Any],
+                  let lines = audio["lyrics"] as? [[String: Any]],
+                  !lines.isEmpty, validSnapshot(lines) else { return item }
             var hydrated = item
             hydrated["lyrics"] = lines
             return hydrated
         }
+    }
+
+    private static func validSnapshot(_ lines: [[String: Any]]) -> Bool {
+        var previous = -Double.infinity
+        for line in lines {
+            guard let timestamp = line["t"] as? NSNumber,
+                  CFGetTypeID(timestamp) != CFBooleanGetTypeID(),
+                  timestamp.doubleValue.isFinite, timestamp.doubleValue >= previous,
+                  line["text"] is String else { return false }
+            previous = timestamp.doubleValue
+        }
+        return true
     }
 
     static func currentLine(_ lyrics: [[String: Any]], position: Double, duration: Double) -> String? {

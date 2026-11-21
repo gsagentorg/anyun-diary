@@ -1,7 +1,15 @@
 <script lang="ts">
-  import {loadMonth} from './backend.svelte';
+  import {loadMonth,backend} from './backend.svelte';
+  import {onDestroy} from 'svelte';
+  import {createLatestOperation} from './interactions.js';
+  import {createOfflineAvailability,offlineRowHint,resolveBrowseAudios} from './offline-availability';
+  const availability=createOfflineAvailability();
+  const playbackOperation=createLatestOperation();
+  onDestroy(()=>playbackOperation.cancel());
+  $effect(()=>{void backend.generation;void backend.base;playbackOperation.cancel();});
+  $effect(()=>availability.setTargets(days.filter(([day])=>day===expanded).flatMap(([,songs])=>songs.map(audio=>audioUrl(audio.opus))),backend.generation+':'+backend.base));
   import type { Audio } from './types';
-  import { fmtDay, fmtDur, hueOf } from './types';
+  import { fmtDay, fmtDur, hueOf, audioUrl } from './types';
   import { shDayStart } from './playlist-core';
   import { player, playAudio, adopt, makeTrack } from './player.svelte.ts';
   import { ListMusic } from 'lucide-svelte';
@@ -21,9 +29,15 @@
 
   const clock = (t: number) => new Date(t*1000).toLocaleTimeString('zh-CN', {timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit',hour12:false});
   function toggle(day: number) { expanded = expanded === day ? null : day; }
-  async function full(audio:Audio){return (await loadMonth(audio.monthId)).find(a=>a.id===audio.id)??audio;}
-  async function replace(songs: Audio[]) { adopt((await Promise.all(songs.map(full))).map(makeTrack), 0); }
-  async function play(audio:Audio){playAudio(await full(audio));}
+  async function resolveAndPlay(songs:Audio[],replace=false) {
+    const context=backend.generation+':'+backend.base;
+    try {
+      await playbackOperation.run((signal:AbortSignal)=>resolveBrowseAudios(songs,loadMonth,{signal,isCurrent:()=>context===backend.generation+':'+backend.base}),
+        (full:Audio[])=>{if(replace)adopt(full.map(makeTrack),0);else if(full[0])playAudio(full[0]);});
+    } catch(error) { if((error as Error)?.name!=='AbortError')throw error; }
+  }
+  function replace(songs:Audio[]){return resolveAndPlay(songs,true);}
+  function play(audio:Audio){return resolveAndPlay([audio]);}
 </script>
 
 <div data-day-grid class="grid items-start gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -45,11 +59,14 @@
         <ol class="mt-3 space-y-1 border-t border-base-300 pt-3" >
           {#each songs as audio, i (audio.id)}
             {@const active = player.track?.audio.id === audio.id}
+            {@const stableUrl=audioUrl(audio.opus)}
+            {@const offlineHint=offlineRowHint($availability,stableUrl)}
             <li>
-              <button class="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-base-200" class:bg-accent={active} class:text-accent-content={active} onclick={() => void play(audio)}>
+              <button class="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left transition hover:bg-base-200" class:bg-accent={active} class:text-accent-content={active} class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'} data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')} title={offlineHint||undefined} aria-label={(audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')} onclick={() => void play(audio)}>
                 <span class="h-2.5 w-2.5 shrink-0 rounded-full" style="background:hsl({hueOf(audio.title)} var(--color-song-hue-sat) var(--color-song-hue-light))"></span>
                 <span class="w-10 shrink-0 text-2xs tabular-nums opacity-50">{clock(audio.startAt)}</span>
                 <span class="min-w-0 flex-1 truncate text-sm font-medium">{i+1}. {audio.title || '（未识别）'}</span>
+                {#if offlineHint}<span class="sr-only">{offlineHint}</span><span aria-hidden="true" class="shrink-0 text-2xs opacity-60">{$availability.statuses[stableUrl]==='missing'?'未完整缓存':'离线可用性未知'}</span>{/if}
                 <span class="shrink-0 text-xs tabular-nums opacity-60">{fmtDur(audio.duration ?? 0)}</span>
               </button>
             </li>
@@ -60,3 +77,7 @@
     </section>
   {/each}
 </div>
+
+<style>
+  .offline-missing { opacity: 0.55; }
+</style>

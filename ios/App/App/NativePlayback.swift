@@ -19,6 +19,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var loadGeneration = 0
     /// 当前曲完整下载订阅；切曲退订并取消旧文件 worker，文件清理完成后才启动下一槽。
     private var prefetchTask: Task<Void, Never>?
+    private var mediaRefreshTask: Task<Void, Never>?
     /// 当前 item 的音源：streaming = 稳定 https（307 自动跟随到签名目标，目标只存在于单次传输），
     /// cached = 磁盘完整文件的播放租约（硬链接，淘汰/清除不断流）。
     private enum PlaybackSource {
@@ -261,6 +262,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         loadTask?.cancel(); loadTask = nil
         resolvingCache = false
         prefetchTask?.cancel(); prefetchTask = nil
+        mediaRefreshTask?.cancel(); mediaRefreshTask = nil
         guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String,
               let url = URL(string: raw), url.scheme == "https" else {
             playbackSource = .none
@@ -298,6 +300,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.playbackSource = .cached(key: key)
                 self.diagnostic("cache-hit", detail: "key=\(Self.keyPrefix(key))")
                 self.attach(AVPlayerItem(url: local), at: self.lastPosition, autoplay: shouldPlay, recovering: recovering)
+                self.startMediaRefresh(key: key, url: url, expectedEpoch: lookup.mediaEpoch)
             } else {
                 self.playbackSource = .streaming(key: key, url: url)
                 self.attach(AVPlayerItem(url: url), at: self.lastPosition, autoplay: shouldPlay, recovering: recovering)
@@ -385,6 +388,21 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                     }
                 }
             }
+        }
+    }
+
+    /// Return/attach the local hit FIRST. Refresh completion never touches item, seek or intent.
+    private func startMediaRefresh(key: String, url: URL, expectedEpoch: Int) {
+        let disk = AnyunDiskCache.shared
+        let network = AnyunCacheNetwork.shared
+        let destination = disk.layout.incomingFile(named: "\(key)-\(UUID().uuidString).part")
+        mediaRefreshTask = Task.detached(priority: .utility) {
+            do {
+                try Task.checkCancellation()
+                try await disk.refreshMediaFileIfStale(key: key, expectedMediaEpoch: expectedEpoch) { entry, budget in
+                    try await network.downloadFile(url, to: destination, maxBytes: budget, etag: entry.etag, lastModified: entry.lastModified)
+                }
+            } catch { /* SWR is best-effort; cache and current AVPlayerItem remain untouched. */ }
         }
     }
 

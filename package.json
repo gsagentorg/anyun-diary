@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:web-offline && npm run test:catalog-offline && npm run test:background-recovery && npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:player-ops && npm run test:native-cache && npm run test:ios-cache && npm run test:native-offline && npm run test:native-audio && npm run test:brand && npm run test:heatmap && npm run test:architecture && npm run test:interactions && npm run test:migrate-s3 && node scripts/test-queue-budget.mjs",
+    "test": "npm run test:offline-availability && npm run test:runtime-lyrics && npm run test:web-offline && npm run test:catalog-offline && npm run test:background-recovery && npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:player-ops && npm run test:native-cache && npm run test:ios-cache && npm run test:native-offline && npm run test:native-audio && npm run test:brand && npm run test:heatmap && npm run test:architecture && npm run test:interactions && npm run test:migrate-s3 && node scripts/test-queue-budget.mjs",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
     "test:shuffle": "vite-node scripts/test-shuffle.mjs",
@@ -43,7 +43,12 @@
     "test:web-offline-browser": "node scripts/test-web-offline-browser.mjs",
     "test:offline-app-browser": "node scripts/test-offline-app-browser.mjs",
     "test:native-offline": "node scripts/test-native-offline.mjs",
-    "test:native-offline:required": "node scripts/test-native-offline.mjs --require-swift"
+    "test:native-offline:required": "node scripts/test-native-offline.mjs --require-swift",
+    "test:offline-availability": "vite-node scripts/test-offline-availability.mjs",
+    "test:runtime-lyrics": "node scripts/test-runtime-lyrics.mjs",
+    "test:runtime-lyrics:required": "node scripts/test-runtime-lyrics.mjs --require-swift",
+    "test:native-sleep": "node scripts/test-native-sleep.mjs",
+    "test:feature-table-browser": "node scripts/test-feature-table-browser.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",

@@ -21,7 +21,8 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "setPolicy", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "stats", returnType: CAPPluginReturnPromise),
         CAPPluginMethod(name: "clear", returnType: CAPPluginReturnPromise),
-        CAPPluginMethod(name: "fetchJSON", returnType: CAPPluginReturnPromise)
+        CAPPluginMethod(name: "fetchJSON", returnType: CAPPluginReturnPromise),
+        CAPPluginMethod(name: "mediaStatus", returnType: CAPPluginReturnPromise)
     ]
 
     private var disk: AnyunDiskCache { return AnyunDiskCache.shared }
@@ -77,6 +78,21 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                 "freedBytes": result.freedBytes,
                 "entries": result.entries
             ])
+        }
+    }
+
+    /// Bounded local-only query. Raw URLs exist only in the call/result, never logs/index.
+    @objc public func mediaStatus(_ call: CAPPluginCall) {
+        guard let urls = call.getArray("urls") as? [String], urls.count <= 100,
+              urls.allSatisfy(AnyunPlaybackCache.isStableMediaSource) else {
+            call.reject("需要至多 100 个稳定 HTTPS 音频地址", "BAD_URL"); return
+        }
+        Task {
+            do {
+                let cached = try await self.disk.mediaStatus(urls: urls)
+                let statuses: [[String: Any]] = zip(urls, cached).map { ["url": $0.0, "cached": $0.1] }
+                call.resolve(["statuses": statuses])
+            } catch { call.reject("缓存状态查询不可用", "UNAVAILABLE") }
         }
     }
 

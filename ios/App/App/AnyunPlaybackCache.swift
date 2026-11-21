@@ -19,6 +19,14 @@ final class AnyunPlaybackCache {
         return await disk.acquirePlaybackLease(key: key)
     }
 
+    /// Queue source only: signed/query-bearing targets and credential-bearing URLs are rejected.
+    nonisolated static func isStableMediaSource(_ raw: String) -> Bool {
+        guard raw.utf8.count <= 8192, let url = URL(string: raw),
+              url.scheme?.lowercased() == "https", let host = url.host, !host.isEmpty,
+              url.user == nil, url.password == nil, url.query == nil, url.fragment == nil else { return false }
+        return true
+    }
+
     func releaseAllLeases() async { await disk.releasePlaybackLeases() }
     func purgeStaleLeases() async { await disk.releasePlaybackLeases() }
 

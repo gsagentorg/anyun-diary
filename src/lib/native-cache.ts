@@ -13,7 +13,10 @@ import { Capacitor, registerPlugin } from '@capacitor/core';
 export const NATIVE_CACHE_SCHEME = 'anyun-cache';
 export const NATIVE_CACHE_HOST = 'media';
 export const NATIVE_CACHE_PLUGIN = 'AnyunCache';
+// Baseline methods remain compatible with older installed shells.
 export const NATIVE_CACHE_METHODS = ['configure', 'stats', 'clear', 'setPolicy', 'fetchJSON'] as const;
+export const NATIVE_CACHE_OPTIONAL_METHODS = ['mediaStatus'] as const;
+export const NATIVE_MEDIA_STATUS_BATCH_SIZE = 100;
 
 export type CacheScope = 'all' | 'media' | 'json';
 export type CacheSource = 'cache' | 'network' | 'stale';
@@ -59,6 +62,8 @@ export interface FetchJSONResult<T = unknown> {
 
 /** 原生插件的最小契约面；测试用假实现替代。 */
 export interface NativeCacheApi {
+  /** Optional on older shells; only complete, verified media is cached=true. */
+  mediaStatus?(options: { urls: string[] }): Promise<{ statuses: { url: string; cached: boolean }[] }>;
   configure?(options: { policy?: Partial<CachePolicy> }): Promise<{ policy: CachePolicy }>;
   stats(): Promise<CacheStats>;
   clear(options: { scope?: CacheScope }): Promise<{ freedBytes: number; entries: number }>;
@@ -183,7 +188,9 @@ export async function clearNativeCache(
 ): Promise<{ freedBytes: number; entries: number } | null> {
   if (!api) return null;
   try {
-    return await api.clear({ scope });
+    const result = await api.clear({ scope });
+    if (scope !== 'json') notifyNativeCacheChanged();
+    return result;
   } catch {
     return null;
   }
@@ -196,6 +203,7 @@ export async function setNativeCachePolicy(
   if (!api) return null;
   try {
     const result = await api.setPolicy({ policy: clampCachePolicy(policy) });
+    notifyNativeCacheChanged();
     return result?.policy ? clampCachePolicy(result.policy) : clampCachePolicy(policy);
   } catch {
     return null;
@@ -222,4 +230,42 @@ export function audioFailureText(online: boolean): string {
   return online
     ? '音频加载失败：网络或数据源异常，可重试'
     : '离线，且本曲未缓存，无法播放';
+}
+export type NativeMediaAvailability = 'cached' | 'missing' | 'unknown';
+const nativeCacheListeners = new Set<() => void>();
+function notifyNativeCacheChanged(): void {
+  for (const listener of nativeCacheListeners) {
+    try { listener(); } catch { /* Cache observers cannot break settings. */ }
+  }
+}
+export function subscribeNativeCacheChanges(listener: () => void): () => void {
+  nativeCacheListeners.add(listener);
+  return () => { nativeCacheListeners.delete(listener); };
+}
+
+/** Exact stable playback URLs; absent/failed/malformed replies are unknown.
+ * Sequential batches also enforce <=100 for direct callers outside the UI. */
+export async function nativeMediaStatus(
+  urls: readonly string[],
+  api: NativeCacheApi | null = nativeCacheApi(),
+): Promise<Record<string, NativeMediaAvailability>> {
+  const unique = [...new Set(urls)];
+  const result: Record<string, NativeMediaAvailability> = Object.fromEntries(unique.map(url => [url, 'unknown']));
+  if (!api?.mediaStatus) return result;
+  for (let offset = 0; offset < unique.length; offset += NATIVE_MEDIA_STATUS_BATCH_SIZE) {
+    const batch = unique.slice(offset, offset + NATIVE_MEDIA_STATUS_BATCH_SIZE);
+    try {
+      const reply = await api.mediaStatus({ urls: batch });
+      if (!Array.isArray(reply?.statuses)) continue;
+      const rows = new Map<string, unknown[]>();
+      for (const row of reply.statuses) {
+        if (!row || typeof row.url !== 'string' || !batch.includes(row.url)) continue;
+        rows.set(row.url, [...(rows.get(row.url) ?? []), row.cached]);
+      }
+      for (const [url, values] of rows) {
+        if (values.length === 1 && typeof values[0] === 'boolean') result[url] = values[0] ? 'cached' : 'missing';
+      }
+    } catch { /* Older shell / IO failure: retain unknown, no retry. */ }
+  }
+  return result;
 }

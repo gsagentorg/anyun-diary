@@ -15,6 +15,7 @@ import BrowseSkeleton from '$lib/components/BrowseSkeleton.svelte';
 import {ListMusic,Sun,Moon,Monitor,Search,HardDrive} from 'lucide-svelte';
 import {browser} from '$app/environment';
 import {nativeCacheAvailable} from '$lib/native-cache';
+import {webCacheAvailable} from '$lib/web-audio-cache';
 const viewScroll=[0,0,0];
 let cancelRestore=()=>{};
 async function switchView(next:number){
@@ -29,8 +30,9 @@ async function switchView(next:number){
 }
 let view=$state(0),searchOpen=$state(false),playlistOpen=$state(true),selected=$state(currentMonthId());
 let cacheOpen=$state(false);
-// 原生缓存入口只在 App 内出现；网页端没有这层缓存，不给假入口。
-const showCacheEntry=browser&&nativeCacheAvailable();
+// Native playback uses its disk cache; browsers use managed complete-file storage.
+const useNativeCache=browser&&nativeCacheAvailable();
+const showCacheEntry=browser&&(useNativeCache||webCacheAvailable());
 let rangeFrom=$state(''),rangeTo=$state(''),ready=$state(false);
 let endAt=$state(Math.floor(Date.now()/1000)+1);
 const startAt=$derived(backend.manifest?.queryMonthLimit===2?browseWindow(selected,endAt).startAt:-Infinity);
@@ -168,6 +170,8 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
       </div>
     </div>
   </header>
+  {#if backend.offline}<p role="status" class="mb-3 rounded-lg border border-base-300 p-3 text-xs">当前显示已保存的离线目录；仅已完整缓存的音频可离线播放。{#if backend.offlineSavedAt}保存时间：{new Date(backend.offlineSavedAt).toLocaleString('zh-CN')}{/if}</p>{/if}
+  {#if backend.offlineNotice}<p role="status" class="mb-3 text-xs opacity-70">{backend.offlineNotice}</p>{/if}
 
   <div class="mb-4 flex flex-col gap-4 sm:mb-6 lg:flex-row lg:items-start">
   {#if LIVE_URL}
@@ -247,5 +251,5 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {#if backend.prompt}{#await import('$lib/components/BackendSheet.svelte') then module}<module.default/>{/await}{/if}
 {#if player.queueOpen}{#await import('$lib/components/QueueOverlay.svelte') then module}<module.default/>{/await}{/if}
 {#if player.lyricsOpen}{#await import('$lib/components/LyricsSheet.svelte') then module}<module.default/>{/await}{/if}
-{#if showCacheEntry}{#await import('$lib/components/CacheSheet.svelte') then module}<module.default open={cacheOpen} onClose={()=>cacheOpen=false}/>{/await}{/if}
+{#if cacheOpen&&showCacheEntry}{#if useNativeCache}{#await import('$lib/components/CacheSheet.svelte') then module}<module.default open={cacheOpen} onClose={()=>cacheOpen=false}/>{/await}{:else}{#await import('$lib/components/WebCacheSheet.svelte') then module}<module.default open={cacheOpen} onClose={()=>cacheOpen=false}/>{/await}{/if}{/if}
 </div>

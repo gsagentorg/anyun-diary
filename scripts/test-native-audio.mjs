@@ -146,3 +146,28 @@ console.log('native audio: deferred sync, native recovery, foreground reconcilia
 receive({ ...resumed, playing: false, position: 0 });
 assert.equal(audio.currentTime, 85, 'duplicate event/command response is applied only once');
 assert.equal(audio.paused, false);
+
+// —— AVPlayer 磁盘缓存接线：源码契约（本机不编译 Swift；行为断言见 scripts/test-native-cache.swift，
+//    编译与真机验证仍待 Xcode/iPhone）——
+const load = swift.slice(swift.indexOf('private func loadCurrent('), swift.indexOf('private func start(recovering:'));
+assert.ok(load.includes('AnyunCacheKey.hash(url.absoluteString)'), 'cache key derives from the stable queue URL');
+assert.ok(load.includes('localPlaybackURL(forKey: key)'), 'loadCurrent prefers a validated local file');
+assert.ok(load.includes('url.scheme == "https"'), 'only stable HTTPS reaches AVPlayer/cache lookup; file URLs are never opened');
+assert.ok(load.includes('loadGeneration += 1') && load.includes('prefetchTask?.cancel()'), 'each load invalidates older async results');
+assert.ok(load.includes('attach(AVPlayerItem(url: url)'), 'uncached playback streams the stable URL immediately (no download-first regression)');
+const attach = swift.slice(swift.indexOf('private func attach('), swift.indexOf('private func startPrefetch('));
+assert.ok(attach.includes('audio.replaceCurrentItem(with: item)') && attach.includes('if at > 0 { seek(at) }') && attach.includes('_ = start(recovering: recovering)'), 'cache and stream paths share identical attach/seek/autoplay behaviour');
+const prefetch = swift.slice(swift.indexOf('private func startPrefetch('), swift.indexOf('private static func keyPrefix('));
+assert.ok(prefetch.includes('downloadFileOnce(key: key, expectedMediaEpoch: expectedEpoch)'), 'streaming playback kicks a parallel full-file download into AnyunDiskCache');
+assert.ok(prefetch.includes('loadGeneration == generation'), 'late prefetch results are generation-guarded (cannot override a later track)');
+assert.ok(!prefetch.includes('replaceCurrentItem') && !prefetch.includes('playImmediately') && !prefetch.includes('audio.play'), 'download completion never re-attaches items or auto-plays over a user pause');
+assert.ok(prefetch.includes('离线且未缓存，无法播放'), 'offline cache miss gets an explicit Chinese message');
+const start = swift.slice(swift.indexOf('private func start(recovering:'), swift.indexOf('private func pause()'));
+assert.ok(start.includes('case .streaming(let key, let url) = playbackSource'), 'prefetch targets only the current streaming track');
+assert.ok(start.includes('!prefetchAttempted') && swift.includes('prefetchAttempted = false; skipLocalForCurrentTrack = false'), 'one prefetch attempt per explicit selection, transient failure can retry on reselection');
+const disk = readFileSync(new URL('../ios/App/App/AnyunDiskCache.swift', import.meta.url), 'utf8');
+assert.ok(disk.includes('if !leasesSwept { releasePlaybackLeases(); leasesSwept = true }'), 'disk actor sweeps leftover leases before first lookup');
+assert.ok(swift.includes('AnyunPlaybackCache.shared.releaseAllLeases()'), 'empty/guard failure releases lease references');
+assert.ok(!swift.includes('expiresAt'), 'signed delivery targets/expiry never appear in native playback state');
+assert.ok(/if recovering, let duration = audio\.currentItem\?\.duration/.test(load), 'freeze recovery keeps lastKnownDuration');
+console.log('native audio: AVPlayer disk-cache wiring source contract passed (compile/device verification pending Xcode)');

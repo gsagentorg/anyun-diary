@@ -8,7 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check",
-    "test": "npm run test:background-recovery && npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:player-ops && npm run test:native-cache && npm run test:ios-cache && npm run test:native-audio && npm run test:brand && npm run test:heatmap && npm run test:architecture && npm run test:interactions && npm run test:migrate-s3 && node scripts/test-queue-budget.mjs",
+    "test": "npm run test:web-offline && npm run test:catalog-offline && npm run test:background-recovery && npm run test:months && npm run test:catalog && npm run test:lyrics && npm run test:playlist && npm run test:shuffle && npm run test:lane-scale && npm run test:session && npm run test:sleep && npm run test:player-ops && npm run test:native-cache && npm run test:ios-cache && npm run test:native-offline && npm run test:native-audio && npm run test:brand && npm run test:heatmap && npm run test:architecture && npm run test:interactions && npm run test:migrate-s3 && node scripts/test-queue-budget.mjs",
     "test:lyrics": "vite-node scripts/test-lyrics.mjs",
     "test:playlist": "vite-node scripts/test-playlist.mjs",
     "test:shuffle": "vite-node scripts/test-shuffle.mjs",
@@ -37,7 +37,13 @@
     "test:catalog": "npm run test:s3 && vite-node scripts/test-audio-renewal.mjs && node scripts/test-audio-delivery.mjs && vite-node scripts/test-s3-application.mjs && python3 scripts/test_derive_catalog.py && node scripts/test-month-storage.mjs && vite-node scripts/test-month-search.mjs",
     "test:interactions": "node scripts/test-interactions.mjs",
     "data:migrate-s3": "node scripts/migrate-s3.mjs",
-    "test:migrate-s3": "node scripts/test-migrate-s3.mjs"
+    "test:migrate-s3": "node scripts/test-migrate-s3.mjs",
+    "test:web-offline": "node scripts/test-web-offline.mjs",
+    "test:catalog-offline": "vite-node scripts/test-catalog-offline.mjs",
+    "test:web-offline-browser": "node scripts/test-web-offline-browser.mjs",
+    "test:offline-app-browser": "node scripts/test-offline-app-browser.mjs",
+    "test:native-offline": "node scripts/test-native-offline.mjs",
+    "test:native-offline:required": "node scripts/test-native-offline.mjs --require-swift"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",

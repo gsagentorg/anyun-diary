@@ -15,6 +15,24 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "getState", returnType: CAPPluginReturnPromise)
     ]
     private let audio = AVPlayer()
+    /// 切曲代数：所有异步结果（预取完成/失败）都要核对它，过期即丢，旧结果不改状态。
+    private var loadGeneration = 0
+    /// 当前曲完整下载订阅；切曲退订并取消旧文件 worker，文件清理完成后才启动下一槽。
+    private var prefetchTask: Task<Void, Never>?
+    /// 当前 item 的音源：streaming = 稳定 https（307 自动跟随到签名目标，目标只存在于单次传输），
+    /// cached = 磁盘完整文件的播放租约（硬链接，淘汰/清除不断流）。
+    private enum PlaybackSource {
+        case none
+        case streaming(key: String, url: URL)
+        case cached(key: String)
+    }
+    private var playbackSource: PlaybackSource = .none
+    // One attempt per explicit selection, not an unbounded/permanent failure-key set.
+    private var prefetchAttempted = false
+    private var prefetchEpoch = 0
+    private var loadTask: Task<Void, Never>?
+    private var resolvingCache = false
+    private var skipLocalForCurrentTrack = false
     private var queue: [[String: Any]] = []
     private var pos = -1
     private var history: [Int] = []
@@ -63,6 +81,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     private func setup() {
         diagnostic("setup")
+        // 冷启动先清掉上次进程（含崩溃）残留的播放租约，磁盘不无限增长。
+        // Disk actor purges stale leases once, before its first acquirePlaybackLease.
         audio.audiovisualBackgroundPlaybackPolicy = .continuesIfPossible
         var remote = MPRemoteCommandCenter.shared()
         if #available(iOS 16.0, *) {
@@ -221,7 +241,10 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var currentID: String { queue.indices.contains(pos) ? queue[pos]["id"] as? String ?? "" : "" }
     private var expired: Bool { sleepState.until.map { Date().timeIntervalSince1970 * 1000 >= $0 } ?? false }
     private func loadCurrent(autoplay: Bool, at: Double = 0, recovering: Bool = false) {
-        if !recovering { recoveryAttempts = 0; lastKnownDuration = 0 }
+        if !recovering {
+            recoveryAttempts = 0; lastKnownDuration = 0
+            prefetchAttempted = false; skipLocalForCurrentTrack = false
+        }
         if recovering, let duration = audio.currentItem?.duration.seconds, duration.isFinite, duration > 0 { lastKnownDuration = duration }
         recoveringPlayback = recovering
         lastPosition = at; lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
@@ -233,17 +256,70 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         audioActivationToken = UUID(); audioActivationPending = false
         if !recovering { errorMessage = "" }
         wantsPlayback = false; audio.pause(); itemObserver = nil
-        guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String, let url = URL(string: raw) else {
-            audio.replaceCurrentItem(with: nil); publish(); return
+        loadGeneration += 1
+        let generation = loadGeneration
+        loadTask?.cancel(); loadTask = nil
+        resolvingCache = false
+        prefetchTask?.cancel(); prefetchTask = nil
+        guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String,
+              let url = URL(string: raw), url.scheme == "https" else {
+            playbackSource = .none
+            audio.replaceCurrentItem(with: nil)
+            loadTask = Task { @MainActor in
+                guard !Task.isCancelled else { return }
+                await AnyunDiskCache.shared.cancelFileDownloads()
+                guard !Task.isCancelled else { return }
+                await AnyunPlaybackCache.shared.releaseAllLeases()
+            }
+            publish(); return
         }
-        let item = AVPlayerItem(url: url)
+        // 缓存键永远是稳定源 URL（队列里的 https）；签名目标不作为键、不落盘、不进日志。
+        let key = AnyunCacheKey.hash(url.absoluteString)
+        // Disk lookup/validation/linking runs on the actor, never synchronously on main.
+        // Keep user intent while awaiting it; late completion must not undo pause/sleep/seek.
+        resolvingCache = true
+        wantsPlayback = autoplay
+        audio.replaceCurrentItem(with: nil)
+        let skipLocal = skipLocalForCurrentTrack
+        loadTask = Task { @MainActor [weak self] in
+            guard !Task.isCancelled else { return }
+            let disk = AnyunDiskCache.shared
+            await disk.cancelFileDownloads(except: key)
+            guard !Task.isCancelled else { return }
+            if skipLocal { await disk.invalidate(key: key) }
+            guard !Task.isCancelled else { return }
+            let lookup = await AnyunPlaybackCache.shared.localPlaybackURL(forKey: key)
+            guard let self, !Task.isCancelled, self.loadGeneration == generation else { return }
+            self.prefetchEpoch = lookup.mediaEpoch
+            self.resolvingCache = false
+            self.loadTask = nil
+            let shouldPlay = self.wantsPlayback && !self.expired && !self.sleepState.fired
+            if let local = lookup.url, !skipLocal {
+                self.playbackSource = .cached(key: key)
+                self.diagnostic("cache-hit", detail: "key=\(Self.keyPrefix(key))")
+                self.attach(AVPlayerItem(url: local), at: self.lastPosition, autoplay: shouldPlay, recovering: recovering)
+            } else {
+                self.playbackSource = .streaming(key: key, url: url)
+                self.attach(AVPlayerItem(url: url), at: self.lastPosition, autoplay: shouldPlay, recovering: recovering)
+            }
+        }
+        publish()
+    }
+
+    /// 统一的商品安装点：观察者→替换→定位→自动播放→广播。缓存/流式两条路径共用，行为一致。
+    private func attach(_ item: AVPlayerItem, at: Double, autoplay: Bool, recovering: Bool) {
         itemObserver = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             DispatchQueue.main.async {
                 guard let self, item === self.audio.currentItem else { return }
                 if item.status == .failed {
                     self.failureDetectedAt = Date(); self.retryAt = nil
+                    if case .cached = self.playbackSource { self.skipLocalForCurrentTrack = true }
                     if self.wantsPlayback { self.recoveringPlayback = true }
-                    if self.errorMessage.isEmpty { self.errorMessage = item.error?.localizedDescription ?? "原生音频加载失败" }
+                    if self.errorMessage.isEmpty {
+                        if case .streaming = self.playbackSource {
+                            self.errorMessage = "本曲未缓存，离线时无法播放；正在尝试恢复连接"
+                        } else { self.errorMessage = "本地音频无法播放，正在尝试联网恢复" }
+                    }
                     let error = item.error as NSError?
                     self.diagnostic("item-failed", detail: "domain=\(error?.domain ?? "") code=\(error?.code ?? 0)")
                 }
@@ -255,14 +331,92 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         if autoplay { _ = start(recovering: recovering) }
         publish()
     }
+
+    /// 未缓存时：流式播放稳定地址 + 并行完整下载到 AnyunDiskCache。
+    /// 下载只针对当前曲；同 key 由 actor 去重合并；完成/失败永不替换当前 item（不把
+    /// 后来曲盖回），下次 load/恢复自然命中磁盘。每次明确选曲最多预取一次，重选可重试。
+    private func startPrefetch(key: String, url: URL) {
+        let generation = loadGeneration
+        let expectedEpoch = prefetchEpoch
+        prefetchAttempted = true
+        let disk = AnyunDiskCache.shared
+        let network = AnyunCacheNetwork.shared
+        // 每次订阅的临时路径唯一（带 UUID）：被 clear 取消的旧 worker 可能还在收尾，
+        // 不许与新 worker 写同一个文件；commit 按 operation 回报的真实路径接管。
+        let destination = AnyunCacheLayout.standard.incomingFile(named: "\(key)-\(UUID().uuidString).part")
+        prefetchTask = Task.detached(priority: .utility) { [weak self] in
+            do {
+                let budget = await disk.downloadBudget()
+                try Task.checkCancellation()
+                _ = try await disk.downloadFileOnce(key: key, expectedMediaEpoch: expectedEpoch) {
+                    try await network.downloadFile(url, to: destination, maxBytes: budget)
+                }
+                await MainActor.run {
+                    guard let self, self.loadGeneration == generation else { return }
+                    self.prefetchTask = nil
+                    self.diagnostic("prefetch-done", detail: "key=\(Self.keyPrefix(key))")
+                }
+            } catch AnyunCacheOversizeError.oversize {
+                await MainActor.run {
+                    guard let self, self.loadGeneration == generation else { return }
+                    self.prefetchTask = nil
+                    if self.loadGeneration == generation {
+                        self.diagnostic("prefetch-skip", detail: "oversize key=\(Self.keyPrefix(key))")
+                    }
+                }
+            } catch is CancellationError {
+                // Selection cancellation does not mutate a later generation.
+            } catch let error as AnyunCacheError where error.code == "CANCELLED" {
+                // 切曲退订 / 用户 clear 后的作废：静默退场，不进失败名单。
+            } catch {
+                let ns = error as NSError
+                await MainActor.run {
+                    guard let self, self.loadGeneration == generation else { return }
+                    self.prefetchTask = nil
+                    if self.loadGeneration == generation {
+                        self.diagnostic("prefetch-failed", detail: "domain=\(ns.domain) code=\(ns.code)")
+                        if self.errorMessage.isEmpty,
+                           case .streaming(let currentKey, _) = self.playbackSource, currentKey == key,
+                           self.audio.currentItem?.status == .failed {
+                            // 离线且未缓存：中文直说，不假装还在加载；恢复循环保有界重试。
+                            self.errorMessage = "本曲未能下载：离线且未缓存，无法播放"
+                            self.publish()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static func keyPrefix(_ key: String) -> String {
+        return String(key.prefix(8))
+    }
     private func start(recovering: Bool = false) -> Bool {
         if !recovering { recoveryAttempts = 0 }
+        if resolvingCache {
+            if expired { finishSleep(); return true }
+            sleepState.fired = false
+            wantsPlayback = true
+            publish(); return true
+        }
         lastProgressAt = Date()
         if expired { finishSleep(); return true }
         sleepState.fired = false
         guard audio.currentItem != nil else { errorMessage = "没有可播放的曲目"; return false }
         if audio.currentItem?.status == .failed {
-            loadCurrent(autoplay: false, at: lastPosition)
+            if case .cached = playbackSource { skipLocalForCurrentTrack = true }
+            if recovering {
+                wantsPlayback = true; recoveringPlayback = true
+                failureDetectedAt = Date(); retryAt = nil
+                publish(); return true // watchdog owns bounded retries; no recursive attach loop
+            }
+            loadCurrent(autoplay: true, at: lastPosition, recovering: true)
+            return true
+        }
+        // 流式播放真正被请求时才并行发起当前曲的完整下载（同 key 在 actor 内合并；
+        // 每次明确选曲最多一次，恢复/长暂停不会形成下载风暴；重选后允许瞬时网络错误重试）。
+        if case .streaming(let key, let url) = playbackSource, prefetchTask == nil, !prefetchAttempted, !skipLocalForCurrentTrack {
+            startPrefetch(key: key, url: url)
         }
         let duration = audio.currentItem?.duration.seconds ?? 0
         if duration.isFinite && duration > 0 && audio.currentTime().seconds >= duration { seek(0) }
@@ -288,7 +442,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                         self.publish(); return
                     }
                     self.tick()
-                    guard self.wantsPlayback, !self.sleepState.fired else { return }
+                    guard self.audioActivationToken == token, self.wantsPlayback, !self.resolvingCache, !self.sleepState.fired else { return }
                     self.lastProgressAt = Date()
                     self.audio.playImmediately(atRate: self.rate)
                     self.activateSession(); self.publish()
@@ -316,8 +470,13 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private func seek(_ seconds: Double) {
         guard seconds.isFinite else { return }
         lastPosition = max(0, seconds); lastProgressAt = Date()
+        if resolvingCache { persist(); publish(); return }
+        let generation = loadGeneration
         audio.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600)) { [weak self] _ in
-            DispatchQueue.main.async { self?.persist(); self?.publish() }
+            DispatchQueue.main.async {
+                guard let self, self.loadGeneration == generation else { return }
+                self.persist(); self.publish()
+            }
         }
     }
     private func visit() {
@@ -369,7 +528,18 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             retryAt = (failureDetectedAt ?? lastProgressAt).addingTimeInterval(delay)
         }
         guard let deadline = retryAt, Date() >= deadline else { return }
-        recoveryAttempts = min(30, recoveryAttempts + 1)
+        // A malformed/unsupported local file is bypassed after one failure. Even if the
+        // streaming fallback also fails, stop visibly instead of reloading forever.
+        if recoveryAttempts >= 8 {
+            wantsPlayback = false; recoveringPlayback = false
+            audio.pause()
+            errorMessage = skipLocalForCurrentTrack
+                ? "本地音频不可播放，联网恢复失败，请重新选择重试"
+                : "音频连接失败；离线且未缓存，无法播放，请联网后重试"
+            publish(); return
+        }
+        if case .cached = playbackSource { skipLocalForCurrentTrack = true }
+        recoveryAttempts += 1
         diagnostic("retry", detail: "attempt=\(recoveryAttempts)")
         loadCurrent(autoplay: true, at: lastPosition, recovering: true)
     }
@@ -423,12 +593,12 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         let duration = audio.currentItem?.duration.seconds ?? 0
         if duration.isFinite && duration > 0 { lastKnownDuration = duration }
         let recovering = recoveringPlayback && wantsPlayback
-        let displayTime = recovering ? max(lastPosition, time.isFinite ? time : 0) : (time.isFinite ? time : 0)
+        let displayTime = (recovering || resolvingCache) ? max(lastPosition, time.isFinite ? time : 0) : (time.isFinite ? time : 0)
         let displayDuration = recovering ? lastKnownDuration : (duration.isFinite ? duration : 0)
         var state: [String: Any] = ["pos": pos,
                 "shuffle": shuffle, "repeatOne": repeatOne, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": displayTime, "duration": displayDuration,
-                "playing": audio.timeControlStatus == .playing, "loading": recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                "playing": audio.timeControlStatus == .playing, "loading": (resolvingCache && wantsPlayback) || recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
         if !progressOnly {

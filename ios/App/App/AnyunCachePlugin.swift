@@ -95,20 +95,24 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
             let force = call.getBool("force") ?? false
             let key = AnyunCacheKey.hash(url.absoluteString)
             let policy = self.policyStore.load()
-            let cached = await self.disk.lookup(key: key)
+            let request: AnyunJSONRequest
+            do { request = try await self.disk.beginJSONRequest(key: key) }
+            catch { call.reject("缓存请求不可用", "UNAVAILABLE"); return }
+            let cached = request.entry
             let now = Date().timeIntervalSince1970
 
             // 1) 新鲜窗口内：直接回 cache，后台静默 revalidate。
             if let entry = cached, !force {
                 let age = max(0, now - entry.createdAt)
-                if age <= Double(policy.jsonStaleSeconds), let object = await self.readJSON(key: key) {
+                if age <= Double(policy.jsonStaleSeconds), let data = request.data,
+                   let object = AnyunCachePlugin.jsonObject(from: data) {
                     call.resolve([
                         "data": object,
                         "source": "cache",
                         "ageSeconds": Int(age),
                         "offline": false
                     ])
-                    self.revalidateJSON(key: key, url: url, entry: entry)
+                    self.revalidateJSON(request: request, url: url, entry: entry)
                     return
                 }
             }
@@ -121,14 +125,18 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                     lastModified: force ? nil : cached?.lastModified
                 )
 
-                if response.isNotModified, cached != nil, let object = await self.readJSON(key: key) {
-                    await self.disk.markRevalidated(key: key)
+                if response.isNotModified, !force, cached != nil {
+                    let data = try await self.disk.revalidateJSON(request: request)
+                    guard let object = AnyunCachePlugin.jsonObject(from: data) else {
+                        throw AnyunCachePayloadError.invalidJSON
+                    }
                     call.resolve([
                         "data": object,
                         "source": "cache",
                         "ageSeconds": 0,
                         "offline": false
                     ])
+                    await self.disk.finishJSONRequest(request)
                     return
                 }
 
@@ -140,7 +148,7 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                 }
 
                 _ = try? await self.disk.storeJSON(
-                    key: key,
+                    request: request,
                     data: response.data,
                     etag: response.etag,
                     lastModified: response.lastModified,
@@ -154,7 +162,8 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                 ])
             } catch {
                 // 3) 网络失败：有缓存回 stale（不失效），无缓存明确报不可用。
-                if let entry = cached, let object = await self.readJSON(key: key) {
+                if let entry = cached, let data = request.data,
+                   let object = AnyunCachePlugin.jsonObject(from: data) {
                     let age = max(0, Date().timeIntervalSince1970 - entry.createdAt)
                     call.resolve([
                         "data": object,
@@ -166,6 +175,7 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                     call.reject("离线且无缓存", "UNAVAILABLE")
                 }
             }
+            await self.disk.finishJSONRequest(request)
         }
     }
 
@@ -180,23 +190,19 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
         return AnyunCachePolicy.from(dictionary: dictionary)
     }
 
-    private func readJSON(key: String) async -> Any? {
-        guard let data = await disk.read(key: key) else { return nil }
-        return AnyunCachePlugin.jsonObject(from: data)
-    }
-
-    /// 后台条件 revalidate：304 只刷新 age，200 覆盖，失败保留。
-    private func revalidateJSON(key: String, url: URL, entry: AnyunCacheEntry) {
+    /// Background SWR retains the ownership acquired before returning the cached snapshot.
+    /// Clear/newer requests may reject its commit; network failure preserves the cached content.
+    private func revalidateJSON(request: AnyunJSONRequest, url: URL, entry: AnyunCacheEntry) {
         let disk = self.disk
         let network = self.network
         Task.detached(priority: .utility) {
             do {
                 let response = try await network.get(url, etag: entry.etag, lastModified: entry.lastModified)
                 if response.isNotModified {
-                    await disk.markRevalidated(key: key)
+                    _ = try await disk.revalidateJSON(request: request)
                 } else if response.status == 200, AnyunCachePlugin.jsonObject(from: response.data) != nil {
                     _ = try? await disk.storeJSON(
-                        key: key,
+                        request: request,
                         data: response.data,
                         etag: response.etag,
                         lastModified: response.lastModified,
@@ -206,6 +212,7 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
             } catch {
                 // 静默失败：保留缓存。
             }
+            await disk.finishJSONRequest(request)
         }
     }
 

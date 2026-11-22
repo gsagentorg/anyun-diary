@@ -153,6 +153,32 @@ try {
   assert.ok(Math.abs(afterCancel - clamped) <= 1, 'cancel must not revert or continue dragging');
   assert.deepEqual(errors, []); return { midway, clamped, remainingText, afterCancel, engine: 'Chromium; not iOS' };
  });
+ await check('custom-sleep-editor-live-preview-and-running-snapshot', async () => {
+  const { page, errors } = await setup(); await begin(page);
+  await (await control(page, '睡眠定时器')).click();
+  await page.getByRole('combobox').selectOption('custom');
+  const editor = page.locator('[data-sleep-editor]'); await editor.waitFor();
+  assert.equal(await editor.getByRole('slider').count(), 4);
+  assert.equal(await editor.getByRole('spinbutton').count(), 4);
+  const preview = editor.locator('[data-sleep-custom-preview] path').last();
+  const active = page.locator('svg[aria-label*="音量变化示意"] path').last();
+  const hold = editor.getByRole('spinbutton', { name: '保持原音量（%）数值', exact: true });
+  await hold.fill('50');
+  await page.getByRole('button', { name: '15分', exact: true }).click();
+  const running = await active.getAttribute('d');
+  assert.equal(running, await preview.getAttribute('d'));
+  await hold.fill('70');
+  assert.equal(await active.getAttribute('d'), running, 'edits must not replace running curve');
+  assert.notEqual(await preview.getAttribute('d'), running);
+  await editor.getByRole('button', { name: '恢复默认参数', exact: true }).click();
+  assert.equal(await active.getAttribute('d'), running);
+  assert.equal(await hold.inputValue(), '30');
+  await page.getByRole('button', { name: '15分', exact: true }).click();
+  assert.equal(await active.getAttribute('d'), await preview.getAttribute('d'));
+  assert.notEqual(await active.getAttribute('d'), running);
+  assert.equal((await audioState(page)).paused, false);
+  assert.deepEqual(errors, []); return { controls: 4, nextRunIsolated: true, restartApplies: true };
+ });
  await check('refresh-preserves-playing-queue-and-reload-confirmation', async () => {
   const { page, errors } = await setup(); await begin(page);
   const dialog = await queue(page);

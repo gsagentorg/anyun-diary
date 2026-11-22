@@ -166,7 +166,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             // Restore paused without discarding a valid wall-clock sleep countdown.
             sleepState.configure(revision: saved["sleepRevision"] as? String ?? "restored",
                 until: saved["sleepUntil"] as? Double, started: saved["sleepStarted"] as? Double,
-                mode: saved["sleepMode"] as? String ?? "off", afterTrack: saved["afterTrack"] as? Bool ?? false)
+                mode: saved["sleepMode"] as? String ?? "off", afterTrack: saved["afterTrack"] as? Bool ?? false,
+                custom: NativeSleepCustom.decode(saved["sleepCustom"] as? [String: Any], version: saved["sleepCustomVersion"] as? Int))
             loadCurrent(autoplay: false, at: saved["position"] as? Double ?? 0)
         }
     }
@@ -208,7 +209,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.revision = call.getString("revision") ?? ""
             self.sleepState.configure(revision: call.getString("sleepRevision") ?? "",
                 until: call.getDouble("sleepUntil"), started: call.getDouble("sleepStarted"),
-                mode: call.getString("sleepMode") ?? "off", afterTrack: call.getBool("afterTrack") ?? false)
+                mode: call.getString("sleepMode") ?? "off", afterTrack: call.getBool("afterTrack") ?? false,
+                custom: NativeSleepCustom.decode(call.getObject("sleepCustom")?.mapValues { $0 as Any }, version: call.getInt("sleepCustomVersion")))
             // Expiry and gain must be applied before a rate update can resume audio.
             self.tick()
             if call.getBool("replace") == true || previous != self.currentID {
@@ -618,6 +620,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 "position": displayTime, "duration": displayDuration,
                 "playing": audio.timeControlStatus == .playing, "loading": (resolvingCache && wantsPlayback) || recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
                 "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
+                "supportsCustomSleep": true, "sleepCustomVersion": 1, "sleepCustom": sleepState.custom.dictionary,
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
         if !progressOnly {
             state["history"] = history; state["redo"] = redo; state["played"] = played

@@ -1,3 +1,4 @@
+import type { SleepCustomParameters } from './sleep-curves';
 import type { Audio } from './types';
 import { Capacitor, registerPlugin } from '@capacitor/core';
 
@@ -6,10 +7,12 @@ export interface NativeQueueItem { id: string; audio?: Audio; url: string; title
 export interface NativeConfig {
   queue: NativeQueueItem[]; pos: number; shuffle: boolean; repeatOne?: boolean; skipSame: boolean;
   history: number[]; redo: number[]; played: string[]; rate: number;
+  sleepCustom?: SleepCustomParameters; sleepCustomVersion?: number;
   sleepRevision: string; sleepUntil: number | null; sleepStarted: number | null; sleepMode: string; afterTrack: boolean;
 }
 export interface NativeState extends NativeConfig {
   revision: string; position: number; duration: number; playing: boolean; loading: boolean;
+  supportsCustomSleep?: boolean;
   error: string; sleepFired: boolean; sequence: number;
 }
 type CatalogFields = 'queue' | 'history' | 'redo' | 'played';
@@ -103,11 +106,15 @@ export class NativeAudio extends EventTarget {
     document.removeEventListener('visibilitychange', this.onVisibility);
     void this.listener?.remove();
   }
+  get supportsCustomSleep() { return this.lastState?.supportsCustomSleep === true; }
   sync(replace = false) {
     return this.enqueue(() => {
       // Keep accepting native progress while earlier commands are pending.
       // Read the latest UI state only when this configuration is actually sent.
       const config = this.config();
+      if (config.sleepMode === 'custom' && config.sleepUntil != null && !this.supportsCustomSleep) {
+        throw new Error('当前原生 App 不支持自定义睡眠曲线，请更新 App 或选择已有预设。');
+      }
       const revision = `${Date.now()}-${Math.random()}`;
       this.revision = revision;
       return this.driver.configure({ ...config, revision, replace });

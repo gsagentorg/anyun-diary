@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import SleepCurveEditor from './components/SleepCurveEditor.svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset } from './player.svelte.ts';
+  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
@@ -52,9 +53,11 @@
   const shownSleepMode = $derived(sleepRunning ? activeSleepMode : selectedSleepMode);
   const sleepTotalMs = $derived(sleepRunning ? sleep.until! - sleep.started! : 0);
   const sleepPosition = $derived(sleep.progress);
-  const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition));
+  const shownSleepCustom = $derived(sleepRunning ? sleep.activeCustom : sleep.custom);
+  const customSleepBlocked = $derived(sleep.preset === 'custom' && !canStartCustomSleep());
+  const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition, shownSleepCustom));
   const sleepPercent = $derived(Math.floor(sleepPosition * 100 + 1e-9));
-  const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition));
+  const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition, shownSleepCustom));
   const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleep.remaining)));
   const sleepBaseSeconds = $derived(sleepRunning ? Math.max(1, sleep.plannedSeconds) : 0);
   // 手柄横坐标：运行中按剩余比例落位；未启动时停在右端表示整档。
@@ -464,6 +467,9 @@
       {/each}
     </select>
   </label>
+  {#if sleep.preset === 'custom'}
+    <SleepCurveEditor parameters={sleep.custom} onchange={setSleepCustom} onreset={resetSleepCustom} running={sleepRunning} supported={!customSleepBlocked} />
+  {/if}
   {#if sleepRunning}<p class="mt-1 px-1 text-2xs font-medium">当前运行：{shownSleepMode.label}</p>{/if}
   <p class="px-1 text-2xs leading-relaxed opacity-70">{shownSleepMode.description}</p>
   <svg
@@ -482,7 +488,7 @@
     onlostpointercapture={onSleepTrackUp}
   >
     <path d="M0,38 H180" fill="none" stroke="currentColor" opacity="0.2" />
-    <path d={sleepCurvePath(shownSleepMode.id)} fill="none" stroke="currentColor" stroke-width="2" />
+    <path d={sleepCurvePath(shownSleepMode.id, shownSleepCustom)} fill="none" stroke="currentColor" stroke-width="2" />
     {#if sleepRunning}
       <line x1={sleepPoint.x} x2={sleepPoint.x} y1="1" y2="40" stroke="currentColor" stroke-width="1" stroke-dasharray="2 2" opacity="0.6" />
       <g
@@ -519,7 +525,7 @@
   {/if}
   <div class="grid grid-cols-3 gap-1">
     {#each PRESETS as m (m)}
-      <button class="rounded-md px-2 py-1 text-xs tabular-nums transition hover:bg-base-200" onclick={() => pick(m)}>
+      <button class="rounded-md px-2 py-1 text-xs tabular-nums transition hover:bg-base-200 disabled:cursor-not-allowed disabled:opacity-40" disabled={customSleepBlocked} onclick={() => pick(m)}>
         {m}分
       </button>
     {/each}
@@ -543,6 +549,7 @@
     <span class="text-2xs opacity-60">分钟</span>
     <button
       class="ml-auto rounded-md bg-accent px-2 py-0.5 text-2xs text-accent-content transition hover:opacity-90"
+      disabled={customSleepBlocked}
       onclick={() => Number(customMin) > 0 && pick(Number(customMin))}
     >
       开始
@@ -551,7 +558,7 @@
   {#if sleep.until != null}
     <p class="mt-2 px-1 text-2xs leading-relaxed" role="status">
       进行中：{activeSleepMode.label} · 剩余 {fmtClockShort(sleep.remaining)}
-      {#if sleep.preset !== sleep.mode}<br />新方式在重新开始后生效。{/if}
+      {#if sleep.preset !== sleep.mode || sleep.preset === 'custom'}<br />选择及参数修改在重新开始后生效；当前曲线使用启动时的快照。{/if}
     </p>
   {/if}
   {#if sleep.notice}<p class="mt-1 px-1 text-2xs leading-relaxed text-warning" role="status">{sleep.notice}</p>{/if}

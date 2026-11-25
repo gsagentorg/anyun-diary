@@ -9,6 +9,7 @@
  * - 隔离：全部键按后端 origin + base path（baseKey）分开；A 后端的快照绝不会 hydrate 进 B 后端；
  *   reset/切后端不删除任何快照，只有用户显式 clear 才删。
  * - 有界：最多 limits.maxMonths 个月块（按保存时间 LRU 淘汰，与 MAX_CACHED_MONTHS 口径一致）；
+ *   其中「含完整音频缓存」的月份在淘汰中优先保留（owner 裁定 ④「音频优先」，仍在同一上限内）；
  *   月块字节上限 + 条数上限（超限直接跳过、不做超大 stringify）；总额 = 存储预算。
  *   quota/失败只影响快照，绝不阻塞播放与目录浏览。
  * - 存储：统一注入式 KV。web 优先 CacheStorage(caches)，Capacitor 优先 localStorage（有界 JSON 分片）,
@@ -28,7 +29,7 @@ export interface OfflineKv {
 
 export interface OfflineMonthEntry { id: string; revision: string; key: string; available: boolean; count: number; startAt: number; endAt: number }
 export interface OfflineManifest { schemaVersion: 2; timezone: string; generatedAt: number; revision: string; months: OfflineMonthEntry[]; queryMonthLimit?: number }
-export interface OfflineRuntime { native?: boolean; expectedRevision?: string }
+export interface OfflineRuntime { native?: boolean; expectedRevision?: string; /** 含完整音频缓存的月份（owner 裁定 ④「音频优先」）：快照淘汰时这些月份优先保留，月度上限不变。 */ protectedMonths?: string[] }
 
 export type OfflineSaveStatus = 'saved' | 'no-storage' | 'stale' | 'invalid' | 'too-large' | 'quota' | 'unavailable';
 export interface OfflineSaveResult { ok: boolean; status: OfflineSaveStatus; savedAt?: number; error?: string }
@@ -237,7 +238,11 @@ export function saveCatalogSnapshot(rawBase: string | null | undefined, manifest
         staged.set(MKey(base, manifest.revision, id), value);
         months[id] = Date.now();
       }
-      const selected = Object.keys(months).filter(id => manifest.months.some(e => e.id === id && e.available)).sort((a,b) => months[b]-months[a] || Number(b in loaded)-Number(a in loaded)).slice(0, limits.maxMonths);
+      // owner ④（音频优先）：月份上限（maxMonths）内先保留「有完整音频缓存」的月份——
+      // 音频已缓存的月份丢掉目录块，会让这份音频失去离线可用信息。上限本身不变（提升上限属延期项）。
+      const protectedIds = new Set(runtime.protectedMonths ?? []);
+      const protectedRank = (id: string) => (protectedIds.has(id) ? 1 : 0);
+      const selected = Object.keys(months).filter(id => manifest.months.some(e => e.id === id && e.available)).sort((a,b) => protectedRank(b) - protectedRank(a) || months[b]-months[a] || Number(b in loaded)-Number(a in loaded)).slice(0, limits.maxMonths);
       const savedAt = Date.now();
       const pointer = JSON.stringify({ v: POINTER_VERSION, revision: manifest.revision, savedAt, months: Object.fromEntries(selected.map(id => [id, months[id]])) });
       const writes = new Map(staged); writes.set(pKey(base), pointer);

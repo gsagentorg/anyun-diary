@@ -53,6 +53,7 @@ const disk = source['AnyunDiskCache.swift'];
 const network = source['AnyunCacheNetwork.swift'];
 const lease = source['AnyunPlaybackCache.swift'];
 const playback = fs.readFileSync(path.join(appDir, 'NativePlayback.swift'), 'utf8');
+const swiftTests = fs.readFileSync(path.join(root, 'scripts/test-native-cache.swift'), 'utf8');
 
 // —— 1. 文件与免责标记 ——
 for (const name of swifts) {
@@ -171,6 +172,31 @@ ok(playback.includes('UUID().uuidString'), '预取临时路径按订阅唯一（
 // 离线与恢复：未缓存时流式首播不退化；下载完成绝不替换当前 item。
 ok(playback.includes('离线且未缓存，无法播放'), '离线 cache miss 有中文说明');
 ok(handler.includes('case .transient'), 'scheme 未命中路径处理 transient 载荷');
+
+// —— 4c. #19：目录 JSON 的重验证比不可变音频早得多；失败保留当前目录 ——
+const num = (source, name) => Number(source.match(new RegExp(name + '[^=]*=\\s*(\\d+)'))?.[1]);
+const jsonStale = num(core, 'defaultJsonStaleSeconds');
+const mediaRevalidate = num(core, 'defaultMediaRevalidateSeconds');
+const refreshCooldown = num(disk, 'mediaRefreshCooldown');
+ok(Number.isFinite(jsonStale) && Number.isFinite(mediaRevalidate) && Number.isFinite(refreshCooldown), '重验证参数可读');
+ok(jsonStale * 60 <= mediaRevalidate, `目录 JSON 窗口(${jsonStale}s) ≪ 音频窗口(${mediaRevalidate}s)：可变目录远比不可变音频勤快`);
+ok(refreshCooldown <= jsonStale, '音频重验证冷却不小于目录窗口（音频不会因为播放更频繁而重拉）');
+ok(plugin.includes('if age <= Double(policy.jsonStaleSeconds), let data = request.data'), '目录 JSON 在新鲜窗口内直接回缓存');
+ok(plugin.includes('self.revalidateJSON(request: request, url: url, entry: entry)'), '新鲜命中仍在后台重验证（stale-while-revalidate）');
+ok(/etag: force \? nil : cached\?\.etag/.test(plugin) && plugin.includes('lastModified: force ? nil : cached?.lastModified'), '过窗走的条件请求携带 ETag/Last-Modified');
+ok(plugin.includes('if response.isNotModified, !force, cached != nil'), '304 只确认已缓存的那份，不重写内容');
+ok(plugin.includes('source": "stale"') && plugin.includes('offline": true'), '网络失败时返回最后有效目录（stale/offline），保留当前内容');
+ok(/guard response\.status == 200 else \{\s*throw AnyunCacheError\.http/.test(plugin), '不完整/错误响应绝不当成新目录提交');
+const fallbackStart = plugin.indexOf('// 3) 网络失败');
+const fallback = plugin.slice(fallbackStart, plugin.indexOf('await self.disk.finishJSONRequest(request)', fallbackStart));
+ok(fallbackStart > 0 && fallback.includes('let entry = cached, let data = request.data')
+  && fallback.indexOf('source": "stale"') >= 0 && fallback.indexOf('source": "stale"') < fallback.indexOf('call.reject("离线且无缓存"'), '网络失败有缓存回 stale，无缓存才报不可用');
+// owner 裁定 ④：目录/月份 JSON 是音频可用性元数据，淘汰时最后才动。
+const evictBody = disk.slice(disk.indexOf('private func evict(protecting'), disk.indexOf('/// Bounded-memory Ogg framing'));
+ok(evictBody.includes('lhs.kind == .json ? 1 : 0') && evictBody.includes('lhsMetadata < rhsMetadata'), 'evict 优先淘汰媒体字节，JSON 元数据最后淘汰');
+ok(evictBody.indexOf('lhsMetadata != rhsMetadata') < evictBody.indexOf('lhs.lastAccess < rhs.lastAccess'), '同类条目仍按 LRU（不是双向钉住）');
+ok(swiftTests.includes('await testEvictionEvictsMediaBeforeJSON()'), 'Swift 淘汰优先级回归已注册');
+ok(swiftTests.includes('catalog metadata is evicted only after media'), 'Swift 场景断言元数据最后淘汰');
 
 // —— 5. 不留真实地址/凭据 ——
 const urlish = [...all.matchAll(/https?:\/\/[^\s"'<>)]+/g)].map((m) => m[0]);

@@ -41,6 +41,7 @@
     "test:migrate-s3": "node scripts/test-migrate-s3.mjs",
     "test:web-offline": "node scripts/test-web-offline.mjs",
     "test:catalog-offline": "vite-node scripts/test-catalog-offline.mjs",
+    "test:local-app": "vite-node scripts/test-local-application.mjs",
     "test:web-offline-browser": "node scripts/test-web-offline-browser.mjs",
     "test:offline-app-browser": "node scripts/test-offline-app-browser.mjs",
     "test:native-offline": "node scripts/test-native-offline.mjs",

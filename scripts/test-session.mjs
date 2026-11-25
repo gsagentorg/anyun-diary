@@ -15,7 +15,8 @@ ViteNodeRunner.prototype.dependencyRequest = function(id, fsPath, callstack) {
 };
 let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[]; const nativeCommands=[];
 class NativeStub extends EventTarget {
-  constructor(config,update){super();this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
+  static count=0;
+  constructor(config,update){super();NativeStub.count++;this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
   refresh(){return Promise.resolve();} sync(){nativeSyncs.push(structuredClone(this.config()));return Promise.resolve();}
   clear(cfg){nativeSyncs.push(structuredClone(cfg));return Promise.resolve();}
   command(action){nativeCommands.push(action);return Promise.resolve();}
@@ -85,6 +86,10 @@ store.set('anyun-session-v1',legacy);store.set('anyun-session-v2',migrated);
 m.setPlayerCatalog([a]);await new Promise(resolve=>setTimeout(resolve,0));
 assert.equal(m.player.track.audio.id,'native-owned','native queue wins over both web snapshots');
 assert.equal(m.player.playing,true);assert.equal(m.sleep.until,nativeState.sleepUntil);
+// issue #23：重载只读原生快照——不新建第二个桥接/音频会话，不 configure、不 play。
+assert.equal(NativeStub.count,1,'a reload creates exactly one native bridge adapter');
+assert.equal(nativeSyncs.length,0,'native bootstrap applies the restored state without reconfiguring');
+assert.deepEqual(nativeCommands,[],'native bootstrap issues no transport command (no second play/pause/seek)');
 assert.deepEqual(m.player.history,[0]);assert.deepEqual(m.player.shuffleRedo,[0]);
 assert.equal(store.get('anyun-session-v2'),migrated);
 nativeUpdate({...nativeState,shuffle:false,repeatOne:true});

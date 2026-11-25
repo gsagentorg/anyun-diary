@@ -5,7 +5,7 @@
 ## 目标与边界
 
 - 用户在线上播放某曲时，网页在**后台完整下载一次**；完成即宣布「本曲可离线」。之后离线重开网站、重播该曲直接本地播放，不依赖网络。
-- **只缓存当前播放的曲目**（用户已选择播放），不做全库预抓。
+- **不做全库预抓**：只缓存用户点播的当前曲，以及暂停态下「当前曲 + 计划下一首」这两首（见 §6）。
 - 不引入新依赖、不改服务端音频代理/数据拓扑、不改变 `attachAudioRenewal(a, identity, fail)` 的调用方契约。
 - App（Capacitor）内一律不走这层：队列保留稳定 HTTPS，由 AVPlayer 独立读取原生磁盘缓存。
 
@@ -70,7 +70,16 @@ play → renew
 - 缓存命名空间 `anyun-shell-<version>`/`anyun-nav-<version>`；activate 只删自己旧版本，**绝不触碰音频缓存**。
 - 首次安装主动保存首页；更新不调用 skipWaiting，让旧页面保留自己的资源版本，关闭旧页面后再激活新版本，不强制 reload。
 
-### 6. UI
+### 6. 暂停预取（issue #7）
+
+- 触发点（仅网页，`prefetchEligible()` 要求有当前曲且 `player.playing === false`）：`online` 事件、回前台（`visibilitychange`）、会话恢复预载后、以及一次播放失败停住之后。
+- 一轮 = 当前曲 + **一首**计划下一首，用 `prepareWebAudio` 同一完整 200 下载管线（共享容量/并发上限/LRU/quota 守卫）；不调用 `play()`、不改 `pos`/`playing`/`currentTime`、不设 `player.track`、不产生横幅（#6 的暂停意图守卫照旧）。
+- 随机模式的下一首在预取时定下来（`planShuffleNext`：回退栈顶仍有效优先，否则按 `pickShuffleIndex` 同一 played/avoid 规则预抽并记住 `reset`）；`step(1)` 在随机模式优先消费这份计划，不再重抽。顺序/单曲循环的计划就是 `pos + 1`（存在时）。
+- 计划带 `epoch + mode + pos + queueEntryId` 四重校验：队列增删/调序/清空、模式切换、去重或「避开同名」开关变化、手动跳曲、换曲都会作废旧计划。
+- `clearQueue` / `stopCurrent` 会中止在途预取；迟到响应既不会写缓存（web-audio-cache 的 clear token/abort 守卫）也不会复活队列或设置 `player.track`。
+- App（Capacitor）不跑这套调度：原生侧本来就是单槽预取，只预取**当前**流式曲目（见 [ios-audio-cache.md](ios-audio-cache.md)）；下一首的原生预取需要新增 Swift 桥命令，本轮未做（未编译未真机，不在 Linux 上冒险加）。
+
+### 7. UI
 
 - Web 分支入口（`showCacheEntry`，已接线）：原生壳用 `CacheSheet`，网页用 `WebCacheSheet`；两者都真实存在，无假入口。
 - `WebCacheSheet`：用量条、上限、清音频、本曲状态（可离线/下载中/未缓存）、「本曲已完整缓存可离线」事件提示、浏览器可能回收/隐身模式/仅完整缓存可离线/离线重开依赖页面版本等说明与不支持提示。
@@ -79,7 +88,7 @@ play → renew
 
 - 不缓存真实音频进 Service Worker 路径；不用 206/opaque 冒充完整缓存；不付费服务、不加依赖。
 - 不改 `/api/audio` 服务端（代理/签名/数据拓扑零改动）；网页音频模块不负责 Swift/native-cache/player 状态机；共享页面与测试入口已集成。
-- 不自动预抓整队列——只缓存用户点播过的当前曲。
+- 不自动预抓整队列——只缓存用户点播过的当前曲，加上暂停态下的计划下一首（§6）。
 
 ## 已知限制
 
@@ -91,7 +100,8 @@ play → renew
 ## 验证
 
 ```bash
-node scripts/test-web-offline.mjs            # 行为回归（124 项断言）：模拟 CacheStorage，非字符串断言；vite-node 下同样可跑
+node scripts/test-web-offline.mjs            # 行为回归（124 项断言）
+vite-node scripts/test-paused-prefetch.mjs   # 暂停预取（53 项断言）：不出声/计划复用/失效/失败保留/清空不复活
 node scripts/test-audio-renewal.mjs          # 原续签回归（未改动，node 直跑）
 vite-node scripts/test-audio-renewal.mjs     # test:catalog 内的原样跑法
 PLAYWRIGHT_MODULE=~/.nvm/.../playwright-core/index.mjs CHROMIUM_PATH=~/.local/opt/chrome-linux64/chrome \

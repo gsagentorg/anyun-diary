@@ -13,7 +13,8 @@ export function setPlayerCatalog(audios: DiaryAudio[]) {
   if (nativeAudio) void nativeAudio.refresh().catch(() => {});
   if (typeof window !== 'undefined') initSession();
 }
-import { trackKeyOf, pickShuffleIndex, shuffleAvoidIdx, peekShuffleNext } from './playlist-core';
+import { trackKeyOf, pickShuffleIndex, shuffleAvoidIdx, peekShuffleNext, planShuffleNext, type NextPlan } from './playlist-core';
+import { prepareWebAudio } from './web-audio-cache';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
 import { DEFAULT_SLEEP_CUSTOM, SLEEP_CUSTOM_VERSION, parseSleepCustom, sleepCustomSnapshot, validateSleepCustom, type SleepCustomParameters, isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
@@ -41,12 +42,17 @@ function showBanner(next: PlaybackBanner) {
 function showPlaybackFailure(identity: string, message: string) {
   showBanner(failPlayback(banner, identity, message));
 }
+/** 播放意图（issue #6 的暂停/继续出口维护；预取的静默语义也跟着它走）。 */
+let playIntent = false;
+
 /** 用户显式暂停：作废本次播放尝试的横幅，并让暂停期间的后台重试失败保持静默。 */
 export function notePauseIntent() {
+  playIntent = false;
   showBanner(notePause(banner, bannerIdentity()));
 }
 /** 用户再次点播放：恢复播放意图（只改意图与横幅，不碰音频）。 */
 export function notePlayIntent() {
+  playIntent = true;
   showBanner(notePlay(banner, bannerIdentity()));
 }
 function nativeConfig() {
@@ -208,6 +214,7 @@ export function initDedup() {
 /** 切换「同名不同词算重复」：写 state + localStorage('anyun-dedup')；键基变了 → 清随机历史 */
 export function setDedupByName(v: boolean) {
   player.dedupByName = v;
+  invalidateNextPlan(); // 曲目标识变了：旧「下一首」不再可信
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(DEDUP_KEY, v ? '1' : '0');
@@ -226,6 +233,7 @@ const SKIP_SAME_KEY = 'anyun-shuffle-skip-same';
 /** 切换「随机避开同名」：写 state + localStorage；不影响「同名不同词算重复」的身份判定 */
 export function setShuffleSkipSameTitle(v: boolean) {
   player.shuffleSkipSameTitle = v;
+  invalidateNextPlan(); // 回避集合变了：旧抽取作废
   if (typeof window !== 'undefined') {
     try {
       window.localStorage.setItem(SKIP_SAME_KEY, v ? '1' : '0');
@@ -257,6 +265,7 @@ export function setPlayMode(mode: PlayMode) {
   if (!isPlayMode(mode) || player.mode === mode) return;
   player.mode = mode;
   player.shuffle = mode === 'random';
+  invalidateNextPlan(); // 模式变化：旧计划（抽取或 pos+1）作废
   player.history = [];
   player.shuffleRedo = [];
   player.playedTitles = player.track ? [trackKey(player.track)] : [];
@@ -292,6 +301,8 @@ const gAudio = globalThis as typeof globalThis & {
   __anyunSessionInit?: boolean;
   __anyunSleepAudio?: SleepAudio;
   __anyunSyncSleep?: () => void;
+  /** 暂停预取的 online 事件只绑一次（HMR 也不重复） */
+  __anyunPrefetchBound?: boolean;
 };
 
 function ensureAudio(): HTMLAudioElement {
@@ -317,6 +328,7 @@ function ensureAudio(): HTMLAudioElement {
     a.addEventListener('pause', () => {
       player.playing = false;
       setMediaPlaybackState('paused');
+      // 暂停本身不触发预取（current+next 的预取只由「连接恢复/回前台/暂停恢复」驱动，issue #7）。
     });
     a.addEventListener('ended', () => {
       player.playing = false;
@@ -338,6 +350,7 @@ gAudio.__anyunFixFake = fixFakePlaying;
 
 if (typeof window !== 'undefined' && !usesNativeAudio() && !gAudio.__anyunWatchdog) {
   gAudio.__anyunWatchdog = true;
+  bindPrefetchTriggers(); // 联网恢复 → 暂停预取（online 事件）
   // 声明为媒体播放会话：支持的平台据此改善锁屏控件与混音处理（不支持则忽略）
   try {
     const as = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
@@ -356,6 +369,8 @@ if (typeof window !== 'undefined' && !usesNativeAudio() && !gAudio.__anyunWatchd
       const a = gAudio.__anyunAudio;
       if (!player.track) setMediaPlaybackState('none');
       else setMediaPlaybackState(a && !a.paused ? 'playing' : 'paused');
+      // 回前台也是「可能刚恢复网络」的时机：暂停态下补一次缓存。
+      if (!player.playing) void prefetchForOffline();
     } else {
       writeSessionSnapshot(); // 切后台兜底保存
     }
@@ -363,6 +378,9 @@ if (typeof window !== 'undefined' && !usesNativeAudio() && !gAudio.__anyunWatchd
 }
 
 function playCurrent() {
+  // 换曲：旧曲的「下一首计划」随之作废（issue #7）；显式选播=有播放意图。
+  invalidateNextPlan();
+  playIntent = true;
   const t = player.playlist[player.pos];
   if (!t) {
     player.track = null;
@@ -375,7 +393,7 @@ function playCurrent() {
   const a = getAudio(); // Resume a suspended gain graph within the track-selection gesture.
   a.src = audioUrl(t.audio.opus);
   a.load();
-  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;showPlaybackFailure(t.queueEntryId, e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试'); });
+  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;playIntent=false;showPlaybackFailure(t.queueEntryId, e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试');void prefetchForOffline(); });
   updateMediaSession(t);
   scheduleSessionSave();
 }
@@ -517,6 +535,7 @@ export function playAt(i: number) {
 /** 移除队列中指定行：移除项在当前项之前 pos--；等于当前项则顺延播放下一首/停止 */
 export function removeAt(index: number) {
   if (index < 0 || index >= player.playlist.length) return;
+  invalidateNextPlan(); // 队列变化：旧计划的下标可能指向别的曲
   player.playlist = player.playlist.filter((_, i) => i !== index);
   player.history = player.history.filter(h => h !== index).map(h => h > index ? h - 1 : h);
   player.shuffleRedo = player.shuffleRedo
@@ -539,6 +558,7 @@ export function removeAt(index: number) {
 export function moveTrack(from: number, to: number) {
   const n = player.playlist.length;
   if (from < 0 || to < 0 || from >= n || to >= n || from === to) return;
+  invalidateNextPlan(); // 手动调序 = 队列变化
   const old = [...player.playlist];
   const removed = player.playlist.splice(from, 1)[0];
   player.playlist.splice(to, 0, removed);
@@ -561,6 +581,7 @@ export function moveTrack(from: number, to: number) {
  */
 export function clearQueue() {
   const native = usesNativeAudio();
+  invalidateNextPlan();
   const a = getAudio();
   a.pause();
   if (!native) {
@@ -572,6 +593,8 @@ export function clearQueue() {
     a.removeAttribute('src');
     a.load();
   }
+  // 迟到的预取结果不得复活已清空的队列（issue #7）。
+  abortPrefetch();
 
   player.playlist = [];
   player.pos = -1;
@@ -674,6 +697,129 @@ export function hasNextTrack(): boolean {
   return cur < n - 1;
 }
 
+/* ---------- 下一首计划 + 暂停预取（issue #7）----------
+ * 随机模式的「下一首」必须在预取时就定下来：暂停联网后缓存的那首，就是恢复播放推进时真正会播的那首。
+ * 队列/模式/当前曲目任一变化都会作废旧计划（计划里同时带 queueEntryId 与 epoch 双重校验）。 */
+
+type NextPlanRecord = NextPlan & {
+  epoch: number;
+  mode: PlayMode;
+  pos: number;
+  fromEntry: string;
+  toEntry: string;
+};
+
+let nextPlan: NextPlanRecord | null = null;
+let planEpoch = 0;
+
+/** 队列/模式/当前曲目任一变化 → 旧计划作废（下一首重新计算或重新抽取）。 */
+function invalidateNextPlan() {
+  planEpoch++;
+  nextPlan = null;
+}
+
+function validPlan(record: NextPlanRecord | null): record is NextPlanRecord {
+  if (!record) return false;
+  if (record.epoch !== planEpoch || record.mode !== player.mode || record.pos !== player.pos) return false;
+  const from = player.playlist[player.pos];
+  const to = player.playlist[record.index];
+  return !!from && !!to && from.queueEntryId === record.fromEntry && to.queueEntryId === record.toEntry;
+}
+
+/** 只读当前有效的「下一首计划」（测试/UI 诊断用；无效返回 null）。 */
+export function getPrefetchPlan(): { index: number } | null {
+  return validPlan(nextPlan) ? { index: nextPlan.index } : null;
+}
+
+/** 计算（或复用）下一首计划：随机走 planShuffleNext，其余模式取 pos+1（存在时）。 */
+function ensureNextPlan(): NextPlanRecord | null {
+  if (validPlan(nextPlan)) return nextPlan;
+  const from = player.playlist[player.pos];
+  if (!from) { nextPlan = null; return null; }
+  let plan: NextPlan | null;
+  if (player.mode === 'random') {
+    const keys = player.playlist.map(trackKey);
+    plan = planShuffleNext(keys, player.playedTitles, player.pos, player.shuffleRedo,
+      player.shuffleSkipSameTitle ? shuffleAvoidIdx(player.playlist.map((t) => t.audio.title), keys, player.playedTitles) : undefined);
+  } else {
+    const i = player.pos + 1;
+    plan = i < player.playlist.length ? { index: i, reset: false, viaRedo: false } : null;
+  }
+  const to = plan ? player.playlist[plan.index] : undefined;
+  nextPlan = plan && to ? { ...plan, epoch: planEpoch, mode: player.mode, pos: player.pos, fromEntry: from.queueEntryId, toEntry: to.queueEntryId } : null;
+  return nextPlan;
+}
+
+/* ---------- 暂停预取调度器：只补缓存，绝不出声、不动进度 ---------- */
+
+let prefetchController: AbortController | null = null;
+let prefetchBusy: Promise<void> | null = null;
+let prefetchSeq = 0;
+
+/** 现在是否处于「无播放意图的暂停态」：有当前曲，且音频没在播。 */
+function prefetchEligible(): boolean {
+  return (
+    typeof window !== 'undefined' &&
+    !usesNativeAudio() &&
+    !!player.track &&
+    player.pos >= 0 &&
+    player.pos < player.playlist.length &&
+    !player.playing
+  );
+}
+
+function downloadIntoCache(url: string, signal: AbortSignal): Promise<void> {
+  // prepareWebAudio 命中即返回、未命中后台完整下载；永不影响播放，也不报横幅。
+  return prepareWebAudio(url, { signal })
+    .then((prepared) => { prepared.release(); return prepared.done; })
+    .then(() => undefined)
+    .catch(() => undefined);
+}
+
+/** 中止在途预取（清空队列/会话切换用）：进行中的下载作废且不再继续下一首。 */
+function abortPrefetch() {
+  prefetchSeq++;
+  prefetchController?.abort();
+  prefetchController = null;
+  prefetchBusy = null;
+}
+
+/**
+ * 暂停态下确保「当前曲 + 计划下一首」都完整进入网页音频缓存。
+ * - 不调用 play()、不改 pos/playing/currentTime，也不会设置 player.track 或横幅；
+ * - 只下载，容量上限/并发上限/clear 守卫全由 web-audio-cache 负责；
+ * - 并发调用共享同一轮；换曲/清队/模式变化都会让本轮在下一个检查点自行退出。
+ */
+export function prefetchForOffline(): Promise<void> {
+  if (prefetchBusy) return prefetchBusy;
+  if (!prefetchEligible()) return Promise.resolve();
+  const current = player.track;
+  if (!current) return Promise.resolve();
+  const seq = ++prefetchSeq;
+  const controller = new AbortController();
+  prefetchController = controller;
+  const epoch = planEpoch;
+  const stale = () => seq !== prefetchSeq || controller.signal.aborted || epoch !== planEpoch || player.track !== current;
+  const job = (async () => {
+    await downloadIntoCache(audioUrl(current.audio.opus), controller.signal);
+    if (stale()) return; // 下载期间队列/模式/当前曲变了：不再继续，也绝不复活已清队列
+    const plan = ensureNextPlan();
+    const next = plan ? player.playlist[plan.index] : null;
+    if (!next) return;
+    await downloadIntoCache(audioUrl(next.audio.opus), controller.signal);
+  })();
+  const settle = () => { if (seq === prefetchSeq) prefetchBusy = null; };
+  prefetchBusy = job.then(settle, settle);
+  return prefetchBusy;
+}
+
+/** 浏览器事件接入：联网恢复 / 回前台 / 暂停 → 补缓存（仅网页；App 由原生单曲预取负责）。 */
+function bindPrefetchTriggers() {
+  if (gAudio.__anyunPrefetchBound || typeof window === 'undefined' || usesNativeAudio()) return;
+  gAudio.__anyunPrefetchBound = true;
+  window.addEventListener('online', () => { void prefetchForOffline(); });
+}
+
 /** 跳到列表内第 i 项（记录历史与已播曲目，供随机模式去重/回退） */
 function stepTo(i: number) {
   if (i < 0 || i >= player.playlist.length || i === player.pos) return;
@@ -715,8 +861,22 @@ export function step(delta: number) {
         playCurrent();
         return;
       }
+      // 预取时已定下的下一首（issue #7）：推进消费同一选择，不再重抽。
+      const plan = validPlan(nextPlan) ? nextPlan : null;
+      if (plan) {
+        nextPlan = null;
+        if (plan.reset) player.playedTitles = []; // 与 playRandom 的池重置语义一致
+        // 与 step(1) 原生路径一致：复用栈顶只弹顶、保留其余回退历史；随机抽取开新曲才清栈（同 playRandom）。
+        if (plan.viaRedo) player.shuffleRedo.pop();
+        else player.shuffleRedo = [];
+        recordVisit();
+        player.pos = plan.index;
+        playCurrent();
+        return;
+      }
       playRandom();
     } else {
+      invalidateNextPlan(); // 回退栈变了：计划下一首（优先复用栈顶）随之作废
       if (player.pos >= 0) player.shuffleRedo.push(player.pos);
       const prev = player.history.pop();
       if (prev != null) {
@@ -888,6 +1048,7 @@ export function initSession() {
   if (snap) {
     const tracks = snap.queue;
     if (tracks.length > 0) {
+      invalidateNextPlan(); // 队列整体替换：旧计划作废
       const origFile =
         snap.cur >= 0 && snap.cur < snap.queue.length ? snap.queue[snap.cur] : null;
       const cur = origFile ? snap.cur : -1;
@@ -923,6 +1084,7 @@ export function initSession() {
         a.addEventListener('loadedmetadata', onMeta);
         a.load();
         // 不调用 play()：刷新后保持暂停，等用户点播放
+        void prefetchForOffline(); // 暂停恢复：静默补齐当前曲+下一首的缓存
       }
       // Queue snapshots are independent of catalog loading.
     } else {
@@ -940,6 +1102,8 @@ export function initSession() {
 
 /** 停掉当前曲并清空当前项（不清队列）：URL 范围接管等场景用 */
 export function stopCurrent() {
+  abortPrefetch();
+  invalidateNextPlan();
   const a = getAudio();
   a.pause();
   a.removeAttribute('src');

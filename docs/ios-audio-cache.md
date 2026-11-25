@@ -104,7 +104,7 @@ Web 浏览器自己的离线缓存见 web-offline-cache.md；不能拿浏览器�
 - fetchJSON({url,force?}) → {data,source: cache|network|stale,ageSeconds,offline}
 - 无 JSON 缓存且网络失败：UNAVAILABLE / 离线且无缓存。
 
-策略持久化键 anyun.cache.policy.v1。默认与夹取范围：
+策略持久化键 anyun.cache.policy.v1。设置面板只展示四档预设上限（256 MB / 512 MB / 1 GB / 2 GB）与所选值；下表范围只是夹取实现细节，不在 UI 文案里展开。stats 的 cacheDir 仅供诊断/测试，不渲染给用户。默认与夹取范围：
 
 | 字段 | 默认 | 范围 |
 |---|---:|---:|

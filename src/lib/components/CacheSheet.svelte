@@ -4,7 +4,6 @@
   import Sheet from './Sheet.svelte';
   import { clearOfflineCatalog } from '$lib/backend.svelte';
   import {
-    CACHE_POLICY_LIMITS,
     DEFAULT_CACHE_POLICY,
     type CachePolicy,
     type CacheScope,
@@ -22,6 +21,9 @@
   // api 可注入：默认取原生桥；注入只用于在浏览器里预览/测试本面板。
   let { open, onClose, api = nativeCacheApi() }: { open: boolean; onClose: () => void; api?: NativeCacheApi | null } = $props();
 
+  // 面板只提供这四档上限；夹取范围（CACHE_POLICY_LIMITS 与 Swift 侧一致）属于实现细节，
+  // 由 clampCachePolicy 保证，不在 UI 里展开成区间文案。
+  // stats.cacheDir 是原生沙盒的绝对路径，仅供诊断（见 docs/ios-audio-cache.md），不渲染给用户。
   const LIMIT_CHOICES = [
     { label: '256 MB', value: 256 * 1024 * 1024 },
     { label: '512 MB', value: DEFAULT_CACHE_POLICY.maxBytes },
@@ -92,7 +94,6 @@
         </div>
         <p class="mt-1 text-2xs opacity-60">
           音频 {stats?.mediaEntries ?? 0} 项 · 索引 {stats?.jsonEntries ?? 0} 项 · 共 {stats?.entries ?? 0} 项
-          {#if stats?.cacheDir}<br /><span class="break-all">{stats.cacheDir}</span>{/if}
         </p>
       </div>
 
@@ -112,7 +113,7 @@
           {/each}
         </div>
         <p class="mt-1 text-2xs opacity-50">
-          超出上限时按最久未使用淘汰；范围 {formatBytes(CACHE_POLICY_LIMITS.maxBytes[0])}–{formatBytes(CACHE_POLICY_LIMITS.maxBytes[1])}。
+          超出上限时自动清理最久未听的缓存。
         </p>
       </div>
 

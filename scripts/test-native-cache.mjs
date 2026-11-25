@@ -141,4 +141,73 @@ eq(formatBytes(4294967296), '4.0 GB', 'gigabytes');
 ok(audioFailureText(false).includes('未缓存') && !audioFailureText(false).includes('加载'), 'offline message names the cache gap');
 ok(audioFailureText(true).includes('可重试'), 'online message offers retry');
 
+// —— 设置面板：四档预设 + 选中态持久，且不暴露原生路径/内部夹取区间（#8）——
+{
+  const { readFile } = await import('node:fs/promises');
+  const path = await import('node:path');
+  const root = path.resolve(import.meta.dirname, '..');
+  const sheet = await readFile(path.join(root, 'src/lib/components/CacheSheet.svelte'), 'utf8');
+  const webSheet = await readFile(path.join(root, 'src/lib/components/WebCacheSheet.svelte'), 'utf8');
+  const limitBlock = sheet.match(/const LIMIT_CHOICES = \[([\s\S]*?)\n  \];/)?.[1] ?? '';
+  eq((limitBlock.match(/\{ label:/g) ?? []).length, 4, 'CacheSheet offers exactly four presets');
+  for (const label of ['256 MB', '512 MB', '1 GB', '2 GB']) {
+    ok(limitBlock.includes(`label: '${label}'`), `CacheSheet preset ${label}`);
+  }
+  ok(/value: 256 \* 1024 \* 1024/.test(limitBlock), 'CacheSheet 256 MB preset value');
+  ok(/value: DEFAULT_CACHE_POLICY\.maxBytes/.test(limitBlock), 'CacheSheet 512 MB preset is the default policy');
+  ok(/value: 1024 \* 1024 \* 1024/.test(limitBlock), 'CacheSheet 1 GB preset value');
+  ok(/value: 2 \* 1024 \* 1024 \* 1024/.test(limitBlock), 'CacheSheet 2 GB preset value');
+  const markup = sheet.slice(sheet.indexOf('</script>'));
+  const webMarkup = webSheet.slice(webSheet.indexOf('</script>'));
+  ok(!/cacheDir/.test(markup), 'CacheSheet renders no native cache path');
+  ok(!/CACHE_POLICY_LIMITS/.test(markup), 'CacheSheet shows no internal clamp range constants');
+  ok(!/范围/.test(markup), 'CacheSheet has no min–max range prose');
+  ok(/超出上限时自动清理最久未听的缓存/.test(sheet), 'CacheSheet keeps a user-meaningful eviction note');
+  ok(/stats\?\.bytes/.test(sheet) && /stats\?\.mediaEntries/.test(sheet), 'CacheSheet still shows usage and entry counts');
+  ok(/clear\('media'\)|clear\('all'\)/.test(sheet), 'CacheSheet keeps the clear actions');
+  // 网页端同款：只保留四档预设与默认值说明，不展示夹取区间。
+  eq((webSheet.match(/\{ label: '/g) ?? []).length, 4, 'WebCacheSheet offers exactly four presets');
+  ok(!/WEB_AUDIO_MIN_BYTES|WEB_AUDIO_MAX_LIMIT/.test(webMarkup), 'WebCacheSheet shows no internal clamp range constants');
+  ok(!/范围/.test(webMarkup), 'WebCacheSheet has no min–max range prose');
+}
+
+// —— 面板状态往返：选中档位持久、清理后占用回落 ——
+{
+  const policyBridge = (() => {
+    let maxBytes = DEFAULT_CACHE_POLICY.maxBytes;
+    let bytes = 2048;
+    let entries = 2;
+    return {
+      async stats() {
+        return { bytes, entries, mediaEntries: 1, jsonEntries: entries - 1, maxBytes, cacheDir: '/diagnostics/only' };
+      },
+      async setPolicy({ policy: next }) {
+        maxBytes = clampCachePolicy(next).maxBytes;
+        return { policy: { ...DEFAULT_CACHE_POLICY, maxBytes } };
+      },
+      async clear() {
+        const freedBytes = bytes;
+        bytes = 0;
+        entries = 0;
+        return { freedBytes, entries: 2 };
+      },
+      async fetchJSON() {
+        throw new Error('unused');
+      },
+    };
+  })();
+  near((await nativeCacheStats(policyBridge)).maxBytes, DEFAULT_CACHE_POLICY.maxBytes, 'panel opens on the default limit');
+  const chosen = await setNativeCachePolicy({ maxBytes: 1024 * 1024 * 1024 }, policyBridge);
+  near(chosen.maxBytes, 1073741824, 'choosing 1 GB applies that preset');
+  near((await nativeCacheStats(policyBridge)).maxBytes, 1073741824, 'selected preset persists across panel refresh');
+  const before = await nativeCacheStats(policyBridge);
+  ok(before.bytes === 2048 && before.entries === 2, 'usage and entry counts visible before clearing');
+  const clearedPanel = await clearNativeCache('media', policyBridge);
+  near(clearedPanel.freedBytes, 2048, 'clear reports freed bytes');
+  const afterClear = await nativeCacheStats(policyBridge);
+  near(afterClear.bytes, 0, 'usage resets after clearing');
+  near(afterClear.entries, 0, 'entry counts reset after clearing');
+  near(afterClear.maxBytes, 1073741824, 'clearing keeps the selected limit');
+}
+
 console.log(`native-cache: ${checks} checks passed`);

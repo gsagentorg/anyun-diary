@@ -51,6 +51,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var timer: Timer?
     private var timeObserver: Any?
     private var itemObserver: NSKeyValueObservation?
+    private var bufferObserver: NSKeyValueObservation?
     private var controlObserver: NSKeyValueObservation?
     private var notifications: [NSObjectProtocol] = []
     private var targets: [(MPRemoteCommand, Any)] = []
@@ -70,6 +71,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var recoveryAttempts = 0
     private var lastProgressAt = Date()
     private var failureDetectedAt: Date?
+    /// 停流事件（playbackStalled / 缓冲耗尽）：可恢复信号，不是「确认失败」。
+    private var stallDetectedAt: Date?
     private var retryAt: Date?
     private var lastPosition: Double = 0
     private let logger = Logger(subsystem: Bundle.main.bundleIdentifier ?? "anyun", category: "Playback")
@@ -107,11 +110,16 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         controlObserver = audio.observe(\.timeControlStatus, options: [.new]) { [weak self] _, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
+                // 唯一「健康」判据：timeControlStatus 真的回到 .playing（不是位置是否有推进）。
+                if self.audio.timeControlStatus == .playing { self.noteHealthyPlayback() }
                 self.activateSession(); self.publish()
             }
         }
-        timeObserver = audio.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] _ in
-            self?.tick(); self?.publish(progressOnly: true)
+        timeObserver = audio.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.25, preferredTimescale: 600), queue: .main) { [weak self] time in
+            guard let self else { return }
+            // 恢复锚点（lastPosition）只在真正播放时推进：慢网络不是失败，也不能让锚点冻住。
+            if self.audio.timeControlStatus == .playing, time.seconds.isFinite { self.lastPosition = time.seconds }
+            self.tick(); self.publish(progressOnly: true)
         }
         let sleepTimer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(sleepTimer, forMode: .common)
@@ -145,6 +153,9 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 self.diagnostic(name.rawValue, detail: "domain=\(event?.errorDomain ?? "") code=\(event?.errorStatusCode ?? 0)")
                 if name == AVPlayerItem.failedToPlayToEndTimeNotification {
                     self.failureDetectedAt = Date(); self.retryAt = nil
+                } else if name == AVPlayerItem.playbackStalledNotification {
+                    // 停流是恢复的驱动事件；「位置没推进」不再是判据。
+                    self.stallDetectedAt = Date(); self.retryAt = nil
                 }
             })
         }
@@ -263,7 +274,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         if recovering, let duration = audio.currentItem?.duration.seconds, duration.isFinite, duration > 0 { lastKnownDuration = duration }
         recoveringPlayback = recovering
-        lastPosition = at; lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
+        lastPosition = at; lastProgressAt = Date(); failureDetectedAt = nil; stallDetectedAt = nil; retryAt = nil
         diagnostic(recovering ? "reload" : "load")
         if !recovering && queue.indices.contains(pos) {
             let count = (queue[pos]["lyrics"] as? [[String: Any]])?.count ?? 0
@@ -271,7 +282,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         audioActivationToken = UUID(); audioActivationPending = false
         if !recovering { errorMessage = "" }
-        wantsPlayback = false; audio.pause(); itemObserver = nil
+        wantsPlayback = false; audio.pause(); itemObserver = nil; bufferObserver = nil
         loadGeneration += 1
         let generation = loadGeneration
         loadTask?.cancel(); loadTask = nil
@@ -345,6 +356,14 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             }
         }
         audio.replaceCurrentItem(with: item)
+        // 缓冲耗尽同样是事件信号（playbackBufferEmpty），播放恢复后由 .playing 清掉。
+        bufferObserver = item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self, item === self.audio.currentItem, item.isPlaybackBufferEmpty,
+                      self.wantsPlayback, !self.expired, !self.resolvingCache else { return }
+                self.stallDetectedAt = Date(); self.retryAt = nil
+            }
+        }
         if at > 0 { seek(at) }
         if autoplay { _ = start(recovering: recovering) }
         publish()
@@ -498,6 +517,9 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         diagnostic("pause")
         audioActivationToken = UUID(); audioActivationPending = false
         recoveringPlayback = false
+        // 显式暂停 = 播放意图消失：本次尝试的失败/停流锚点与横幅一并作废，
+        // 否则重新联网/回前台会把已作废的失败重新推回 UI。
+        failureDetectedAt = nil; stallDetectedAt = nil; retryAt = nil; errorMessage = ""
         wantsPlayback = false; audio.pause(); publish()
     }
     private func seek(_ seconds: Double) {
@@ -545,20 +567,17 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         checkRecovery()
     }
     // Runs natively while background audio is active, and immediately on foreground.
+    // 重试只由事件驱动：确认失败（item 失败 / failedToPlayToEndTime）或停流信号
+    // （playbackStalled / 缓冲耗尽）。位置未推进本身不是失败 —— 慢网络不是失败。
     private func checkRecovery() {
         guard wantsPlayback, !audioActivationPending, audio.currentItem != nil else { return }
-        let position = audio.currentTime().seconds
-        if position.isFinite && position > lastPosition + 0.05 {
-            lastPosition = position
-            lastProgressAt = Date(); failureDetectedAt = nil; retryAt = nil
-            if recoveringPlayback { diagnostic("recovered"); recoveringPlayback = false; errorMessage = "" }
-            recoveryAttempts = 0
-            return
-        }
+        let confirmed = failureDetectedAt
+        let stalled = stallDetectedAt
+        guard confirmed != nil || stalled != nil else { return }
         if retryAt == nil {
-            let delay = NativeRetry.delay(attempt: recoveryAttempts, confirmedFailure: failureDetectedAt != nil,
+            let delay = NativeRetry.delay(attempt: recoveryAttempts, confirmedFailure: confirmed != nil,
                 jitter: Double.random(in: 0...1))
-            retryAt = (failureDetectedAt ?? lastProgressAt).addingTimeInterval(delay)
+            retryAt = (confirmed ?? stalled ?? lastProgressAt).addingTimeInterval(delay)
         }
         guard let deadline = retryAt, Date() >= deadline else { return }
         // A malformed/unsupported local file is bypassed after one failure. Even if the
@@ -575,6 +594,13 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         recoveryAttempts += 1
         diagnostic("retry", detail: "attempt=\(recoveryAttempts)")
         loadCurrent(autoplay: true, at: lastPosition, recovering: true)
+    }
+    /// 播放确实恢复时唯一的「健康」动作：清失败/停流锚点与横幅，重置重试计数。
+    private func noteHealthyPlayback() {
+        failureDetectedAt = nil; stallDetectedAt = nil; retryAt = nil
+        recoveryAttempts = 0
+        if recoveringPlayback { diagnostic("recovered"); recoveringPlayback = false }
+        errorMessage = ""
     }
     private func diagnostic(_ event: String, detail: String = "") {
         // Do not write server URLs, query tokens, or song titles to diagnostics.
@@ -626,13 +652,15 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         let duration = audio.currentItem?.duration.seconds ?? 0
         if duration.isFinite && duration > 0 { lastKnownDuration = duration }
         let recovering = recoveringPlayback && wantsPlayback
+        let playing = audio.timeControlStatus == .playing
         let displayTime = (recovering || resolvingCache) ? max(lastPosition, time.isFinite ? time : 0) : (time.isFinite ? time : 0)
         let displayDuration = recovering ? lastKnownDuration : (duration.isFinite ? duration : 0)
         var state: [String: Any] = ["pos": pos,
                 "shuffle": shuffle, "repeatOne": repeatOne, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": displayTime, "duration": displayDuration,
-                "playing": audio.timeControlStatus == .playing, "loading": (resolvingCache && wantsPlayback) || recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
+                "playing": playing, "loading": (resolvingCache && wantsPlayback) || recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
+                // 播放中永远不携带过期错误：横幅只描述现行失败。
+                "error": playing ? "" : errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "supportsCustomSleep": true, "sleepCustomVersion": 1, "sleepCustom": sleepState.custom.dictionary,
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
         if !progressOnly {

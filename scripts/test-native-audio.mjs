@@ -241,3 +241,46 @@ assert.equal(current.sleepRevision, 'custom-one', 'native-restored revision pres
 assert.equal(restoredAudio.supportsCustomSleep, true);
 restoredAudio.dispose();
 console.log('native audio: opt-in custom capability, old-shell refusal/preset compatibility, snapshot/delta/cold restore passed');
+
+// —— issue #6 裁决②：恢复完全由事件驱动，位置未推进不是失败 ——
+const between = (from, to) => {
+  const a = swift.indexOf(from), b = swift.indexOf(to);
+  assert.ok(a >= 0 && b > a, `expected ${from} before ${to}`);
+  return swift.slice(a, b);
+};
+const recovery = between('private func checkRecovery()', 'private func noteHealthyPlayback(');
+assert.ok(!/currentTime\(\)\.seconds/.test(recovery) && !/lastPosition \+ 0\.05/.test(recovery),
+  'checkRecovery has no position-progress health branch');
+assert.ok(!/lastPosition = position/.test(recovery), 'recovery no longer advances lastPosition');
+assert.ok(recovery.includes('stallDetectedAt') && recovery.includes('failureDetectedAt'),
+  'recovery is driven by failure/stall events');
+assert.ok(recovery.includes('guard confirmed != nil || stalled != nil else { return }'),
+  'no event means no recovery scheduling');
+assert.ok(recovery.includes('recoveryAttempts >= 8'), 'the hard cap of 8 attempts stays');
+assert.ok(recovery.includes('NativeRetry.delay(attempt: recoveryAttempts, confirmedFailure: confirmed != nil'),
+  'NativeRetry backoff still schedules the retry');
+assert.ok(recovery.includes('loadCurrent(autoplay: true, at: lastPosition, recovering: true)'),
+  'retry reloads at the sampled anchor');
+const observer = between('timeObserver = audio.addPeriodicTimeObserver', 'let sleepTimer = Timer(');
+assert.ok(observer.includes('self.audio.timeControlStatus == .playing') && observer.includes('self.lastPosition = time.seconds'),
+  'lastPosition is sampled in the 0.25s time observer, gated on .playing');
+assert.ok(between('private func seek(', 'private func visit(').includes('lastPosition = max(0, seconds)'),
+  'seek still anchors lastPosition');
+assert.ok(/lastPosition = at; lastProgressAt = Date\(\); failureDetectedAt = nil; stallDetectedAt = nil/.test(swift),
+  'loadCurrent still anchors lastPosition and resets both signals');
+const control = between('controlObserver = audio.observe', 'timeObserver = audio.addPeriodicTimeObserver');
+assert.ok(control.includes('if self.audio.timeControlStatus == .playing { self.noteHealthyPlayback() }'),
+  'the .playing transition is the only health judgement');
+const healthy = between('private func noteHealthyPlayback()', 'private func diagnostic(');
+assert.ok(healthy.includes('failureDetectedAt = nil') && healthy.includes('stallDetectedAt = nil') && healthy.includes('errorMessage = ""'),
+  'resumed playback clears the failure anchors and the banner');
+assert.ok(healthy.includes('recoveryAttempts = 0'), 'resumed playback resets the bounded retry counter');
+const stalled = between('if name == AVPlayerItem.failedToPlayToEndTimeNotification', 'notifications.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification');
+assert.ok(stalled.includes('self.stallDetectedAt = Date()'), 'playbackStalled is recorded as a stall event');
+assert.ok(swift.includes('bufferObserver = item.observe(\\.isPlaybackBufferEmpty'), 'playbackBufferEmpty is observed per item');
+assert.ok(between('bufferObserver = item.observe(', 'if at > 0 { seek(at) }').includes('self.stallDetectedAt = Date()'),
+  'buffer exhaustion feeds the same stall signal');
+assert.ok(between('private func pause()', 'private func seek(').includes('errorMessage = ""'),
+  'explicit pause clears the superseded errorMessage');
+assert.ok(swift.includes('"error": playing ? "" : errorMessage'), 'publish never carries a stale error while playing healthily');
+console.log('native audio: issue #6 event-driven recovery source contract passed (no position-progress branch, sampled anchor, cap 8, event-driven clear)');

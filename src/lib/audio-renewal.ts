@@ -72,6 +72,8 @@ import { acquireCachedAudio, hasCachedAudioSync, invalidateCachedAudio, prepareW
  a.addEventListener('error',()=>{if(replacing)return;if(expiresAt!==null){void recover();return;}
   // Blob 源中途报错（如缓存条目损坏）：作废该条目并落回在线恢复；attempts 上限防循环。
   if(blob&&resolved===blob.url){const broken=blob,version=epoch,id=identity();blob=null;void ((async()=>{broken.release();await invalidateCachedAudio(stable).catch(()=>{});if(valid(version,id)){resolved='';void recover();}})());}});
- async function recover(){const id=identity(),version=epoch;try{await renew(true);if(valid(version,id)&&intent)await play();}catch(e){if(!valid(version,id)||(e as DOMException)?.name==='AbortError')return;if((e as DOMException)?.name==='NotAllowedError')intent=false;fail((e as Error).message||'音频恢复失败');}}
+ async function recover(){const id=identity(),version=epoch;try{await renew(true);if(valid(version,id)&&intent)await play();}catch(e){if(!valid(version,id)||(e as DOMException)?.name==='AbortError')return;if((e as DOMException)?.name==='NotAllowedError')intent=false;
+  // 用户已暂停（intent=false）时后台重试失败不是「当前播放失败」：不出声、不复活横幅。
+  if(!intent)return;fail((e as Error).message||'音频恢复失败');}}
  return {renew,inspect:()=>({stable,expiresAt,attempts,fromCache:blob!==null})};
 }

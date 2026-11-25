@@ -23,12 +23,32 @@ export type { Track };
 
 
 import { NativeAudio, usesNativeAudio, type NativeState } from './native-audio';
+import { beginTrack, failPlayback, fromNative, noteHealthy, noteNotice, notePause, notePlay, NO_BANNER, type PlaybackBanner } from './playback-banner';
 let nativeAudio: NativeAudio | undefined;
 let nativeBootstrapDone = false;
 let nativeBootstrapPending = false;
 let applyingNativeState = false;
 let nativeQueueMapped = false;
 let nativeSleepRevision = '';
+/** 横幅状态机：player.error 只是 banner.message 的镜像，所有写入都经这里（issue #6）。 */
+let banner: PlaybackBanner = NO_BANNER;
+function bannerIdentity() { return player.track?.queueEntryId ?? ''; }
+function showBanner(next: PlaybackBanner) {
+  banner = next;
+  player.error = next.message;
+}
+/** 当前曲目的一次播放失败：身份不符（已切走）或用户已显式暂停 → 不显示。 */
+function showPlaybackFailure(identity: string, message: string) {
+  showBanner(failPlayback(banner, identity, message));
+}
+/** 用户显式暂停：作废本次播放尝试的横幅，并让暂停期间的后台重试失败保持静默。 */
+export function notePauseIntent() {
+  showBanner(notePause(banner, bannerIdentity()));
+}
+/** 用户再次点播放：恢复播放意图（只改意图与横幅，不碰音频）。 */
+export function notePlayIntent() {
+  showBanner(notePlay(banner, bannerIdentity()));
+}
 function nativeConfig() {
   return {
     queue: player.playlist.map(t => ({ id: t.nativeQueueId ?? t.queueEntryId, audio: JSON.parse(JSON.stringify(t.audio)), url: audioUrl(t.audio.opus), title: t.audio.title || '（未识别）', key: trackKey(t), lyrics: t.audio.lyrics ?? [], clipDuration: (t.audio.duration ?? 0), album: typeof t.audio.startAt === 'number' && Number.isFinite(t.audio.startAt) ? `安允日记 · ${dateCard(t.audio.startAt).md}` : '安允日记' })),
@@ -73,7 +93,8 @@ function applyNativeState(state: NativeState) {
     else if (typeof state.repeatOne === 'boolean') player.mode = state.repeatOne ? 'repeat-one' : 'sequential';
     else if (player.mode === 'random') player.mode = 'sequential';
     player.playbackRate = state.rate; player.playing = state.playing; player.loading = state.loading;
-    player.error = state.error;
+    // 原生快照是权威的：播放中 → 清横幅；停着且原生报错 + 仍有播放意图 → 现行失败。
+    showBanner(fromNative(banner, bannerIdentity(), { playing: state.playing, error: state.error }));
     nativeSleepRevision = state.sleepRevision ?? '';
     sleep.until = state.sleepUntil; sleep.started = state.sleepStarted; sleep.afterTrack = state.afterTrack;
     if (isSleepMode(state.sleepMode)) sleep.mode = state.sleepMode;
@@ -275,13 +296,13 @@ const gAudio = globalThis as typeof globalThis & {
 
 function ensureAudio(): HTMLAudioElement {
   if (usesNativeAudio()) {
-    nativeAudio ??= new NativeAudio(nativeConfig, applyNativeState, (message, loading = false) => { player.error = message; player.loading = loading; });
+    nativeAudio ??= new NativeAudio(nativeConfig, applyNativeState, (message, loading = false) => { player.loading = loading; showPlaybackFailure(bannerIdentity(), message); });
     return nativeAudio as unknown as HTMLAudioElement;
   }
   if (!gAudio.__anyunAudio) {
     const a = new Audio();
     a.preload = 'metadata';
-    attachAudioRenewal(a,()=>player.track?.queueEntryId??'',message=>{player.error=message;player.loading=false;});
+    attachAudioRenewal(a,()=>player.track?.queueEntryId??'',message=>{player.loading=false;showPlaybackFailure(bannerIdentity(),message);});
     a.playbackRate = player.playbackRate; // 创建时即应用当前倍速
     // 一次性绑定：audio 的真实播放状态 → player.playing（M4 状态真实）
     a.addEventListener('play', () => {
@@ -289,6 +310,8 @@ function ensureAudio(): HTMLAudioElement {
       void gAudio.__anyunSleepAudio?.resume();
       if (a.paused) return;
       player.playing = true;
+      // 正在播 = 不存在现行失败：迟到的错误横幅就此失效。
+      showBanner(noteHealthy(banner, bannerIdentity()));
       setMediaPlaybackState('playing');
     });
     a.addEventListener('pause', () => {
@@ -340,18 +363,19 @@ if (typeof window !== 'undefined' && !usesNativeAudio() && !gAudio.__anyunWatchd
 }
 
 function playCurrent() {
-  player.error = '';
   const t = player.playlist[player.pos];
   if (!t) {
     player.track = null;
+    showBanner(NO_BANNER);
     return;
   }
   player.track = t;
+  showBanner(beginTrack(t.queueEntryId));
   player.loading = true;
   const a = getAudio(); // Resume a suspended gain graph within the track-selection gesture.
   a.src = audioUrl(t.audio.opus);
   a.load();
-  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;player.error=e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试'; });
+  a.play().catch((e) => { if(player.track?.queueEntryId!==t.queueEntryId)return;player.loading=false;player.playing=false;showPlaybackFailure(t.queueEntryId, e?.name==='NotAllowedError'?'队列已就绪，点击播放': '播放未能开始，请点击播放重试'); });
   updateMediaSession(t);
   scheduleSessionSave();
 }
@@ -386,11 +410,12 @@ function updateMediaSession(t: Track) {
   if (!mediaHandlersBound) {
     mediaHandlersBound = true;
     ms.setActionHandler('play', () => {
+      notePlayIntent();
       getAudio()
         .play()
         .catch((e) => console.warn('[media] 系统播放按钮被浏览器拒绝：', e));
     });
-    ms.setActionHandler('pause', () => getAudio().pause());
+    ms.setActionHandler('pause', () => { notePauseIntent(); getAudio().pause(); });
     ms.setActionHandler('previoustrack', () => step(-1));
     ms.setActionHandler('nexttrack', () => step(1));
     ms.setActionHandler('seekbackward', (d) => {
@@ -446,7 +471,7 @@ export function reportPlaybackState(duration: number, position: number) {
   }
 }
 
-function allowQueueChange(list:Track[],replace=false){try{assertQueueBudget(player.playlist,list,{replace});return true;}catch(e){player.error=e instanceof Error?e.message:'队列超过安全预算';return false;}}
+function allowQueueChange(list:Track[],replace=false){try{assertQueueBudget(player.playlist,list,{replace});return true;}catch(e){showBanner(noteNotice(banner,bannerIdentity(),e instanceof Error?e.message:'队列超过安全预算'));return false;}}
 /** 采纳一个播放列表并从第 i 项开始播放 */
 export function adopt(list: Track[], i: number) {
   if (!list[i]||!allowQueueChange(list,true)) return;
@@ -553,6 +578,7 @@ export function clearQueue() {
   player.track = null;
   player.playing = false;
   player.loading = false;
+  showBanner(NO_BANNER);
   player.history = [];
   player.playedTitles = [];
   player.shuffleRedo = [];
@@ -921,6 +947,7 @@ export function stopCurrent() {
   player.pos = -1;
   a.load();
   player.loading = false;
+  showBanner(NO_BANNER);
   setMediaPlaybackState('none');
   scheduleSessionSave();
 }

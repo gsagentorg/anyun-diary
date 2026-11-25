@@ -6,7 +6,7 @@
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
-  import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
+  import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekLimit, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
   import { PLAY_MODES, playModeLabel } from './play-mode';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, Repeat1, ListOrdered, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
@@ -41,6 +41,9 @@
   // 睡眠曲线拖动：状态用普通变量，避免拖动中每帧触发响应式重算。
   let sleepDragActive = false;
   let sleepDragId = -1;
+  // 拖动中的本地进度：手势期间竖线/手柄只跟指针，定时器 tick 不得改写显示位置
+  // （否则手指没动线也会随时间漂走，下一次移动又被打回指针位置 = 回弹）。
+  let sleepDragProgress = $state<number | null>(null);
   let dragging = $state(false);
   let playing = $state(false);
   let rateInput = $state(1);
@@ -52,7 +55,8 @@
   const sleepRunning = $derived(sleep.until != null && sleep.started != null);
   const shownSleepMode = $derived(sleepRunning ? activeSleepMode : selectedSleepMode);
   const sleepTotalMs = $derived(sleepRunning ? sleep.until! - sleep.started! : 0);
-  const sleepPosition = $derived(sleep.progress);
+  // 拖动中优先用本地进度：与定时器解耦，松手后才交回墙钟（见 commitSleepDrag）。
+  const sleepPosition = $derived(sleepDragProgress != null && sleepRunning ? sleepDragProgress : sleep.progress);
   const shownSleepCustom = $derived(sleepRunning ? sleep.activeCustom : sleep.custom);
   const customSleepBlocked = $derived(sleep.preset === 'custom' && !canStartCustomSleep());
   const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition, shownSleepCustom));
@@ -246,7 +250,17 @@
   function sleepApplyAt(clientX: number, clientY: number) {
     const x = sleepLocalX(clientX, clientY);
     if (x == null) return;
-    seekSleepProgress(sleepSeekProgress(x));
+    // 显示位置取「实际生效」的进度（含最少剩余时间钳制），不能显示指针原始位置。
+    const target = Math.min(sleepSeekProgress(x), sleepSeekLimit(sleep.plannedSeconds));
+    sleepDragProgress = target;
+    seekSleepProgress(target);
+  }
+
+  /** 松手/取消：按最后位置重新锚定时间轴，再把显示交回定时器 —— 位置不回弹。 */
+  function commitSleepDrag() {
+    const target = sleepDragProgress;
+    if (target != null && sleep.until != null) seekSleepProgress(target);
+    sleepDragProgress = null;
   }
 
   // 拖动开始：只有落在整条竖线轨道上才算（竖线以外保持原样，不误触）。
@@ -280,6 +294,7 @@
     if (!sleepDragActive || e.pointerId !== sleepDragId) return;
     sleepDragActive = false;
     sleepDragId = -1;
+    commitSleepDrag();
     try {
       sleepSvgEl?.releasePointerCapture(e.pointerId);
     } catch {
@@ -292,6 +307,7 @@
     if (!sleepDragActive) return;
     sleepDragActive = false;
     sleepDragId = -1;
+    commitSleepDrag();
     void e;
   }
 

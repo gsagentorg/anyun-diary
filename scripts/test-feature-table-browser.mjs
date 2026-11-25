@@ -153,6 +153,86 @@ try {
   assert.ok(Math.abs(afterCancel - clamped) <= 1, 'cancel must not revert or continue dragging');
   assert.deepEqual(errors, []); return { midway, clamped, remainingText, afterCancel, engine: 'Chromium; not iOS' };
  });
+ await check('running-sleep-line-drag-pinned-across-timer-ticks-chromium', async () => {
+  const { page, errors } = await setup(); await begin(page);
+  await (await control(page, '睡眠定时器')).click();
+  // 2 分钟档：可拖区间 0–50%（最少留 1 分钟）。定时器每 100ms 推进 ~0.08%，按住不动
+  // 2 秒就有 ~1.7% 的漂移，足以区分「手柄跟指针」与「手柄跟墙钟」。#26 的回归点。
+  await page.getByRole('spinbutton', { name: '自定义睡眠分钟数', exact: true }).fill('2');
+  await page.getByRole('button', { name: '开始', exact: true }).click();
+  const svg = page.locator('svg[aria-label*="音量变化示意"]');
+  const handle = page.locator('[data-sleep-handle]');
+  await handle.waitFor();
+  const percent = async () => Number(await handle.getAttribute('aria-valuenow'));
+  const dotX = async () => Number(await page.locator('[data-sleep-position]').getAttribute('cx'));
+  /** Screen point on the vertical line at viewBox x=targetX (top of the line, away from the dot). */
+  async function screenPoint(targetX) {
+   return svg.evaluate((el, targetX) => {
+    const c = el.querySelector('[data-sleep-position]');
+    const x = Number(c.getAttribute('cx')), y = 32;
+    const matrix = el.getScreenCTM();
+    const p = new DOMPoint(x, y).matrixTransform(matrix), end = new DOMPoint(targetX, y).matrixTransform(matrix);
+    return { x: p.x, y: p.y, endX: end.x, endY: end.y };
+   }, targetX);
+  }
+  const secondsLeft = async () => {
+   const text = await page.getByRole('status').filter({ hasText: /进行中：.*剩余/ }).innerText();
+   const m = text.match(/剩余 (\d+):(\d+)/);
+   assert.ok(m, 'running status must show remaining time: ' + text);
+   return Number(m[1]) * 60 + Number(m[2]);
+  };
+  // 键盘接力不受拖动改动影响（唯一一次非拖动状态下的方向键调整）。
+  await handle.focus(); await page.keyboard.press('ArrowRight');
+  const nudged = await percent();
+  assert.ok(nudged >= 1 && nudged <= 3, 'keyboard nudge must still work: ' + nudged);
+  let p = await screenPoint(72); // 40%
+  await page.mouse.move(p.x, p.y); await page.mouse.down();
+  await page.mouse.move(p.endX, p.endY, { steps: 6 });
+  const grabbed = await percent();
+  assert.ok(grabbed >= 39 && grabbed <= 41, 'drag should follow the pointer to 40%: ' + grabbed);
+  assert.ok(Math.abs((await dotX()) - 72) <= 0.6, 'line must sit at the pointer, not at a timer-derived x');
+  // 手指按住不动，跨过多次定时器 tick（4 × 650ms）：位置必须纹丝不动。
+  const held = [grabbed], xs = [await dotX()];
+  const leftBefore = await secondsLeft();
+  for (let i = 0; i < 4; i++) { await page.waitForTimeout(650); held.push(await percent()); xs.push(await dotX()); }
+  assert.deepEqual(held, held.map(() => grabbed), 'held gesture must not drift with timer ticks: ' + held.join(','));
+  assert.equal(new Set(xs.map(x => x.toFixed(2))).size, 1, 'line x must stay at the pointer while held: ' + xs.join(','));
+  // 线不动 ≠ 定时器停了：剩余时间照常倒数。
+  const leftAfterHold = await secondsLeft();
+  assert.ok(leftAfterHold < leftBefore, 'sleep timer must keep counting during the gesture: ' + leftBefore + '→' + leftAfterHold);
+  // 慢拖：每次只挪 3 个单位并停顿，位置始终贴指针。
+  for (let i = 1; i <= 6; i++) {
+   const targetX = 72 + i * 3; // 40% → 50%，仍在最少剩余时间上限内
+   const q = await screenPoint(targetX);
+   await page.mouse.move(q.endX, q.endY, { steps: 2 });
+   await page.waitForTimeout(220);
+   const nowX = await dotX();
+   assert.ok(Math.abs(nowX - targetX) <= 0.6, 'slow drag must track the pointer at x=' + targetX + ', got ' + nowX);
+  }
+  // 最少剩余时间钳制不变：2 分钟档最多拖到 50%。
+  const edge = await screenPoint(175);
+  await page.mouse.move(edge.endX, edge.endY, { steps: 4 });
+  await page.waitForTimeout(150);
+  const clamped = await percent();
+  assert.equal(clamped, 50, '2-minute run must clamp at one minute remaining: ' + clamped);
+  const leftAtClamp = await secondsLeft();
+  assert.ok(leftAtClamp >= 55 && leftAtClamp <= 60, 'clamp must keep at least one minute: ' + leftAtClamp);
+  assert.ok(Math.abs((await dotX()) - 90) <= 0.6, 'clamped line must show the applied position, not the raw pointer');
+  // 松手：保住选中位置（不回弹），随后定时器继续推进。
+  await page.mouse.up();
+  const released = await percent();
+  assert.equal(released, clamped, 'release must keep the selected position: ' + released);
+  await page.waitForTimeout(1400);
+  const afterRelease = await percent();
+  assert.ok(afterRelease > released && afterRelease <= released + 3, 'timer must resume advancing after release: ' + released + '→' + afterRelease);
+  // 松手后方向键仍可用（向左即在钳制区间内）。
+  const beforeKey = await percent();
+  await handle.focus(); await page.keyboard.press('ArrowLeft');
+  const afterKey = await percent();
+  assert.ok(afterKey <= beforeKey && afterKey >= beforeKey - 3, 'keyboard adjustment must keep working after a drag: ' + beforeKey + '→' + afterKey);
+  assert.deepEqual(errors, []);
+  return { grabbed, held, clamped, released, afterRelease, leftBefore, leftAfterHold, engine: 'Chromium; not iOS' };
+ });
  await check('custom-sleep-editor-live-preview-and-running-snapshot', async () => {
   const { page, errors } = await setup(); await begin(page);
   await (await control(page, '睡眠定时器')).click();

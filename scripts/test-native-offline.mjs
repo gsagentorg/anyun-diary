@@ -118,12 +118,31 @@ ok((statusProbe.match(/fingerprint\(handle\) == before/g) ?? []).length === 2 &&
 for (const field of ['st_dev', 'st_ino', 'st_size', 'st_mtimespec.tv_sec', 'st_mtimespec.tv_nsec', 'st_ctimespec.tv_sec', 'st_ctimespec.tv_nsec', 'st_mode', 'st_uid', 'st_gid', 'st_flags']) ok(disk.includes(field), 'memo fingerprint includes ' + field);
 ok(disk.includes('Darwin.lstat') && disk.includes('Darwin.fstat') && disk.includes('code == ENOENT || code == ENOTDIR'), 'POSIX missing classification distinguishes transient stat failures');
 ok(disk.includes('mediaProbeMemoLimit = 4096') && statusProbe.includes('mediaProbeMemoOrder.count >= Self.mediaProbeMemoLimit') && statusProbe.includes('mediaProbeMemoOrder.removeFirst()'), 'verification memo has bounded FIFO memory');
-ok((disk.match(/forgetMediaProbe\(key\)/g) ?? []).length === 3 && disk.includes('forgetMediaProbe(candidate.key)') && clearJSON.includes('mediaProbeMemos.removeAll()'), 'invalidate/store/file replace/evict/clear revoke verification memo');
+ok((disk.match(/forgetMediaProbe\(key\)/g) ?? []).length === 4 && disk.includes('forgetMediaProbe(candidate.key)') && disk.includes('forgetMediaProbe(victim.key)') && clearJSON.includes('mediaProbeMemos.removeAll()'), 'invalidate/store/file replace/evict/prune/clear revoke verification memo');
 ok(!/\bprint[(]|\blogger\b|\bdiagnostic\b/.test(statusBridge + statusProbe + probeSnapshot), 'status URLs never logged');
 for (const name of ['testNativeMediaSWR', 'testMediaStatus', 'testMediaStatusReadOnlyAndMemo', 'testMediaStatusMemoBound']) ok(swiftTests.includes('await ' + name + '()') && swiftTests.includes('static func ' + name + '('), 'actual Swift regression entry: ' + name);
 for (const label of ['fresh/exact-window hit never requests network', 'native SWR full 200 replaces complete cache', 'same-key stale refresh is deduplicated', 'late 200/304 cannot revive or overwrite:', 'mediaStatus rejects CRC-corrupt same-length media']) ok(swiftTests.includes(label), 'Swift scenario: ' + label);
 ok(staleRefresh.indexOf('mediaRefreshOwners[key] = slotID') < staleRefresh.indexOf('await cancelFileDownloads'), 'SWR ownership acquired before actor suspension (ABA-safe)');
 for (const label of ['repeat positive probes never rescan CRC', 'repeat negative probes never rescan CRC', 'protected negative memo must throw rather than reuse false', 'same-inode same-length corruption invalidates positive memo', 'atomic inode replacement invalidates negative memo', 'temporary open permission failure must throw', 'temporary stat permission failure must throw', 'read failure must throw instead of false', 'definite missing file never removes index', 'cold probe never repairs index sweeps or evicts', 'cold protected index must throw', 'entry replacement invalidates memo', 'eviction never reuses positive memo', 'clear releases memo memory', 'probe memo memory is bounded']) ok(swiftTests.includes(label), 'Swift probe regression: ' + label);
+
+// —— #17：预算记账、audio-first 淘汰、IO 失败与「上报占用 = 真实可用」——
+const evictBody = body(disk, 'private func evict(protecting', '/// 写盘空间不足时的单步让步');
+ok(evictBody.includes('if lhs.kind != rhs.kind { return lhs.kind == .media }') && evictBody.includes('lhs.lastAccess < rhs.lastAccess'), 'audio-first eviction keeps LRU ordering within each kind');
+ok(evictBody.includes('if total <= policy.maxBytes && count <= policy.maxEntries { break }'), 'eviction stops as soon as both budgets fit');
+const storeUnlockedBody = body(disk, 'private func storeUnlocked(', 'func beginJSONRequest(');
+ok(storeUnlockedBody.includes('AnyunDiskCacheFailure.isOutOfSpace(error)') && storeUnlockedBody.includes('dropOldestUnprotected'), 'only out-of-space retries after freeing LRU space');
+ok(storeUnlockedBody.indexOf('try payload.data.write') < storeUnlockedBody.indexOf('entries[key] = entry'), 'index mutates only after the file write succeeded');
+const statsBody = body(disk, 'func stats() -> AnyunCacheStats', '/// 设置面板选定上限后立刻生效');
+ok(statsBody.indexOf('pruneUnavailableEntries()') < statsBody.indexOf('evict(protecting: nil)'), 'stats prunes phantom entries before reporting usage');
+const pruneBody = body(disk, 'private func pruneUnavailableEntries(', '// MARK: - 索引与淘汰');
+ok(pruneBody.includes('catch { continue }') && pruneBody.includes('fingerprint.isRegular, fingerprint.size == Int64(entry.bytes)'), 'usage pruning never treats a transient stat failure as a system purge');
+const validatedBody = body(disk, 'private func validatedEntry(', 'private func forgetMediaProbe(');
+ok(validatedBody.includes('catch { return nil }') && validatedBody.includes('invalidate(key: key)'), 'transient stat failure is a miss; only definite absence/size mismatch invalidates');
+ok(disk.includes('func enforcePolicy()') && plugin.includes('await self.disk.enforcePolicy()'), 'policy changes are enforced immediately by the bridge');
+for (const name of ['testEvictionOrderBudgetAndAgreement', 'testStorageIOFailureDegradesGracefully']) {
+  ok(swiftTests.includes('await ' + name + '()') && swiftTests.includes('static func ' + name + '('), name + ' is actually invoked');
+}
+for (const label of ['audio leaves before metadata under budget pressure', 'selected preset is enforced immediately', 'metadata alone is never pinned past the budget', 'reported usage equals actually available media', 'system purge cannot leave phantom usage', 'out-of-space-only retry never evicts on unrelated IO errors', 'permission write failure keeps the old complete entry', 'playback lease survives failed cache write', 'transient stat failure is a miss, not a valid hit', 'transient stat failure never prunes reported usage', 'cache entry survives a transient stat failure']) ok(swiftTests.includes(label), 'Swift #17 scenario: ' + label);
 console.log('native-offline: ' + checks + ' source contracts passed (NOT Swift execution)');
 const sleepGate = spawnSync(process.execPath, ['scripts/test-native-sleep.mjs', ...(process.argv.includes('--require-swift') ? ['--require-swift'] : [])], { cwd: root, encoding: 'utf8', timeout: 120000 });
 process.stdout.write(sleepGate.stdout || ''); process.stderr.write(sleepGate.stderr || '');

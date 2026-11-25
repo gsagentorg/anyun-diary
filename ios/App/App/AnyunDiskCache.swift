@@ -19,6 +19,15 @@
 //  - `clear` 使 epoch 前进并取消在途下载：过期 worker 的提交被丢弃，清掉的条目不能复活。
 //  - 后台 revalidate 的写回走 `store(requireExisting:)`：条目若已被 clear/淘汰则丢弃。
 //
+//  容量与可用性（#17）：
+//  - 预算永远有界；淘汰按 LRU，但**音频优先、元数据最后**（owner 2026-11-25 audio-first 裁定）：
+//    目录快照是为了给已缓存音频提供可用性信息的那一份，音频可以重新下载，快照丢了就无从知道
+//    哪些音频还在。两者共用同一个预算，元数据不是钉子（只剩它时照样淘汰）。
+//  - `setPolicy`/`configure` 立即执行容量约束；`stats` 之前先剔除「索引有、文件没了/长度不符」
+//    的条目，保证面板上报的占用与真实可用字节一致。
+//  - 写盘只对「空间不足」（ENOSPC/EDQUOT/Cocoa 640）做一次有限的淘汰重试；权限/只读等
+//    无关 IO 错误绝不为了重试而丢缓存。写失败时原子写保留旧文件、索引不变，播放不受影响。
+//
 
 import Foundation
 import CryptoKit
@@ -100,6 +109,20 @@ enum AnyunDiskCacheFailure: Error, Sendable {
     case emptyPayload
     case incompleteFile
     case ioFailure
+
+    /// 「磁盘满」判定：只有它才值得先淘汰再重试。权限/只读等错误重试也一样失败，
+    /// 盲目淘汰只会白白丢掉仍然可用的缓存。
+    static func isOutOfSpace(_ error: Error) -> Bool {
+        func matches(_ candidate: NSError) -> Bool {
+            if candidate.domain == NSCocoaErrorDomain { return candidate.code == NSFileWriteOutOfSpaceError }
+            if candidate.domain == NSPOSIXErrorDomain { return candidate.code == ENOSPC || candidate.code == EDQUOT }
+            return candidate.code == ENOSPC || candidate.code == NSFileWriteOutOfSpaceError
+        }
+        let ns = error as NSError
+        if matches(ns) { return true }
+        if let underlying = ns.userInfo[NSUnderlyingErrorKey] as? NSError { return matches(underlying) }
+        return false
+    }
 }
 
 /// 缓存目录物理布局（纯值类型，可在测试里注入临时目录，不依赖 actor）。
@@ -196,6 +219,8 @@ actor AnyunDiskCache {
     private var mediaRefreshOwners: [String: UUID] = [:]
     private var mediaRefreshAttempts: [String: Double] = [:]
     static let mediaRefreshCooldown: TimeInterval = 60
+    /// 磁盘满时的有限让步次数：每次丢掉最旧条目（音频优先）再重试写盘。
+    static let ioRetryEvictions = 2
 
     // Actor-local memo is never authoritative without a fresh open/stat/read.
     private struct MediaProbeMemo {
@@ -340,11 +365,15 @@ actor AnyunDiskCache {
     }
 
     private func validatedEntry(key: String) -> AnyunCacheEntry? {
-        guard AnyunCacheLayout.isValidKey(key), let entry = entries[key], entry.bytes > 0,
-              let attrs = try? FileManager.default.attributesOfItem(atPath: layout.mediaFile(forKey: key).path),
-              attrs[.type] as? FileAttributeType == .typeRegular,
-              (attrs[.size] as? NSNumber)?.intValue == entry.bytes else {
-            if entries[key] != nil { invalidate(key: key) }
+        guard AnyunCacheLayout.isValidKey(key), let entry = entries[key], entry.bytes > 0 else { return nil }
+        let url = layout.mediaFile(forKey: key)
+        // 只有「确定不存在 / 类型不对 / 长度不符」才失效并删文件；stat 暂时失败（EIO、权限、
+        // 系统短暂占用）只算这次 miss —— 瞬时 IO 错误不能顺手删掉可能完整的缓存。
+        let fingerprint: AnyunMediaFileValidation.Fingerprint?
+        do { fingerprint = try AnyunMediaFileValidation.fingerprint(url) }
+        catch { return nil }
+        guard let fingerprint, fingerprint.isRegular, fingerprint.size == Int64(entry.bytes) else {
+            invalidate(key: key)
             return nil
         }
         return entry
@@ -473,7 +502,19 @@ actor AnyunDiskCache {
         do {
             try payload.data.write(to: target, options: .atomic)
         } catch {
-            throw AnyunDiskCacheFailure.ioFailure
+            // 原子写失败不会破坏旧文件：旧条目与旧索引都还在，播放不受影响。
+            // 只有「空间不足」才值得牺牲最旧条目重试（有限步、音频优先），其余 IO 错误直接认输。
+            var written = false
+            if AnyunDiskCacheFailure.isOutOfSpace(error) {
+                for _ in 0..<Self.ioRetryEvictions {
+                    guard dropOldestUnprotected(except: key) else { break }
+                    if (try? payload.data.write(to: target, options: .atomic)) != nil { written = true; break }
+                }
+            }
+            guard written else {
+                if AnyunDiskCacheFailure.isOutOfSpace(error) { persistIndex() } // 淘汰过的就让磁盘索引跟上内存
+                throw AnyunDiskCacheFailure.ioFailure
+            }
         }
 
         let now = Date().timeIntervalSince1970
@@ -876,6 +917,7 @@ actor AnyunDiskCache {
 
     func stats() -> AnyunCacheStats {
         ensureIndexLoaded()
+        pruneUnavailableEntries()
         evict(protecting: nil)
         persistIndex()
         var bytes = 0
@@ -897,6 +939,33 @@ actor AnyunDiskCache {
             maxBytes: policyProvider().maxBytes,
             cacheDir: layout.root.path
         )
+    }
+
+    /// 设置面板选定上限后立刻生效（不等下一次 store/stats 触发）。
+    func enforcePolicy() {
+        ensureIndexLoaded()
+        evict(protecting: nil)
+        persistIndex()
+    }
+
+    /// 上报的占用必须等于真实可用的字节：系统清理/外部删除后，索引里指向缺失或长度不符
+    /// 文件的条目先剔除（不可用文件一并删除），再统计——否则面板说“已缓存”，播放却 miss。
+    private func pruneUnavailableEntries() {
+        let manager = FileManager.default
+        for (key, entry) in entries {
+            let url = fileURL(forKey: key)
+            let fingerprint: AnyunMediaFileValidation.Fingerprint?
+            do { fingerprint = try AnyunMediaFileValidation.fingerprint(url) }
+            catch { continue } // 暂时无法 stat：保留条目，不把瞬时故障当成系统清理
+            guard let fingerprint, fingerprint.isRegular, fingerprint.size == Int64(entry.bytes) else {
+                entries[key] = nil
+                forgetMediaProbe(key)
+                jsonRequests[key] = nil
+                mediaRefreshOwners[key] = nil
+                try? manager.removeItem(at: url)
+                continue
+            }
+        }
     }
 
     // MARK: - 索引与淘汰
@@ -971,6 +1040,8 @@ actor AnyunDiskCache {
     }
 
     /// LRU：从最久未用开始删，只保护刚提交项；in-flight 不得让容量越界。
+    /// 音频优先被淘汰、元数据最后（audio-first）：音频可重新下载，目录快照丢了就丢了可用性信息。
+    /// 两者仍在同一个预算内，元数据不是钉子——只剩它时照样被淘汰。
     private func evict(protecting protectedKey: String?) {
         let policy = policyProvider()
         var total = 0
@@ -982,7 +1053,10 @@ actor AnyunDiskCache {
 
         let candidates = entries.values
             .filter { $0.key != protectedKey }
-            .sorted { $0.lastAccess < $1.lastAccess }
+            .sorted { lhs, rhs in
+                if lhs.kind != rhs.kind { return lhs.kind == .media }
+                return lhs.lastAccess < rhs.lastAccess
+            }
 
         for candidate in candidates {
             if total <= policy.maxBytes && count <= policy.maxEntries { break }
@@ -994,6 +1068,24 @@ actor AnyunDiskCache {
             total -= candidate.bytes
             count -= 1
         }
+    }
+
+    /// 写盘空间不足时的单步让步：按 LRU 放弃一个条目（音频优先），返回是否真的丢了一个。
+    /// 只由 `storeUnlocked` 在 ENOSPC/EDQUOT 下调用，且写目标自己永远不被选为牺牲品。
+    private func dropOldestUnprotected(except protectedKey: String) -> Bool {
+        let victim = entries.values
+            .filter { $0.key != protectedKey }
+            .min { lhs, rhs in
+                if lhs.kind != rhs.kind { return lhs.kind == .media }
+                return lhs.lastAccess < rhs.lastAccess
+            }
+        guard let victim = victim else { return false }
+        entries[victim.key] = nil
+        forgetMediaProbe(victim.key)
+        jsonRequests[victim.key] = nil
+        mediaRefreshOwners[victim.key] = nil
+        try? FileManager.default.removeItem(at: fileURL(forKey: victim.key))
+        return true
     }
 }
 

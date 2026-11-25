@@ -210,4 +210,44 @@ ok(audioFailureText(true).includes('可重试'), 'online message offers retry');
   near(afterClear.maxBytes, 1073741824, 'clearing keeps the selected limit');
 }
 
+// —— #17：可选上限逐档生效 + 上报占用与上限/可用性同源 ——
+{
+  let limit = DEFAULT_CACHE_POLICY.maxBytes;
+  let bytes = 300 * 1024 * 1024;
+  let entries = 3;
+  const limitBridge = {
+    async stats() {
+      return { bytes, entries, mediaEntries: 2, jsonEntries: 1, maxBytes: limit };
+    },
+    async setPolicy({ policy }) {
+      limit = clampCachePolicy(policy).maxBytes;
+      return { policy: { ...DEFAULT_CACHE_POLICY, maxBytes: limit } };
+    },
+    async fetchJSON() {
+      throw new Error('unused');
+    },
+    async clear() {
+      const freedBytes = bytes;
+      bytes = 0;
+      entries = 0;
+      return { freedBytes, entries: 3 };
+    },
+  };
+  for (const preset of [256 * 1024 * 1024, DEFAULT_CACHE_POLICY.maxBytes, 1024 * 1024 * 1024, 2 * 1024 * 1024 * 1024]) {
+    const applied = await setNativeCachePolicy({ maxBytes: preset }, limitBridge);
+    near(applied.maxBytes, preset, `preset ${preset} applied verbatim`);
+    near((await nativeCacheStats(limitBridge)).maxBytes, preset, `preset ${preset} reported by stats`);
+  }
+  const beforeLimit = await nativeCacheStats(limitBridge);
+  ok(beforeLimit.bytes <= beforeLimit.maxBytes, 'reported usage never exceeds the reported limit');
+  const clearedLimit = await clearNativeCache('all', limitBridge);
+  near(clearedLimit.entries, 3, 'clear reports the entries it removed');
+  const afterLimit = await nativeCacheStats(limitBridge);
+  ok(afterLimit.bytes === 0 && afterLimit.entries === 0, 'usage and availability reset together after clearing');
+  near(afterLimit.maxBytes, 2 * 1024 * 1024 * 1024, 'clearing keeps the selected limit');
+  const belowFloor = await setNativeCachePolicy({ maxBytes: 1 }, limitBridge);
+  near(belowFloor.maxBytes, CACHE_POLICY_LIMITS.maxBytes[0], 'below-floor preset clamps up instead of claiming the request');
+  near((await nativeCacheStats(limitBridge)).maxBytes, CACHE_POLICY_LIMITS.maxBytes[0], 'stats reports the clamped limit');
+}
+
 console.log(`native-cache: ${checks} checks passed`);

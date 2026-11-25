@@ -144,6 +144,14 @@ ok(source['AnyunDiskCache.swift'].includes('maxEntries') && source['AnyunDiskCac
 ok(source['AnyunDiskCache.swift'].includes('.atomic'), '索引原子写');
 ok(/clear\(scope/.test(source['AnyunDiskCache.swift']), 'clear 支持 scope');
 
+// —— 4c. #17 容量/清除/IO 验收语义 ——
+ok(disk.includes('if lhs.kind != rhs.kind { return lhs.kind == .media }'), '淘汰顺序：音频先于元数据（audio-first，元数据不是钉子）');
+ok(disk.includes('func enforcePolicy()') && disk.includes('func pruneUnavailableEntries()'), '选定上限即时收口；统计前剔除不可用条目');
+eq((plugin.match(/await self\.disk\.enforcePolicy\(\)/g) ?? []).length, 2, 'configure 与 setPolicy 都立即执行容量约束');
+ok(disk.includes('static func isOutOfSpace') && disk.includes('NSFileWriteOutOfSpaceError') && disk.includes('ioRetryEvictions'), '写盘只在空间不足时有限淘汰重试');
+ok(disk.includes('dropOldestUnprotected(except: key)') && disk.includes('forgetMediaProbe(victim.key)'), 'IO 重试的牺牲品同样撤销校验记忆');
+ok(!handler.includes('invalidate(') && !/clear\(scope/.test(handler), '网络失败路径绝不删除或失效既有缓存');
+
 // —— 4b. AVPlayer 真正命中磁盘（2026-11-21 接通）——
 // 缓存键永远是队列里的稳定 https 源地址；签名目标不落盘、不进日志、不进索引。
 ok(playback.includes('AnyunCacheKey.hash(url.absoluteString)'), 'AVPlayer 命中键源自稳定源 URL');

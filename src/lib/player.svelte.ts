@@ -13,7 +13,7 @@ export function setPlayerCatalog(audios: DiaryAudio[]) {
   if (nativeAudio) void nativeAudio.refresh().catch(() => {});
   if (typeof window !== 'undefined') initSession();
 }
-import { trackKeyOf, pickShuffleIndex } from './playlist-core';
+import { trackKeyOf, pickShuffleIndex, shuffleAvoidIdx, peekShuffleNext } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
 import { DEFAULT_SLEEP_CUSTOM, SLEEP_CUSTOM_VERSION, parseSleepCustom, sleepCustomSnapshot, validateSleepCustom, type SleepCustomParameters, isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
@@ -601,22 +601,30 @@ export function playRandom() {
   if (usesNativeAudio()) { ensureAudio(); void nativeAudio!.command('random').catch(() => {}); return; }
   if (player.playlist.length === 0) return;
   const keys = player.playlist.map(trackKey);
-  let avoid: Set<number> | undefined;
-  if (player.shuffleSkipSameTitle) {
-    const played = new Set(player.playedTitles);
-    const avoidTitles = new Set(
-      player.playlist.filter((_, i) => played.has(keys[i])).map((t) => t.audio.title),
-    );
-    avoid = new Set(
-      player.playlist.map((_, i) => i).filter((i) => avoidTitles.has(player.playlist[i].audio.title)),
-    );
-    if (avoid.size === 0) avoid = undefined;
-  }
+  const avoid = player.shuffleSkipSameTitle
+    ? shuffleAvoidIdx(player.playlist.map((t) => t.audio.title), keys, player.playedTitles)
+    : undefined;
   const pick = pickShuffleIndex(keys, player.playedTitles, player.pos, avoid);
   if (!pick) return;
   if (pick.reset) player.playedTitles = [];
   player.shuffleRedo = []; // 主动随机开新曲：旧的「下一曲回退栈」作废
   stepTo(pick.index);
+}
+
+/** 「下一首」是否还有去处：随机模式按 step(1) 的取曲路径判（不看队尾），其余按队列顺序。
+ * 与随机抽曲共用 pickShuffleIndex / 回退栈，避免按钮态与实际行为脱节。 */
+export function hasNextTrack(): boolean {
+  const n = player.playlist.length;
+  if (player.mode === 'random') {
+    if (n < 2) return false; // 单曲队列没有「另一首」可换
+    const keys = player.playlist.map(trackKey);
+    const avoid = player.shuffleSkipSameTitle
+      ? shuffleAvoidIdx(player.playlist.map((t) => t.audio.title), keys, player.playedTitles)
+      : undefined;
+    return peekShuffleNext(keys, player.playedTitles, player.pos, player.shuffleRedo, avoid) != null;
+  }
+  const cur = player.pos >= 0 ? player.pos : 0;
+  return cur < n - 1;
 }
 
 /** 跳到列表内第 i 项（记录历史与已播曲目，供随机模式去重/回退） */

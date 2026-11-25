@@ -105,6 +105,29 @@ try {
   }
   assert.deepEqual(errors, []); return { order: names };
  });
+ await check('next-enabled-at-shuffled-tail', async () => {
+  const { page, errors } = await setup(); await begin(page);
+  const next = page.getByRole('button', { name: '下一首', exact: true });
+  // 播放源可能是网络 URL 也可能是 blob，用常驻计数「pos/total」判定当前曲目
+  const at = (label) => page.waitForFunction(l => {
+   const a = window.__anyunAudio;
+   const counter = document.querySelector('[aria-label="下一首"]')?.previousElementSibling;
+   return counter?.textContent.trim() === l && !a.paused && a.currentTime > 0.2;
+  }, label);
+  // 顺序模式走到队尾：下一首随即禁用（原有行为不变）
+  await next.click(); await at('2/2');
+  assert.equal(await next.isDisabled(), true, 'sequential tail keeps next disabled');
+  // 切到随机：抽曲逻辑上还有一首可选，下一首必须可用并能真的换曲
+  await (await control(page, '播放模式：顺序播放')).click();
+  await page.getByRole('button', { name: '播放模式：随机播放', exact: true }).waitFor();
+  assert.equal(await next.isDisabled(), false, 'shuffle tail must enable next');
+  await next.click(); await at('1/2');
+  // 随机模式再回到队尾：自然播完也应换到另一首合格曲目
+  await next.click(); await at('2/2');
+  await page.evaluate(() => { const a = window.__anyunAudio; a.currentTime = Math.max(0, a.duration - 0.15); });
+  await at('1/2');
+  assert.deepEqual(errors, []); return { sequentialTailDisabled: true, shuffleTailEnabled: true, shuffledNaturalEndAdvances: true };
+ });
  await check('clear-direct-footer-button-no-menu-and-never-restores', async () => {
   const { page, errors } = await setup(); await begin(page);
   const clear = page.getByRole('button', { name: '清空播放列表（停止播放）', exact: true });

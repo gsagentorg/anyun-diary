@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { pickShuffleIndex, trackKeyOf } from '../src/lib/playlist-core.ts';
+import { pickShuffleIndex, peekShuffleNext, trackKeyOf } from '../src/lib/playlist-core.ts';
 
 // 播放列表：A x2（同名不同场次）、B x2、C、D；开局已播 A（下标0）
 const clips = ['A', 'A', 'B', 'B', 'C', 'D'].map((t, i) => ({ title: t, file: 'f' + i }));
@@ -40,3 +40,14 @@ for (let k = 1; k < all.length; k++) {
 }
 
 console.log('shuffle: 40 deterministic draws passed');
+
+// 4) peekShuffleNext（「下一首」可达性）与 pickShuffleIndex 的取曲路径一致，且不消耗回退栈
+const redo = [3];
+assert.deepEqual(peekShuffleNext(keys, played, 0, redo), { index: 3, reset: false }, 'valid redo top wins');
+assert.equal(redo.length, 1, 'peek leaves the redo stack intact');
+assert.ok(peekShuffleNext(keys, played, 0, [0]) != null, 'self redo ignored, falls back to a draw');
+assert.ok(peekShuffleNext(keys, [], 0, []) != null, 'n>=2 always has a next candidate');
+assert.equal(peekShuffleNext(['T:only'], ['T:only'], 0, []), null, 'one-track queue has no next');
+assert.deepEqual(peekShuffleNext([], [], -1, []), null, 'empty list has no next');
+
+console.log('shuffle: peek-next contract passed');

@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import SleepCurveEditor from './components/SleepCurveEditor.svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep } from './player.svelte.ts';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep, hasNextTrack } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
@@ -422,6 +422,8 @@
 
   const total = $derived(player.playlist.length);
   const pos = $derived(player.pos >= 0 ? player.pos : (0));
+  // 随机模式按抽曲逻辑判「还有下一首」，顺序/单曲循环仍看队列位置
+  const nextEnabled = $derived(hasNextTrack());
   const pct = $derived(duration > 0 ? Math.min(100, (progress / duration) * 100) : 0);
   const modeLabel = $derived(playModeLabel(player.mode));
   const modeHint = $derived(PLAY_MODES.find((m) => m.id === player.mode)?.hint ?? '');
@@ -720,7 +722,7 @@
           </button>
           <span class="shrink-0 text-2xs tabular-nums opacity-60">{pos + 1}/{total}</span>
           <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
-            onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
+            onclick={() => step(1)} disabled={!nextEnabled} aria-label="下一首">
             <SkipForward class="h-4 w-4" />
           </button>
         </div>

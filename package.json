@@ -50,7 +50,8 @@
     "test:runtime-lyrics:required": "node scripts/test-runtime-lyrics.mjs --require-swift",
     "test:native-sleep": "node scripts/test-native-sleep.mjs",
     "test:feature-table-browser": "node scripts/test-feature-table-browser.mjs",
-    "test:narrow-strip-overlap": "node scripts/test-narrow-strip-overlap.mjs"
+    "test:narrow-strip-overlap": "node scripts/test-narrow-strip-overlap.mjs",
+    "test:offline-card-details": "node scripts/test-offline-card-details.mjs"
   },
   "devDependencies": {
     "@sveltejs/adapter-node": "^5.5.7",

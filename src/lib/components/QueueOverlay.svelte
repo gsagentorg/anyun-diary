@@ -220,5 +220,6 @@
 </Sheet>
 
 <style>
-  .offline-missing { opacity: 0.55; }
+  /* 确认缺失（离线 + 未完整缓存）除减淡外再加虚线描边；未知状态不加，避免误报缺失（issue #14）。 */
+  .offline-missing { opacity: 0.55; outline: 1px dashed var(--color-warning); outline-offset: -1px; }
 </style>

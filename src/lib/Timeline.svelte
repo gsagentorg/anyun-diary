@@ -47,7 +47,10 @@
   const BLOCK_GAP = 1;
   const HIT_PAD = 6;
 
-  let tip = $state<{ x: number; y: number; html: string } | null>(null);
+  interface DetailRow { key: string; label: string; value: string }
+  // 曲目详情：标题 + 按语义分行的字段（时间/时长/离线状态），不再用「·」串成一整行。
+  // pinned = 触屏长按打开的常驻面板（点空白或 × 关闭）；非 pinned = 指针悬停的即时提示。
+  let tip = $state<{ x: number; y: number; title: string; rows: DetailRow[]; pinned: boolean } | null>(null);
   let laneWidth = $state(0);
 
   interface SongBlock {
@@ -87,19 +90,96 @@
   });
   const visibleLanes = $derived(lanes);
 
+  const TIP_W = 260;
+  const TIP_EDGE = 8;
+  const LONG_PRESS_MS = 420;
+  const PRESS_SLOP_PX = 8;
+  let pressTimer: ReturnType<typeof setTimeout> | undefined;
+  let pressPoint = { x: 0, y: 0 };
+  let longPressFired = false;
+
+  // 详情面板在窄屏（390px）里也不能出界：左缘夹在 [8, innerWidth-宽-8] 内。
+  function tipLeft(x: number) {
+    const vw = typeof window === 'undefined' ? 1024 : window.innerWidth;
+    const w = Math.min(TIP_W, vw - TIP_EDGE * 2);
+    return Math.max(TIP_EDGE, Math.min(x, vw - w - TIP_EDGE));
+  }
+  function tipTop(y: number) {
+    const vh = typeof window === 'undefined' ? 768 : window.innerHeight;
+    return Math.max(TIP_EDGE, Math.min(y, vh - 132));
+  }
+  // 三态文案：cached 明说可离线播放；missing 用 offlineRowHint 的确认缺失文案；
+  // unknown（或尚未查询）只说「未确认」，绝不暗示缺失。
+  function songRows(b: SongBlock): DetailRow[] {
+    const url = audioUrl(b.audio.opus);
+    const hint = offlineRowHint($availability, url);
+    const rows: DetailRow[] = [
+      { key: 'time', label: '时间', value: clock(b.start) + '–' + clock(b.end) },
+      { key: 'duration', label: '时长', value: fmtDur(b.end - b.start) },
+    ];
+    if (!$availability.online) {
+      const state = $availability.statuses[url];
+      rows.push({ key: 'offline', label: '离线', value: state === 'cached' ? '已完整缓存，可离线播放' : hint || '未确认缓存状态，可尝试播放' });
+    }
+    return rows;
+  }
   function showSong(e: MouseEvent, b: SongBlock) {
-    const c = b.audio;
-    tip = {
-      x: e.clientX, y: e.clientY,
-      html: `${c.title || '（未识别）'} · ${clock(b.start)}–${clock(b.end)} · ${fmtDur(b.end - b.start)}${offlineRowHint($availability,audioUrl(c.opus))?' · '+offlineRowHint($availability,audioUrl(c.opus)):''}`,
-    };
+    if (tip?.pinned) return; // 长按面板常驻时不跟随鼠标
+    tip = { x: tipLeft(e.clientX + 12), y: tipTop(e.clientY + 12), title: b.audio.title || '（未识别）', rows: songRows(b), pinned: false };
   }
   function showBlank(e: MouseEvent, s: Seg) {
+    if (tip?.pinned) return;
     tip = {
-      x: e.clientX, y: e.clientY,
-      html: '空 ' + fmtDur(s.minutes * 60) + ' · 压至 1/' + Math.round(s.c ?? 1),
+      x: tipLeft(e.clientX + 12), y: tipTop(e.clientY + 12), title: '空白时段', pinned: false,
+      rows: [
+        { key: 'duration', label: '时长', value: fmtDur(s.minutes * 60) },
+        { key: 'compress', label: '压缩', value: '压至 1/' + Math.round(s.c ?? 1) },
+      ],
     };
   }
+  function endPress() {
+    if (pressTimer !== undefined) { clearTimeout(pressTimer); pressTimer = undefined; }
+  }
+  // 触屏没有 hover：长按 ≥420ms 在卡片旁常驻显示同一份分组详情；
+  // 短按/轻点仍是播放（不 preventDefault，也不改 click 语义），长按后的那次 click 被吞掉。
+  function openDetails(b: SongBlock, el: HTMLElement) {
+    const r = el.getBoundingClientRect();
+    const below = r.bottom + 8;
+    const vh = typeof window === 'undefined' ? 768 : window.innerHeight;
+    tip = { x: tipLeft(r.left), y: below > vh - 140 ? Math.max(TIP_EDGE, r.top - 140) : below, title: b.audio.title || '（未识别）', rows: songRows(b), pinned: true };
+  }
+  function onCardPointerDown(e: PointerEvent, b: SongBlock) {
+    if (e.pointerType === 'mouse') return; // 鼠标走 hover
+    endPress();
+    longPressFired = false;
+    pressPoint = { x: e.clientX, y: e.clientY };
+    const el = e.currentTarget as HTMLElement;
+    pressTimer = setTimeout(() => { pressTimer = undefined; longPressFired = true; openDetails(b, el); }, LONG_PRESS_MS);
+  }
+  function onCardPointerMove(e: PointerEvent) {
+    if (pressTimer !== undefined && Math.hypot(e.clientX - pressPoint.x, e.clientY - pressPoint.y) > PRESS_SLOP_PX) endPress();
+  }
+  function onCardPointerEnd() { endPress(); }
+  function onCardClick(b: SongBlock) {
+    if (longPressFired) { longPressFired = false; return; } // 长按已展示详情，抬起不触发播放
+    tip = null;
+    void playSong(b);
+  }
+  // 常驻面板：点面板以外或按 Esc 关闭（面板内含关闭按钮）。
+  $effect(() => {
+    if (!tip?.pinned) return;
+    const onDown = (e: PointerEvent) => {
+      const target = e.target as Element | null;
+      if (!target?.closest?.('[data-track-details]')) tip = null;
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') tip = null; };
+    window.addEventListener('pointerdown', onDown, true);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('keydown', onKey);
+    };
+  });
   async function resolveAndPlay(songs:Audio[],replace=false) {
     const context=backend.generation+':'+backend.base;
     try {
@@ -213,20 +293,24 @@
               {@const stableUrl=audioUrl(b.audio.opus)}
               {@const offlineHint=offlineRowHint($availability,stableUrl)}
               <div
-                class="absolute top-2.5 h-5 rounded-sm transition hover:brightness-110"
+                class="absolute top-2.5 h-5 select-none rounded-sm transition hover:brightness-110"
                 class:ring-2={active}
                 class:ring-accent={active}
                 class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'}
                 data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')}
-                aria-label={(b.audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')}
-                title={(b.audio.title||'（未识别）')+(offlineHint?' · '+offlineHint:'')}
+                aria-label={(b.audio.title||'（未识别）')+'，时间 '+clock(b.start)+' 至 '+clock(b.end)+'，时长 '+fmtDur(b.end-b.start)+(offlineHint?'，'+offlineHint:'')}
+                title={(b.audio.title||'（未识别）')+'\n时间 '+clock(b.start)+'–'+clock(b.end)+'\n时长 '+fmtDur(b.end-b.start)+(offlineHint?'\n离线 '+offlineHint:'')}
                 style:left={x1 + '%'}; style:width={Math.max(x2 - x1, 0.15) + '%'}
                 style:background="hsl({hue} var(--color-song-hue-sat) var(--color-song-hue-light))"
                 role="button" tabindex="0"
-                onclick={() => playSong(b)}
+                onclick={() => onCardClick(b)}
                 onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playSong(b); } }}
                 onmousemove={(e) => showSong(e, b)}
-                onmouseleave={() => (tip = null)}
+                onmouseleave={() => { if (!tip?.pinned) tip = null; }}
+                onpointerdown={(e) => onCardPointerDown(e, b)}
+                onpointermove={onCardPointerMove}
+                onpointerup={onCardPointerEnd}
+                onpointercancel={onCardPointerEnd}
               ></div>
             {/each}
           </div>
@@ -269,16 +353,20 @@
                 {@const stableUrl=audioUrl(b.audio.opus)}
                 {@const offlineHint=offlineRowHint($availability,stableUrl)}
                 <div
-                  class="absolute top-0 h-12 cursor-pointer"
+                  class="absolute top-0 h-12 cursor-pointer select-none"
                   data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')}
-                  aria-label={(b.audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')}
-                  title={(b.audio.title||'（未识别）')+(offlineHint?' · '+offlineHint:'')}
+                  aria-label={(b.audio.title||'（未识别）')+'，时间 '+clock(b.start)+' 至 '+clock(b.end)+'，时长 '+fmtDur(b.end-b.start)+(offlineHint?'，'+offlineHint:'')}
+                  title={(b.audio.title||'（未识别）')+'\n时间 '+clock(b.start)+'–'+clock(b.end)+'\n时长 '+fmtDur(b.end-b.start)+(offlineHint?'\n离线 '+offlineHint:'')}
                   style:left={visLeft - HIT_PAD + 'px'} style:width={visW + HIT_PAD * 2 + 'px'}
                   role="button" tabindex="0"
-                  onclick={() => playSong(b)}
+                  onclick={() => onCardClick(b)}
                   onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); playSong(b); } }}
                   onmousemove={(e) => showSong(e, b)}
-                  onmouseleave={() => (tip = null)}
+                  onmouseleave={() => { if (!tip?.pinned) tip = null; }}
+                  onpointerdown={(e) => onCardPointerDown(e, b)}
+                  onpointermove={onCardPointerMove}
+                  onpointerup={onCardPointerEnd}
+                  onpointercancel={onCardPointerEnd}
                 >
                   <div
                     class="absolute top-6 h-5 rounded-sm transition hover:brightness-110"
@@ -312,13 +400,40 @@
 </div>
 
 {#if tip}
-  <div class="pointer-events-none fixed z-50 max-w-xs rounded-lg border bg-base-100 p-2 text-xs shadow-lg"
-    style:left={tip.x + 12 + 'px'} style:top={tip.y + 12 + 'px'}>
-    {tip.html}
+  <div
+    class="fixed z-50 rounded-lg border bg-base-100 p-2 text-xs shadow-lg"
+    class:pointer-events-none={!tip.pinned}
+    data-track-details
+    data-details-source={tip.pinned ? 'touch' : 'pointer'}
+    role={tip.pinned ? 'dialog' : 'tooltip'}
+    aria-label="曲目详情"
+    style:left={tip.x + 'px'} style:top={tip.y + 'px'}
+    style:width={'min(' + TIP_W + 'px, calc(100vw - ' + TIP_EDGE * 2 + 'px))'}
+  >
+    <div class="flex items-start gap-2">
+      <p class="min-w-0 flex-1 break-words font-medium" data-detail-key="title">{tip.title}</p>
+      {#if tip.pinned}
+        <button
+          class="shrink-0 rounded px-1 text-2xs leading-4 opacity-60 transition hover:bg-base-200 hover:opacity-100"
+          aria-label="关闭曲目详情"
+          onclick={() => (tip = null)}>×</button>
+      {/if}
+    </div>
+    <dl class="mt-1 space-y-0.5">
+      {#each tip.rows as row (row.key)}
+        <div class="flex gap-2">
+          <dt class="w-8 shrink-0 opacity-60">{row.label}</dt>
+          <dd class="min-w-0 flex-1 break-words" data-detail-key={row.key}>{row.value}</dd>
+        </div>
+      {/each}
+    </dl>
   </div>
 {/if}
 <style>
-  .offline-missing { opacity: 0.55; }
+  /* 确认缺失（离线下 status=missing）在减淡之外再加虚线描边：不靠悬停也能认出「不可离线播放」。
+     未知状态不加描边，避免把「没查清」误报成「缺失」；cached 完全不改样式。
+     outline 不参与布局，内缩 1px 画在色块内侧。 */
+  .offline-missing { opacity: 0.55; outline: 1px dashed var(--color-warning); outline-offset: -1px; }
   /* 压缩模式卡片自身必须保持不透明：整层 opacity 会让下方时间压缩条透出（issue #10）。
      卡片的减淡改由覆盖层完成，色块仍是实心，压缩条在卡片下方不可见、卡片之外照常可见。 */
   [data-track-card].offline-missing { opacity: 1; }

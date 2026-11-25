@@ -270,7 +270,6 @@
                 {@const offlineHint=offlineRowHint($availability,stableUrl)}
                 <div
                   class="absolute top-0 h-12 cursor-pointer"
-                  class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'}
                   data-offline-availability={$availability.online?undefined:($availability.statuses[stableUrl]??'unknown')}
                   aria-label={(b.audio.title||'（未识别）')+(offlineHint?'，'+offlineHint:'')}
                   title={(b.audio.title||'（未识别）')+(offlineHint?' · '+offlineHint:'')}
@@ -283,6 +282,8 @@
                 >
                   <div
                     class="absolute top-6 h-5 rounded-sm transition hover:brightness-110"
+                    data-track-card
+                    class:offline-missing={!$availability.online&&$availability.statuses[stableUrl]==='missing'}
                     class:ring-2={active}
                     class:ring-accent={active}
                     style:left={HIT_PAD + 'px'} style:width={visW + 'px'}
@@ -318,4 +319,16 @@
 {/if}
 <style>
   .offline-missing { opacity: 0.55; }
+  /* 压缩模式卡片自身必须保持不透明：整层 opacity 会让下方时间压缩条透出（issue #10）。
+     卡片的减淡改由覆盖层完成，色块仍是实心，压缩条在卡片下方不可见、卡片之外照常可见。 */
+  [data-track-card].offline-missing { opacity: 1; }
+  [data-track-card].offline-missing::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: var(--color-base-100);
+    opacity: 0.45;
+    pointer-events: none;
+  }
 </style>

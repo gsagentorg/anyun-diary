@@ -63,7 +63,7 @@ class AudioStub {
 }
 globalThis.Audio = AudioStub;
 
-const { player, clearQueue, setPlayMode, cyclePlayMode, onTrackEnded, getAudio, step } = await import(
+const { player, clearQueue, setPlayMode, cyclePlayMode, onTrackEnded, getAudio, step, initSession, scheduleSessionSave, __resetSessionGuardForTest } = await import(
   '../src/lib/player.svelte.ts'
 );
 
@@ -123,6 +123,23 @@ ok(media.playbackState === 'none', 'media session playbackState none');
 ok(media.metadata === null, 'media session metadata cleared');
 ok(!store.has('anyun-session-v2'), 'session snapshot removed');
 ok(player.sessionRestored === false, 'restored flag reset');
+
+// T1b 清空后的迟到期保存与重载都不能复活队列/当前曲
+reset();
+store.set(
+  'anyun-session-v2',
+  JSON.stringify({ v: 2, queue: tracks, cur: 1, t: 30, shuffle: false, skipSame: true, dedup: true, rate: 1 }),
+);
+scheduleSessionSave(); // 清空前已排队的去抖保存
+clearQueue();
+await new Promise((resolve) => setTimeout(resolve, 400));
+ok(!store.has('anyun-session-v2'), 'late debounced save cannot resurrect snapshot');
+__resetSessionGuardForTest();
+initSession();
+ok(
+  player.playlist.length === 0 && player.track === null && player.pos === -1,
+  'reload cannot restore cleared queue or current track',
+);
 
 // T2 三态循环：随机 → 单曲循环 → 顺序 → 随机
 setPlayMode('random');

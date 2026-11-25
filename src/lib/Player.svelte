@@ -2,13 +2,13 @@
   import { onMount } from 'svelte';
   import SleepCurveEditor from './components/SleepCurveEditor.svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, stopCurrent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep } from './player.svelte.ts';
+  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
   import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
   import { PLAY_MODES, playModeLabel } from './play-mode';
-  import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, Repeat1, ListOrdered, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
+  import { Pause, Play, SkipBack, SkipForward, MoonStar, Shuffle, Repeat1, ListOrdered, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
   let progress = $state(0);
   let duration = $state(0);
@@ -313,11 +313,6 @@
   function applyRateInput() {
     const v = Number(rateInput);
     if (Number.isFinite(v)) setRate(v);
-  }
-
-  function closePlayer() {
-    getAudio().pause();
-    stopCurrent();
   }
 
   // ⋮ 菜单点击外部关闭：不在菜单面板、也不在 ⋮ 按钮内 → 收起（浏览器守卫）
@@ -717,7 +712,7 @@
 
       <!-- 右区：常驻级平铺 + 折叠级按空间进 ⋮ 菜单 -->
       <div class="flex shrink-0 items-center justify-start gap-1" bind:this={rowEl}>
-        <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 / 关闭 -->
+        <!-- 常驻级（永不折叠）：上一首 / 计数 / 下一首 -->
         <div class="flex items-center gap-0.5 sm:gap-1" bind:this={residentEl}>
           <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
             onclick={() => step(-1)} disabled={pos <= 0} aria-label="上一首">
@@ -727,15 +722,6 @@
           <button class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2 disabled:opacity-30"
             onclick={() => step(1)} disabled={pos >= total - 1} aria-label="下一首">
             <SkipForward class="h-4 w-4" />
-          </button>
-
-          <button
-            class="rounded-md p-1.5 transition hover:bg-base-200 sm:p-2"
-            onclick={closePlayer}
-            aria-label="关闭播放器"
-            title="关闭播放器"
-          >
-            <X class="h-4 w-4" />
           </button>
         </div>
 

@@ -108,6 +108,11 @@ const blobs = new Map<string, BlobEntry>();
 const inflight = new Map<string, Inflight>();
 const sizes = new Map<string, number>();
 const access = new Map<string, number>();
+/** 每个 key 的写入/失效代次：读路径据此丢弃「读取期间已被更新条目覆盖」的旧字节与旧尺寸。 */
+const keyVersions = new Map<string, number>();
+function bumpKeyVersion(key: string) {
+  keyVersions.set(key, (keyVersions.get(key) ?? 0) + 1);
+}
 let injectedOrigin: string | null = null;
 let indexWarm: Promise<void> | null = null;
 let clearToken = 0;
@@ -351,6 +356,7 @@ export async function acquireCachedAudio(rawUrl: string, options: PrepareOptions
   const key = normalizeWebCacheKey(rawUrl, options.base);
   if (!key) return null;
   const token = clearToken;
+  const version = keyVersions.get(key) ?? 0;
   const existing = blobs.get(key);
   if (existing && !existing.zombie) {
     if (existing.timer != null) {
@@ -363,12 +369,13 @@ export async function acquireCachedAudio(rawUrl: string, options: PrepareOptions
   }
   try {
     const response = await cacheMatch(key);
+    const superseded = () => token !== clearToken || (keyVersions.get(key) ?? 0) !== version;
     if (!response) {
-      sizes.delete(key);
+      if (!superseded()) sizes.delete(key);
       return null;
     }
     const bytes = new Uint8Array(await response.arrayBuffer());
-    if (token !== clearToken) return null;
+    if (superseded()) return null; // 读期间已有更新写入/失效：旧字节绝不覆盖新状态，交给下一次调用
     const concurrent = blobs.get(key);
     if (concurrent && !concurrent.zombie) {
       if (concurrent.timer) { clearTimeout(concurrent.timer); concurrent.timer = null; }
@@ -385,6 +392,7 @@ export async function acquireCachedAudio(rawUrl: string, options: PrepareOptions
     const entry: BlobEntry = { url, key, refs: 1, timer: null, zombie: false };
     blobs.set(key, entry);
     sizes.set(key, bytes.byteLength);
+    bumpKeyVersion(key);
     touch(key);
     return handleFor(entry);
   } catch {
@@ -403,6 +411,7 @@ export async function invalidateCachedAudio(rawUrl: string, options: PrepareOpti
   }
   sizes.delete(key);
   access.delete(key);
+  bumpKeyVersion(key);
   try {
     const cache = await openCache();
     await cache.delete(key);
@@ -460,6 +469,7 @@ async function evictOne(protectedKey: string): Promise<boolean> {
   const bytes = sizes.get(victim) ?? 0;
   sizes.delete(victim);
   access.delete(victim);
+  bumpKeyVersion(victim);
   const blobEntry = blobs.get(victim);
   if (blobEntry) {
     blobEntry.zombie = true;
@@ -493,6 +503,7 @@ async function storeEntryLocked(key: string, bytes: Uint8Array, contentType: str
       await cache.put(key, build());
       if (token !== clearToken) { await cache.delete(key); return false; }
       sizes.set(key, bytes.byteLength);
+      bumpKeyVersion(key);
       touch(key);
       persistLru();
       return true;
@@ -668,6 +679,7 @@ export async function clearWebAudioCache(): Promise<{ freedBytes: number; entrie
   blobs.clear();
   sizes.clear();
   access.clear();
+  keyVersions.clear();
   invalidateIndex();
   try {
     store()?.removeItem(LRU_STORAGE_KEY);
@@ -718,6 +730,7 @@ export function __resetWebAudioCacheStateForTest(): void {
   blobs.clear();
   sizes.clear();
   access.clear();
+  keyVersions.clear();
   invalidateIndex();
   activeDownloads = 0;
   while (slotWaiters.length) slotWaiters.shift()!();

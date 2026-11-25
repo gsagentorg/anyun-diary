@@ -25,14 +25,20 @@ globalThis.localStorage = {
 globalThis.location = { href: 'https://app.test/diary' };
 
 class FakeCache {
-  constructor(name) { this.name = name; this.entries = new Map(); this.failQuota = 0; }
+  constructor(name) { this.name = name; this.entries = new Map(); this.failQuota = 0; this.matchGate = null; }
   make(u) {
     const { buf, headers } = this.entries.get(u);
     const res = new Response(buf, { status: 200, headers });
     Object.defineProperty(res, 'url', { value: u });
     return res;
   }
-  async match(req) { const u = String(req); return this.entries.has(u) ? this.make(u) : undefined; }
+  async match(req) {
+    const u = String(req);
+    if (!this.entries.has(u)) return undefined;
+    const snapshot = this.make(u); // 读取时刻的响应副本：模拟“慢读”拿到旧字节
+    if (this.matchGate) await this.matchGate;
+    return snapshot;
+  }
   async matchAll() { return [...this.entries.keys()].map((u) => this.make(u)); }
   async keys() { return [...this.entries.keys()].map((u) => new Request(u)); }
   async put(req, res) {
@@ -434,6 +440,117 @@ await section('concurrent byte bounds and clear during put', async () => {
   await clearWebAudioCache();release();
   eq(await waiting.done,false,'clear wins over a put already in progress');
   eq((await getWebCacheStats()).entries,0,'no in-memory cached entry resurrects after clear');
+});
+
+// —— 13. 缓存命中启动：不等待网络、零请求（#18「start from a valid cached entry」） ——
+await section('cache-hit startup never touches network', async () => {
+  fakeStorageReset();
+  goodFetch();
+  eq(await (await prepareWebAudio(KEY1)).done, true, 'seed complete entry');
+  await getWebCacheStats(); // 索引已暖：命中判定同步可见
+  __resetWebAudioCacheStateForTest(); // 模拟页面重载（CacheStorage 保留）
+  await getWebCacheStats(); // 重载后预热索引（播放器挂载时 primeWebAudioCacheIndex 做同一件事）
+  class Media extends EventTarget {
+    src = ''; currentTime = 0; playbackRate = 1; volume = 1; muted = false; paused = true; error = null; plays = 0;
+    getAttribute() { return this.src; }
+    load() { this.currentTime = 0; queueMicrotask(() => this.dispatchEvent(new Event('loadedmetadata'))); }
+    pause() { this.paused = true; }
+    play() { this.plays++; return Promise.resolve(); }
+  }
+  let network = 0;
+  globalThis.fetch = async () => { network++; throw TypeError('network must not be used'); };
+  const m = new Media();
+  attachAudioRenewal(m, () => 'entry', (msg) => { throw Error('unexpected failure: ' + msg); });
+  m.src = KEY1; m.load();
+  await m.play();
+  eq(network, 0, 'sync-known cache hit starts no resolve/download request at all');
+  ok(m.src.startsWith('blob:'), 'playback starts from the cached blob immediately');
+  eq(m.plays, 1, 'play proceeded without waiting for network');
+});
+
+// —— 14. 失败/部分响应绝不替换完整条目（#18「failed/partial refresh」） ——
+await section('failed or partial refresh never replaces a complete entry', async () => {
+  fakeStorageReset();
+  goodFetch();
+  eq(await (await prepareWebAudio(KEY1)).done, true, 'complete entry seed');
+  const before = await getWebCacheStats();
+  // 206 / 失败响应即使被请求也绝不入缓存；命中路径根本不发请求。
+  globalThis.fetch = async () => new Response(AUDIO_BODY.slice(0, 100), { status: 206, headers: { 'content-type': 'audio/ogg', 'content-range': 'bytes 0-99/9999' } });
+  const hit = await prepareWebAudio(KEY1);
+  ok(hit.cached && hit.url.startsWith('blob:'), 'existing complete entry still serves');
+  hit.release();
+  globalThis.fetch = async () => { throw TypeError('offline'); };
+  const still = await prepareWebAudio(KEY1);
+  ok(still.cached, 'network failure cannot demote a complete entry');
+  still.release();
+  const after = await getWebCacheStats();
+  eq([after.entries, after.bytes], [before.entries, before.bytes], 'complete entry bytes/entries unchanged');
+  // 解绑定后的播放（renew 强制）在断网下也不能丢条目。
+  class Media extends EventTarget {
+    src = ''; currentTime = 0; playbackRate = 1; volume = 1; muted = false; paused = true; error = null; plays = 0;
+    getAttribute() { return this.src; } load() { queueMicrotask(() => this.dispatchEvent(new Event('loadedmetadata'))); } pause() { this.paused = true; } play() { this.plays++; return Promise.resolve(); }
+  }
+  const errors = [];
+  const m = new Media();
+  const handle = attachAudioRenewal(m, () => 'entry', (msg) => errors.push(msg));
+  m.src = KEY1; m.load();
+  await m.play();
+  await handle.renew(true);
+  ok(m.src.startsWith('blob:'), 'forced renew still plays from the complete cache entry offline');
+  eq(await getWebAudioEntryState(KEY1), 'cached', 'entry survived forced renew while offline');
+  eq(errors, [], 'no spurious failure surfaced');
+});
+
+// —— 15. 慢读期间被失效/清除：旧字节不覆盖新状态（#18「obsolete response」） ——
+await section('stale read cannot overwrite invalidation or clear', async () => {
+  fakeStorageReset();
+  goodFetch();
+  eq(await (await prepareWebAudio(KEY1)).done, true, 'seed');
+  const cache = await globalThis.caches.open(WEB_AUDIO_CACHE_NAME);
+  // (a) 读挂在 match 上，期间条目被 invalidate：旧字节不得复活内存条目
+  let releaseGate;
+  const gate = new Promise((r) => { releaseGate = r; });
+  cache.matchGate = gate;
+  const slow = acquireCachedAudio(KEY1);
+  await sleep(5);
+  await invalidateCachedAudio(KEY1);
+  releaseGate();
+  cache.matchGate = null;
+  eq(await slow, null, 'stale read returns null instead of resurrecting an invalidated entry');
+  eq(await getWebAudioEntryState(KEY1), 'none', 'invalidated entry stays gone');
+  eq((await getWebCacheStats()).entries, 0, 'no phantom size entry after invalidation');
+  // (b) 慢读期间 clear：同样不复活
+  goodFetch();
+  eq(await (await prepareWebAudio(KEY2)).done, true, 'seed key2');
+  let releaseGate2;
+  const gate2 = new Promise((r) => { releaseGate2 = r; });
+  cache.matchGate = gate2;
+  const slow2 = acquireCachedAudio(KEY2);
+  await sleep(5);
+  await clearWebAudioCache();
+  releaseGate2();
+  cache.matchGate = null;
+  eq(await slow2, null, 'stale read after clear returns null');
+  eq((await getWebCacheStats()).entries, 0, 'clear stays clear (no late entry)');
+});
+
+// —— 16. 成功替换：只有完整体才能顶替旧条目（#18「successful replacement」） ——
+await section('successful replacement after invalidation', async () => {
+  fakeStorageReset();
+  goodFetch();
+  eq(await (await prepareWebAudio(KEY1)).done, true, 'old entry seed');
+  const oldBytes = (await getWebCacheStats()).bytes;
+  await invalidateCachedAudio(KEY1);
+  const NEW_BODY = 'NEWOGG'.repeat(3000);
+  globalThis.fetch = async () => new Response(NEW_BODY, { status: 200, headers: { 'content-type': 'audio/ogg' } });
+  const fresh = await prepareWebAudio(KEY1);
+  eq(await fresh.done, true, 'replacement downloaded');
+  const stats = await getWebCacheStats();
+  eq(stats.entries, 1, 'still one entry');
+  ok(stats.bytes === new TextEncoder().encode(NEW_BODY).byteLength && stats.bytes !== oldBytes, 'new complete bytes replaced the old size');
+  const replay = await prepareWebAudio(KEY1);
+  ok(replay.cached && replay.url.startsWith('blob:'), 'replacement is what plays next');
+  replay.release();
 });
 
 console.log(`web offline cache: ${checks} checks passed`);

@@ -46,6 +46,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     private var rate: Float = 1
     private var revision = ""
     private var sequence = 0
+    /// 最近一次队列准入丢弃的条目数（configure/冷启动恢复各算一次），只进快照给 Web 做单条提示。
+    private var admissionDropped = 0
     private var errorMessage = ""
     private var sleepState = NativeSleep()
     private var timer: Timer?
@@ -155,14 +157,20 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             self.tick(); self.publish()
         })
         notifications.append(center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in self?.diagnostic("background"); self?.persist(); self?.publish() })
-        if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let items = restoredQueue(saved) {
-            queue = NativeLyrics.hydrate(items); pos = saved["pos"] as? Int ?? -1
+        if let saved = UserDefaults.standard.dictionary(forKey: savedKey), let admitted = restoredQueue(saved) {
+            // 一次性链接条目在恢复时丢弃（诊断一条），索引/历史/重做同步重映射，绝不静默重播。
+            queue = NativeLyrics.hydrate(admitted.items)
+            admissionDropped = admitted.dropped
+            pos = admitted.indexes[saved["pos"] as? Int ?? -1] ?? -1
             rate = (saved["rate"] as? NSNumber)?.floatValue ?? 1
             shuffle = saved["shuffle"] as? Bool ?? false
             repeatOne = saved["repeatOne"] as? Bool ?? false
             skipSame = saved["skipSame"] as? Bool ?? true
-            history = saved["history"] as? [Int] ?? []; redo = saved["redo"] as? [Int] ?? []
-            played = saved["played"] as? [String] ?? []
+            history = remap(saved["history"] as? [Int] ?? [], admitted.indexes)
+            redo = remap(saved["redo"] as? [Int] ?? [], admitted.indexes)
+            played = (saved["played"] as? [String] ?? []).filter { key in
+                admitted.items.contains { ($0["key"] as? String) == key }
+            }
             // Restore paused without discarding a valid wall-clock sleep countdown.
             sleepState.configure(revision: saved["sleepRevision"] as? String ?? "restored",
                 until: saved["sleepUntil"] as? Double, started: saved["sleepStarted"] as? Double,
@@ -171,45 +179,80 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             loadCurrent(autoplay: false, at: saved["position"] as? Double ?? 0)
         }
     }
-    private func restoredQueue(_ saved: [String: Any]) -> [[String: Any]]? {
+    private func restoredQueue(_ saved: [String: Any]) -> AdmittedQueue? {
         if let data = saved["queueJSON"] as? Data,
-           let items = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]], valid(items) {
-            return items
+           let items = (try? JSONSerialization.jsonObject(with: data)) as? [[String: Any]] {
+            return admit(items)
         }
         // v1 stored clip.file as id and the resolved HTTPS URL verbatim. Keep
         // those identities, order and optional metadata (including absent audio/
-        // monthId); neither dates nor a replacement JS queue can be inferred.
-        if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }
+        // month fields); neither dates nor a replacement JS queue can be inferred.
+        // v1 里的一次性链接同样按当前准入规则丢弃，而不是原样恢复。
+        if let items = saved["queue"] as? [[String: Any]] { return admit(items) }
         return nil
     }
-    private func valid(_ items: [[String: Any]]) -> Bool {
-        items.allSatisfy { item in
-            guard item["id"] is String, item["key"] is String, item["title"] is String,
-                  let raw = item["url"] as? String, let url = URL(string: raw) else { return false }
-            return url.scheme == "https" && url.host != nil
-        }
+
+    /// 一次准入的结果：保留条目 + 旧下标→新下标映射（pos/history/redo 同源重映射）。
+    private struct AdmittedQueue {
+        let items: [[String: Any]]
+        let indexes: [Int: Int]
+        let dropped: Int
     }
+
+    /// 稳定音频地址判据：绝对 https、有 host、路径非根、无 query/fragment/用户信息。
+    /// 一次性签名链接或任何带查询串的地址都是「单次传输能力」：重启会复活过期链接，
+    /// 同一条录音还会按不同签名各落一份缓存；因此不得入队、不得作为缓存键、不得持久化。
+    private static func isStableAudioAddress(_ raw: String?) -> Bool {
+        guard let raw, let url = URL(string: raw), url.scheme?.lowercased() == "https",
+              url.host != nil, url.user == nil, url.password == nil,
+              url.query == nil, url.fragment == nil, url.path.count > 1 else { return false }
+        return true
+    }
+
+    /// 队列准入（#33）：丢弃非稳定地址或缺少 id/key/title 的条目，保留其余顺序。
+    /// 丢弃可见：一条 `admission-drop` 诊断 + 快照里的 admissionDropped，绝不逐条刷屏、绝不打印 URL。
+    private func admit(_ items: [[String: Any]]) -> AdmittedQueue {
+        var kept: [[String: Any]] = []
+        var indexes: [Int: Int] = [:]
+        for (index, item) in items.enumerated() {
+            guard item["id"] is String, item["key"] is String, item["title"] is String,
+                  Self.isStableAudioAddress(item["url"] as? String) else { continue }
+            indexes[index] = kept.count
+            kept.append(item)
+        }
+        let dropped = items.count - kept.count
+        if dropped > 0 { diagnostic("admission-drop", detail: "dropped=\(dropped) kept=\(kept.count)") }
+        return AdmittedQueue(items: kept, indexes: indexes, dropped: dropped)
+    }
+
+    private func remap(_ indexes: [Int], _ map: [Int: Int]) -> [Int] {
+        indexes.compactMap { map[$0] }
+    }
+
     @objc func configure(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
             // 空队列是合法的显式清空（issue #25）：不能因为空数组/缺省字段被 guard 拒绝，
             // 否则 Web 的清空请求会静默失败，原生继续持有曲目。非空队列仍然逐条校验。
             let rawQueue = call.getArray("queue") ?? []
-            let items: [[String: Any]]
+            let admitted: AdmittedQueue
             if rawQueue.isEmpty {
-                items = []
+                admitted = AdmittedQueue(items: [], indexes: [:], dropped: 0)
             } else {
-                guard let typed = rawQueue as? [[String: Any]], self.valid(typed) else {
+                guard let typed = rawQueue as? [[String: Any]] else {
                     call.reject("原生播放需要有效的 HTTPS 音频地址"); return
                 }
-                items = typed
+                // 一次性签名/带查询串条目在这里丢弃（#33），剩余队列照常播放。
+                admitted = self.admit(typed)
             }
+            let items = admitted.items
             let previous = self.currentID
             let previousRate = self.rate
             self.catalogDirty = true
             self.queue = NativeLyrics.hydrate(items)
-            self.pos = call.getInt("pos") ?? -1
-            self.history = call.getArray("history", Int.self) ?? []
-            self.redo = call.getArray("redo", Int.self) ?? []
+            self.admissionDropped = admitted.dropped
+            self.pos = admitted.indexes[call.getInt("pos") ?? -1] ?? -1
+            self.history = self.remap(call.getArray("history", Int.self) ?? [], admitted.indexes)
+            self.redo = self.remap(call.getArray("redo", Int.self) ?? [], admitted.indexes)
             self.played = call.getArray("played", String.self) ?? []
             self.shuffle = call.getBool("shuffle") ?? false
             self.repeatOne = call.getBool("repeatOne") ?? false
@@ -279,7 +322,7 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
         prefetchTask?.cancel(); prefetchTask = nil
         mediaRefreshTask?.cancel(); mediaRefreshTask = nil
         guard queue.indices.contains(pos), let raw = queue[pos]["url"] as? String,
-              let url = URL(string: raw), url.scheme == "https" else {
+              Self.isStableAudioAddress(raw), let url = URL(string: raw), url.scheme == "https" else {
             playbackSource = .none
             audio.replaceCurrentItem(with: nil)
             loadTask = Task { @MainActor in
@@ -290,7 +333,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
             }
             publish(); return
         }
-        // 缓存键永远是稳定源 URL（队列里的 https）；签名目标不作为键、不落盘、不进日志。
+        // 缓存键永远是稳定源 URL（队列里的 https，准入已保证无 query/fragment）；
+        // 签名目标不作为键、不落盘、不进日志。
         let key = AnyunCacheKey.hash(url.absoluteString)
         // Disk lookup/validation/linking runs on the actor, never synchronously on main.
         // Keep user intent while awaiting it; late completion must not undo pause/sleep/seek.
@@ -632,7 +676,8 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 "shuffle": shuffle, "repeatOne": repeatOne, "skipSame": skipSame, "rate": rate, "revision": revision, "sequence": sequence,
                 "position": displayTime, "duration": displayDuration,
                 "playing": audio.timeControlStatus == .playing, "loading": (resolvingCache && wantsPlayback) || recovering || audioActivationPending || audio.timeControlStatus == .waitingToPlayAtSpecifiedRate,
-                "error": errorMessage, "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
+                "error": errorMessage, "admissionDropped": admissionDropped,
+                "sleepUntil": sleepState.until as Any? ?? NSNull(), "sleepStarted": sleepState.started as Any? ?? NSNull(),
                 "supportsCustomSleep": true, "sleepCustomVersion": 1, "sleepCustom": sleepState.custom.dictionary,
                 "sleepRevision": sleepState.revision, "sleepMode": sleepState.mode, "afterTrack": sleepState.afterTrack, "sleepFired": sleepState.fired]
         if !progressOnly {

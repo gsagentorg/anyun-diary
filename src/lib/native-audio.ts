@@ -13,6 +13,8 @@ export interface NativeConfig {
 export interface NativeState extends NativeConfig {
   revision: string; position: number; duration: number; playing: boolean; loading: boolean;
   supportsCustomSleep?: boolean;
+  /** 上次队列准入丢弃的条目数（#33）；0/缺省表示全部准入。 */
+  admissionDropped?: number;
   error: string; sleepFired: boolean; sequence: number;
 }
 type CatalogFields = 'queue' | 'history' | 'redo' | 'played';

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {publishMonths,digest} from '../src/lib/server/publisher.mjs';
-import {monthBounds} from '../src/lib/server/months.mjs';
+import {monthBounds,queryMonths} from '../src/lib/server/months.mjs';
 import {readCatalog,readMonth} from '../src/lib/server/catalog.ts';
 import {searchAudiosAsync,searchAudios} from '../src/lib/search.ts';
 import {createSearchLimiter,searchStream} from '../src/lib/server/search-stream.ts';
@@ -20,6 +20,20 @@ const partialStore={read(k,options){if(k===manifest.months[0].key)return store.r
 const fake={...manifest.months[0],key:'never'};
 const partial=await parse(searchStream(partialStore,[manifest.months[0],fake],'blue',{timeoutMs:20,concurrency:2}));assert.equal(partial.filter(e=>e.type==='results').length,1);assert.deepEqual(partial.at(-1),{type:'done',completed:1,total:2,timedOut:true});
 console.log('monthly search/stream mock tests passed');
+
+// A valid date/time query outside the configured window is a normal empty result, never an error:
+// search only ever receives the queryMonths(...) entries of the current permission window.
+const winMap=new Map(),winStore={async read(k){return winMap.has(k)?new Response(winMap.get(k)):new Response(null,{status:404});},async write(k,v){winMap.set(k,v);}};
+winMap.set('audio/'+digest('OggSfixture')+'.opus','OggSfixture');
+const winManifest=await publishMonths(['2026-08','2026-10','2026-11'].map(id=>({...audio,id:'w-'+id,monthId:id,startAt:monthBounds(id).startAt+1})),winStore,{now,maxMonths:2});
+const windowMonths=queryMonths(winManifest.months,now,2);assert.deepEqual(windowMonths.map(m=>m.id),['2026-11','2026-10']);
+const outside=await parse(searchStream(winStore,windowMonths,'date:2026-08-07'));
+assert.equal(outside[0].type,'progress');assert.equal(outside[0].total,2);
+assert.equal(outside.filter(e=>e.type==='results'&&e.hits.length).length,0);
+assert.deepEqual(outside.at(-1),{type:'done',completed:2,total:2,timedOut:false});
+const inside=await parse(searchStream(winStore,windowMonths,'date:2026-11-07'));
+assert.equal(inside.filter(e=>e.type==='results').flatMap(e=>e.hits).length,1);
+console.log('query-window boundary: out-of-window date query is empty, in-window still matches');
 
 // CPU-heavy lyric scans must give timers a turn before scanning the whole month.
 const huge={...audio,lyrics:Array.from({length:100000},()=>({t:0,text:'unmatched lyric'}))};

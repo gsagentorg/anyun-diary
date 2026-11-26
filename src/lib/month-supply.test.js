@@ -37,6 +37,34 @@ test('cold start one block; concurrent dedupe; cache revision and range/resolve'
  await supply.manifest({refresh:true});assert.equal((await supply.month('2026-11')).revision,'r2');assert.equal(calls.filter(x=>x==='2026-11.json').length,2);
  await assert.rejects(supply.resolve('id'),/monthId/);
 });
+test('range uses only the intersection with the configured window; disjoint ranges stay empty',async()=>{
+ const ids=['2026-09','2026-10','2026-11'],months=ids.map(id=>({...monthBounds(id),count:1,revision:'r1',key:id+'.json',available:true}));
+ const manifest={schemaVersion:2,timezone:'Asia/Shanghai',generatedAt:at,revision:'m1',months};
+ const blocks=Object.fromEntries(months.map(m=>[m.key,{schemaVersion:2,id:m.id,revision:m.revision,audios:[{id:m.id,file:'sample.wav',opus:'sample.opus',title:m.id,startAt:m.startAt,duration:null,lyrics:[],monthId:m.id}]}]));
+ const fetched=[];const supply=createMonthSupply({now:()=>at,fetch:async url=>{fetched.push(url);return {ok:true,json:async()=>structuredClone(url==='/api/catalog'?manifest:blocks[url])};}});
+ const w=Object.fromEntries(ids.map(id=>[id,monthBounds(id)]));const lo=w['2026-09'].startAt,hi=w['2026-11'].endAt,day=86400;
+ const range=(startAt,endAt,options={})=>supply.range({startAt,endAt,...options});
+ // Past either boundary: only the part inside the published window is returned.
+ assert.deepEqual((await range(lo-40*day,w['2026-10'].startAt)).map(a=>a.id),['2026-09']);
+ assert.deepEqual((await range(lo-40*day,w['2026-10'].endAt)).map(a=>a.id),['2026-09','2026-10']);
+ assert.deepEqual((await range(hi-40*day,hi+40*day)).map(a=>a.id),['2026-11']);
+ // Spanning both boundaries clamps to the full window rather than failing.
+ assert.deepEqual((await range(lo-40*day,hi+40*day)).map(a=>a.id),['2026-09','2026-10','2026-11']);
+ // Wholly disjoint on each side is a normal empty result, and no month block is fetched.
+ fetched.length=0;assert.deepEqual(await range(lo-200*day,lo-100*day),[]);assert.deepEqual(fetched,[],'disjoint range fetches no month block');
+ assert.deepEqual(await range(hi+100*day,hi+200*day),[]);
+ // Exact boundary values stay left closed / right open.
+ assert.deepEqual((await range(lo,lo+1)).map(a=>a.id),['2026-09']);
+ assert.deepEqual((await range(hi-1,hi)).map(a=>a.id),[]);
+ assert.deepEqual((await range(w['2026-11'].startAt,hi)).map(a=>a.id),['2026-11']);
+ assert.deepEqual((await range(w['2026-09'].endAt,w['2026-10'].startAt+1)).map(a=>a.id),['2026-10']);
+ assert.deepEqual((await range(lo,hi)).map(a=>a.id),['2026-09','2026-10','2026-11']);
+ // The MAX_QUERY_MONTHS window intersects the same way: older data falls away, disjoint stays empty.
+ assert.deepEqual((await range(lo-40*day,hi+40*day,{maxMonths:2})).map(a=>a.id),['2026-10','2026-11']);
+ assert.deepEqual(await range(lo,w['2026-09'].endAt,{maxMonths:2}),[]);
+ // Malformed ranges keep rejecting; they are not silently intersected.
+ await assert.rejects(range(hi,lo),/Invalid range/);await assert.rejects(range(hi,hi),/Invalid range/);await assert.rejects(range(NaN,hi),/Invalid range/);
+});
 test('abort subscriber does not break shared request; failed fetch retries',async()=>{
  const {manifest}=fixture();let calls=0;
  const supply=createMonthSupply({fetch:async()=>{calls++;await new Promise(r=>setTimeout(r,10));return {ok:true,json:async()=>manifest};}});

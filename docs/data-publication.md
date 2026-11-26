@@ -31,6 +31,8 @@ current 仅在 404 时显式兼容旧 manifest.json；损坏/空 current、缺�
 
 mock 覆盖增量复用、原子提交失败、全部引用验证、回滚、local rename / Blob 缓存配置；range 并发热更固定 release、revision 缓存隔离、坏目录保留上个有效版本；原有搜索取消/超时/并发测试。真实 Blob 可见性与生产配置未执行。浏览器回归使用本地隔离服务与合成 fixture（不是生产数据）；API HTTP 测试覆盖 304、显式旧 release 月拒绝与搜索过滤，浏览热更测试覆盖失败保留、成功重试与 range 固定版本。
 
+local 适配器另有端到端验证（`npm run test:local-app`，隔离临时目录，无真实后端/凭据）：构建后启动 adapter-node 指向该目录，发布 v1 后运行中的应用直接读取；不重建、不重启再发布 v2，应用即切到 v2，旧 release 仍按固定 revision 可读；发布在切指针前中断、指针被带外切到缺月块的 release、current 被截断三种不完整更新都不会替换最后有效目录（应用保留原 manifest 与月份、写入错误状态），恢复指针后自动恢复。
+
 ## S3 运维边界
 
 S3 current/legacy manifest PUT 使用 no-cache,max-age=0,must-revalidate，release/month/audio 使用一年 immutable；读取透传类型/长度/ETag/Range/缓存元数据。所有后端共用上传后复读与摘要验证，最后切 pointer 并复读；最后 PUT 超时或复读失败属于结果不确定，必须重读 current 再决定重试。单发布者，无 CAS，不保证多发布者安全。

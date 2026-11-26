@@ -43,6 +43,8 @@ let heatFrom=$state(''),heatTo=$state('');
 const heatAudios=$derived(Object.values(backend.summaries).flat().filter(a=>a.startAt>=startAt&&a.startAt<endAt));
 let revealed=$state(1);
 const refs=$derived(months.slice(0,revealed));
+const pendingRefs=$derived(refs.filter(ref=>!backend.summaries[ref.id]).map(ref=>({id:ref.id,error:backend.errors[ref.id]??null})));
+function retryMonth(id:string){void loadMonth(id).catch(()=>{});}
 $effect(()=>{for(const ref of refs)if(!backend.summaries[ref.id]&&!backend.loading[ref.id]&&!backend.errors[ref.id])void loadMonth(ref.id).catch(()=>{});});
 function continueHistory(node:HTMLElement){let visible=false;const advance=()=>{if(visible&&window.scrollY>0&&revealed<months.length)revealed++;};const observer=new IntersectionObserver(entries=>{visible=entries.some(e=>e.isIntersecting);advance();},{rootMargin:'0px'});observer.observe(node);const wheel=(e:WheelEvent)=>{if(e.deltaY>0&&visible&&revealed<months.length)revealed++;};window.addEventListener('scroll',advance,{passive:true});window.addEventListener('wheel',wheel,{passive:true});return {destroy:()=>{observer.disconnect();window.removeEventListener('scroll',advance);window.removeEventListener('wheel',wheel);}};}
 onMount(()=>{
@@ -243,8 +245,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {#if view===2&&months.length&&!Object.keys(backend.summaries).length}
 {#if backend.errors[months[0].id]}<p role="alert">{backend.errors[months[0].id]} <button onclick={()=>void loadMonth(months[0].id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label="正在加载热力数据…"/>{/if}
 {:else if view===2}{#await import('$lib/Heatmap.svelte') then m}<m.default audios={heatAudios} bind:from={heatFrom} bind:to={heatTo} onOlder={()=>{if(revealed<months.length){revealed++;}}}/>{/await}
-{:else}{#if Object.keys(backend.summaries).length}<ContinuousBrowse {view} {laneMode} {startAt} {endAt} bind:expanded={expandedDay}/>{/if}
-{#each refs as ref (ref.id)}{#if !backend.summaries[ref.id]}{#if backend.errors[ref.id]}<p role="alert">{backend.errors[ref.id]} <button onclick={()=>void loadMonth(ref.id).catch(()=>{})}>重试此月</button></p>{:else}<BrowseSkeleton label={"正在加载 "+ref.id+"…"}/>{/if}{/if}{/each}
+{:else}{#if Object.keys(backend.summaries).length}<ContinuousBrowse {view} {laneMode} {startAt} {endAt} bind:expanded={expandedDay} pending={pendingRefs} onretry={retryMonth}/>{:else}{#each pendingRefs as ref (ref.id)}{#if ref.error}<p role="alert">{ref.error} <button onclick={()=>retryMonth(ref.id)}>重试此月</button></p>{:else}<BrowseSkeleton label={"正在加载 "+ref.id+"…"}/>{/if}{/each}{/if}
 {#if revealed<months.length}{#key revealed}<div use:continueHistory class="h-8" aria-label="继续加载历史月份"></div>{/key}{/if}{/if}
 {/if}
 {#if searchOpen}{#await import('$lib/components/SearchPanel.svelte') then module}<module.default bind:open={searchOpen}/>{/await}{/if}

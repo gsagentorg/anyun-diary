@@ -31,6 +31,7 @@ node scripts/test-feature-table-browser.mjs
 | 清空 | 主控制区无清空；仅开队列仍无；队列操作次级菜单才出现；点后 audio paused、进度 0、队列行 0、播放器关闭、持久会话清除 |
 | 运行睡眠 | 15 分钟运行中，在竖线距圆点超过 10 SVG 单位的位置拖；50% 中点；末端最多 93%/剩余 01:00；pointercancel 后移动不回弹、不继续拖 |
 | 刷新/重载 | 观察真实 current API 请求；刷新保持 audio 源/播放时间推进/队列内容/document 标记且 0 导航；重载先二次确认，取消 0 导航；明确确认后恰好 1 导航且 document 标记消失 |
+| 暂停恢复预取 | 离线暂停后恢复联网：计划下一首（第二行）静默完整入缓存；audio 仍 paused、src 不变、播放头不前进、无 alert 横幅（issue #7） |
 | 断网与恢复 | Alpha 完整缓存、Beta 不存在；离线刷新不得触达服务器；重载冷内存后断网 Alpha Blob 真实播放推进；Beta 诚实报错且不伪造缓存；恢复联网真实 online 事件发 current 请求并可重试播放 |
 | 跨源品牌 | 第二 loopback 源 PNG decode 成功/naturalWidth>0；源不同；无 ACAO；img 无 crossorigin |
 | 热力日期域 | fixture 最后录音在五天前；最新日期列等于上海今天且今天 24 个无数据格 disabled。现有 UI 日期倒序，检查 chronological upper bound，非错误地把最右列当今天 |
@@ -67,3 +68,9 @@ Swift/Xcode、原生 actor、iOS/Safari 真机手势/锁屏/长后台、系统�
 ## Parent integration re-run
 
 After all first-round implementations were present, the parent built the Node application afresh and reran this unweakened harness: **8 PASS / 0 FAIL**, exit 0, externalRequestsBlocked=0, serverErrors=[]. The cached Alpha / missing Beta row assertions now pass. The earlier 7/1 result above is retained as an old-build observation, not the current integration verdict. Cold tab-close/offline-new-tab shell+catalog+Blob playback was separately rerun and passed without online page errors. This remains Chromium synthetic verification, not iPhone verification.
+
+## 2026-11-26（issue #7 增量）
+
+新增用例 `paused-reconnect-prefetches-planned-next-without-audio`：离线暂停 → 恢复联网后，计划下一首（队列第 2 行）静默完整入 `anyun-web-audio-v1`；`window.__anyunAudio` 仍 paused、src 不变、播放头不动、无 alert。同时 `offline-recovery…` 用例显式移除该 fixture 缓存条目，以便继续验证「未缓存曲目离线诚实失败」（属夹具复位，非产品行为）。
+
+当轮实测：**10 PASS / 0 FAIL**，exit 0，externalRequestsBlocked=0，serverErrors=[]（连续跑两次结果一致）。仍是 Chromium 合成 fixture，不构成 iPhone/Safari 结论。

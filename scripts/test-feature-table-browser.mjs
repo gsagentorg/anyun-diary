@@ -31,6 +31,14 @@ async function listen(server) {
  await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
  return 'http://127.0.0.1:' + server.address().port;
 }
+async function eventually(fn, timeoutMs = 15000, step = 100) {
+ const started = Date.now();
+ for (;;) {
+  if (await fn()) return;
+  if (Date.now() - started > timeoutMs) throw Error('timeout after ' + timeoutMs + 'ms');
+  await new Promise(r => setTimeout(r, step));
+ }
+}
 async function check(name, fn) {
  try { const evidence = await fn(); results.push({ name, status: 'PASS', evidence }); }
  catch (e) { results.push({ name, status: 'FAIL', error: e.stack || String(e) }); }
@@ -266,6 +274,13 @@ try {
   await context.setOffline(false); await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForSelector('[data-continuous-browse][data-cached-months="1"]');
   await page.getByRole('button', { name: '播放', exact: true }).waitFor();
+  // issue #7：暂停态联网恢复会把「计划下一首」也缓存。本用例要验证未缓存曲目的离线路径，
+  // 因此把这一条 fixture 缓存显式移除（这是夹具复位，不是产品行为）。
+  await eventually(() => page.evaluate(async () => (await (await caches.open('anyun-web-audio-v1')).keys()).some(r => r.url.includes('b'.repeat(64)))), 8000).catch(() => {});
+  await page.evaluate(async () => {
+   const cache = await caches.open('anyun-web-audio-v1');
+   for (const request of await cache.keys()) if (request.url.includes('b'.repeat(64))) await cache.delete(request.url);
+  });
   await context.setOffline(true);
   await page.getByRole('button', { name: '播放', exact: true }).click();
   await page.waitForFunction(() => window.__anyunAudio.src.startsWith('blob:') && !window.__anyunAudio.paused && window.__anyunAudio.currentTime > 0.2);
@@ -282,6 +297,31 @@ try {
   await page.getByRole('button', { name: '播放', exact: true }).click();
   await page.waitForFunction(() => !window.__anyunAudio.paused && window.__anyunAudio.currentTime > 0.2);
   assert.deepEqual(errors, []); return { alphaComplete: true, betaInitiallyAbsent: true, cachedPlayback, onlineEventRecovery: true };
+ });
+ await check('paused-reconnect-prefetches-planned-next-without-audio', async () => {
+  const { page, context, errors } = await setup(); await begin(page);
+  // Sequential by default: planned next is the second queue row (Beta).
+  await eventually(() => page.evaluate(async () => (await (await caches.open('anyun-web-audio-v1')).keys()).some(r => r.url.includes('a'.repeat(64)))));
+  await context.setOffline(true);
+  await page.waitForFunction(() => navigator.onLine === false);
+  await page.getByRole('button', { name: '暂停', exact: true }).click();
+  await page.waitForFunction(() => window.__anyunAudio.paused);
+  const before = await audioState(page);
+  const betaKey = 'b'.repeat(64);
+  const betaCached = () => page.evaluate(async (key) => (await (await caches.open('anyun-web-audio-v1')).keys()).some(r => r.url.includes(key)), betaKey);
+  await page.waitForTimeout(400);
+  assert.equal(await betaCached(), false, 'offline pause cannot prefetch the next track');
+  // Connectivity returns while paused: the planned next track is cached silently.
+  await context.setOffline(false);
+  await page.waitForFunction(() => navigator.onLine === true);
+  await eventually(betaCached, 15000);
+  const after = await audioState(page);
+  assert.equal(after.paused, true, 'prefetch must not start audio');
+  assert.equal(after.src, before.src, 'prefetch must not change the source or advance the track');
+  assert.ok(Math.abs(after.time - before.time) < 0.5, 'playhead must not move: ' + before.time + ' → ' + after.time);
+  assert.equal(await page.getByRole('alert').count(), 0, 'no banner from a silent prefetch');
+  assert.equal(await betaCached(), true, 'planned next track is fully cached after reconnect');
+  assert.deepEqual(errors, []); return { betaCached: true, paused: true, playhead: after.time, srcUnchanged: after.src === before.src };
  });
  await check('cross-origin-brand-without-acao-or-crossorigin', async () => {
   const { page, errors } = await setup();

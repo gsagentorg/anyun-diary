@@ -159,7 +159,7 @@ export function peekShuffleNext(
   keys: string[],
   playedKeys: string[],
   currentPos: number,
-  redo: number[],
+  redo: readonly number[],
   avoidIdx?: Set<number>,
 ): { index: number; reset: boolean } | null {
   const n = keys.length;
@@ -167,4 +167,33 @@ export function peekShuffleNext(
   const top = redo.length ? redo[redo.length - 1] : null;
   if (top != null && top >= 0 && top < n && top !== currentPos) return { index: top, reset: false };
   return pickShuffleIndex(keys, playedKeys, currentPos, avoidIdx);
+}
+
+/** 预取用的「下一首计划」（issue #7）。 */
+export interface NextPlan {
+  index: number;
+  /** 抽取时已播池抽干（消费方要按 pickShuffleIndex 的语义重置池） */
+  reset: boolean;
+  /** 复用随机回退栈顶：step(1) 消费时要弹栈而不是清栈 */
+  viaRedo: boolean;
+}
+
+/**
+ * 暂停预取时就定下「下一首」（随机模式不能到推进时才抽，否则预取的不是真正会播的那首）。
+ * 复用 peekShuffleNext 的同一取曲路径（回退栈顶优先，否则按 pickShuffleIndex 预抽），
+ * 只多标注 viaRedo 供 step(1) 消费时区分弹栈/清栈。纯函数：不弹栈、不改播放状态。
+ */
+export function planShuffleNext(
+  keys: string[],
+  playedKeys: string[],
+  currentPos: number,
+  redo: readonly number[],
+  avoidIdx?: Set<number>,
+): NextPlan | null {
+  if (currentPos < 0 || currentPos >= keys.length) return null;
+  const top = redo.length ? redo[redo.length - 1] : null;
+  const peek = peekShuffleNext(keys, playedKeys, currentPos, [...redo], avoidIdx);
+  if (!peek) return null;
+  const viaRedo = top != null && top >= 0 && top < keys.length && top !== currentPos && peek.index === top;
+  return { index: peek.index, reset: peek.reset, viaRedo };
 }

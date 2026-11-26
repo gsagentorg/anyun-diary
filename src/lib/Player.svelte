@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import SleepCurveEditor from './components/SleepCurveEditor.svelte';
   import { fly } from 'svelte/transition';
-  import { player, step, getAudio, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep, hasNextTrack } from './player.svelte.ts';
+  import { player, step, getAudio, notePlayIntent, notePauseIntent, sleep, startSleep, cancelSleep, seekSleepProgress, onTrackEnded, cyclePlayMode, reportPlaybackState, setRate, initRate, initDedup, initMode, initSession, setDedupByName, setShuffleSkipSameTitle, syncLyricMetadata, initSleep, setSleepPreset, setSleepCustom, resetSleepCustom, canStartCustomSleep, hasNextTrack } from './player.svelte.ts';
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
@@ -164,8 +164,14 @@
 
   function toggle() {
     const a = getAudio();
-    if (a.paused) a.play().catch(() => {});
-    else a.pause();
+    // 显式意图先于音频动作记录：暂停作废旧横幅，播放恢复意图（issue #6）。
+    if (a.paused) {
+      notePlayIntent();
+      a.play().catch(() => {});
+    } else {
+      notePauseIntent();
+      a.pause();
+    }
   }
 
   function ratioAt(clientX: number, el: HTMLElement) {
@@ -314,6 +320,7 @@
     const v = Number(rateInput);
     if (Number.isFinite(v)) setRate(v);
   }
+
 
   // ⋮ 菜单点击外部关闭：不在菜单面板、也不在 ⋮ 按钮内 → 收起（浏览器守卫）
   function onOutsidePointerDown(e: PointerEvent) {

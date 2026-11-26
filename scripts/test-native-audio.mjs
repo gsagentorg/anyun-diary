@@ -241,3 +241,173 @@ assert.equal(current.sleepRevision, 'custom-one', 'native-restored revision pres
 assert.equal(restoredAudio.supportsCustomSleep, true);
 restoredAudio.dispose();
 console.log('native audio: opt-in custom capability, old-shell refusal/preset compatibility, snapshot/delta/cold restore passed');
+
+// —— issue #6 裁决②：恢复完全由事件驱动，位置未推进不是失败 ——
+const between = (from, to) => {
+  const a = swift.indexOf(from), b = swift.indexOf(to);
+  assert.ok(a >= 0 && b > a, `expected ${from} before ${to}`);
+  return swift.slice(a, b);
+};
+const recovery = between('private func checkRecovery()', 'private func noteHealthyPlayback(');
+assert.ok(!/currentTime\(\)\.seconds/.test(recovery) && !/lastPosition \+ 0\.05/.test(recovery),
+  'checkRecovery has no position-progress health branch');
+assert.ok(!/lastPosition = position/.test(recovery), 'recovery no longer advances lastPosition');
+assert.ok(recovery.includes('stallDetectedAt') && recovery.includes('failureDetectedAt'),
+  'recovery is driven by failure/stall events');
+assert.ok(recovery.includes('guard confirmed != nil || stalled != nil else { return }'),
+  'no event means no recovery scheduling');
+assert.ok(recovery.includes('recoveryAttempts >= 8'), 'the hard cap of 8 attempts stays');
+assert.ok(recovery.includes('NativeRetry.delay(attempt: recoveryAttempts, confirmedFailure: confirmed != nil'),
+  'NativeRetry backoff still schedules the retry');
+assert.ok(recovery.includes('loadCurrent(autoplay: true, at: lastPosition, recovering: true)'),
+  'retry reloads at the sampled anchor');
+const observer = between('timeObserver = audio.addPeriodicTimeObserver', 'let sleepTimer = Timer(');
+assert.ok(observer.includes('self.audio.timeControlStatus == .playing') && observer.includes('self.lastPosition = time.seconds'),
+  'lastPosition is sampled in the 0.25s time observer, gated on .playing');
+assert.ok(between('private func seek(', 'private func visit(').includes('lastPosition = max(0, seconds)'),
+  'seek still anchors lastPosition');
+assert.ok(/lastPosition = at; lastProgressAt = Date\(\); failureDetectedAt = nil; stallDetectedAt = nil/.test(swift),
+  'loadCurrent still anchors lastPosition and resets both signals');
+const control = between('controlObserver = audio.observe', 'timeObserver = audio.addPeriodicTimeObserver');
+assert.ok(control.includes('if self.audio.timeControlStatus == .playing { self.noteHealthyPlayback() }'),
+  'the .playing transition is the only health judgement');
+const healthy = between('private func noteHealthyPlayback()', 'private func diagnostic(');
+assert.ok(healthy.includes('failureDetectedAt = nil') && healthy.includes('stallDetectedAt = nil') && healthy.includes('errorMessage = ""'),
+  'resumed playback clears the failure anchors and the banner');
+assert.ok(healthy.includes('recoveryAttempts = 0'), 'resumed playback resets the bounded retry counter');
+const stalled = between('if name == AVPlayerItem.failedToPlayToEndTimeNotification', 'notifications.append(center.addObserver(forName: UIApplication.didBecomeActiveNotification');
+assert.ok(stalled.includes('self.stallDetectedAt = Date()'), 'playbackStalled is recorded as a stall event');
+assert.ok(swift.includes('bufferObserver = item.observe(\\.isPlaybackBufferEmpty'), 'playbackBufferEmpty is observed per item');
+assert.ok(between('bufferObserver = item.observe(', 'if at > 0 { seek(at) }').includes('self.stallDetectedAt = Date()'),
+  'buffer exhaustion feeds the same stall signal');
+assert.ok(between('private func pause()', 'private func seek(').includes('errorMessage = ""'),
+  'explicit pause clears the superseded errorMessage');
+assert.ok(swift.includes('"error": playing ? "" : errorMessage'), 'publish never carries a stale error while playing healthily');
+console.log('native audio: issue #6 event-driven recovery source contract passed (no position-progress branch, sampled anchor, cap 8, event-driven clear)');
+
+// —— issue #23：确认重载后的原生对账 ——
+// 页面重载时原生进程与 AVPlayer 都活着，只有 WebView 里的 JS 全新启动。这里用「同一原生状态、
+// 全新 NativeAudio 实例」模拟重载：只准 getState 读回，一次应用；不准 configure/play 造出第二条音频会话。
+const reloadQueue = [
+  { audio: fixture('ra'), id: 'reload-a', url: 'https://audio.example/ra.opus', title: 'A', key: 'A' },
+  { audio: fixture('rb'), id: 'reload-b', url: 'https://audio.example/rb.opus', title: 'B', key: 'B' },
+];
+let reloadNative = {
+  queue: reloadQueue, pos: 1, shuffle: false, skipSame: true, repeatOne: false,
+  history: [0], redo: [], played: ['A'], rate: 1.25,
+  sleepRevision: 'reload-sleep', sleepUntil: null, sleepStarted: null, sleepMode: 'off', afterTrack: false,
+  revision: 'native-alive', sequence: 5000,
+  position: 42.5, duration: 210, playing: true, loading: false, error: '', sleepFired: false, supportsCustomSleep: true,
+};
+const reloadCalls = [], reloadConfigs = [];
+let reloadReceive;
+const reloadDriver = {
+  async addListener(_, fn) { reloadReceive = fn; return { remove: async () => {} }; },
+  async getState() { reloadCalls.push('getState'); return structuredClone(reloadNative); },
+  async configure(options) {
+    reloadCalls.push('configure'); reloadConfigs.push(structuredClone(options));
+    reloadNative = { ...reloadNative, ...options, sequence: reloadNative.sequence + 1, duration: 210 };
+    return structuredClone(reloadNative);
+  },
+  async command({ action, value }) {
+    reloadCalls.push('command:' + action);
+    if (action === 'play') reloadNative.playing = true;
+    if (action === 'pause') reloadNative.playing = false;
+    if (action === 'seek') reloadNative.position = value;
+    if (action === 'rate') reloadNative.rate = value;
+    return { ...structuredClone(reloadNative), sequence: ++reloadNative.sequence };
+  },
+};
+
+let reloadSnapshot, reloadUpdates = 0, reloadPlays = 0, reloadPauses = 0;
+const reloadErrors = [];
+const reloadConfig = () => ({
+  queue: structuredClone(reloadQueue), pos: reloadNative.pos, shuffle: reloadNative.shuffle,
+  skipSame: reloadNative.skipSame, history: [...reloadNative.history], redo: [...reloadNative.redo],
+  played: [...reloadNative.played], rate: reloadNative.rate, sleepRevision: 'reload-sleep',
+  sleepUntil: null, sleepStarted: null, sleepMode: 'off', afterTrack: false,
+});
+const reloadAudio = new NativeAudio(
+  reloadConfig,
+  s => { reloadSnapshot = s; reloadUpdates++; },
+  m => reloadErrors.push(m), reloadDriver);
+reloadAudio.addEventListener('play', () => reloadPlays++);
+reloadAudio.addEventListener('pause', () => reloadPauses++);
+await reloadAudio.ready;
+assert.deepEqual(reloadCalls, ['getState'], 'reload bootstrap reads native state once and never configures/plays/seeks');
+assert.equal(reloadUpdates, 1, 'the restored snapshot is applied exactly once');
+assert.equal(reloadSnapshot.pos, 1);
+assert.deepEqual(reloadSnapshot.queue.map(q => q.id), ['reload-a', 'reload-b'], 'queue identity and order survive the reload');
+assert.equal(reloadAudio.src, 'https://audio.example/rb.opus');
+assert.equal(reloadAudio.currentTime, 42.5, 'elapsed position is recovered from native state');
+assert.equal(reloadAudio.duration, 210);
+assert.equal(reloadAudio.playbackRate, 1.25);
+assert.equal(reloadAudio.paused, false, 'play state is recovered, not reset');
+assert.equal(reloadSnapshot.playing, true);
+assert.deepEqual(reloadSnapshot.history, [0]);
+assert.deepEqual(reloadSnapshot.played, ['A']);
+assert.equal(reloadPlays, 1, 'exactly one play notification; no second audio session is started');
+assert.equal(reloadPauses, 0);
+assert.deepEqual(reloadErrors, [], 'reload reconciliation surfaces no error');
+console.log('native audio: confirmed reload recovers queue, index, position, rate and play state from one getState without reconfiguring');
+
+// 重载后目录迟到（setPlayerCatalog → refresh）：只重新读状态，不能 configure（那会让原生重载当前曲）。
+await reloadAudio.refresh();
+assert.equal(reloadAudio.currentTime, 42.5);
+assert.deepEqual(reloadCalls, ['getState', 'getState'], 'post-reload catalog refresh never reconfigures native playback');
+assert.equal(reloadNative.playing, true, 'refresh keeps native playback running');
+
+// 重载前在途的迟到事件、以及重复的启动快照，都不能把状态倒回去或应用两次。
+const { queue: reloadOmitQ, history: reloadOmitH, redo: reloadOmitR, played: reloadOmitP, ...reloadProgress } = reloadNative;
+reloadReceive({ ...reloadProgress, revision: 'native-before-reload', position: 3, sequence: 4999 });
+assert.equal(reloadAudio.currentTime, 42.5, 'delta from before the reload is dropped');
+reloadReceive(structuredClone(reloadNative));
+assert.equal(reloadAudio.currentTime, 42.5, 'duplicate bootstrap snapshot is applied only once');
+reloadReceive({ ...reloadProgress, position: 44, sequence: 5001 });
+assert.equal(reloadAudio.currentTime, 44, 'native progress after reload is applied once');
+assert.equal(reloadAudio.paused, false);
+
+// 暂停态重载：恢复位置但绝不自动开播；随后的设置同步必须复用同一原生会话。
+reloadNative = { ...reloadNative, playing: false, loading: false, position: 77, sequence: reloadNative.sequence + 10 };
+let pausedSnapshot, pausedUpdates = 0, pausedPlays = 0;
+const pausedAudio = new NativeAudio(
+  reloadConfig,
+  s => { pausedSnapshot = s; pausedUpdates++; }, () => {}, reloadDriver);
+pausedAudio.addEventListener('play', () => pausedPlays++);
+await pausedAudio.ready;
+assert.equal(pausedSnapshot.playing, false);
+assert.equal(pausedAudio.paused, true, 'a reloaded paused session stays paused');
+assert.equal(pausedAudio.currentTime, 77);
+assert.equal(pausedUpdates, 1);
+assert.equal(pausedPlays, 0, 'reload never auto-starts playback');
+await pausedAudio.refresh();
+assert.equal(pausedAudio.paused, true, 'post-reload refresh cannot resume a paused session');
+const configures = reloadCalls.filter(c => c === 'configure').length;
+await pausedAudio.sync();
+assert.equal(reloadCalls.filter(c => c === 'configure').length, configures + 1, 'a settings sync after reload sends exactly one configure');
+assert.equal(reloadConfigs.at(-1).pos, reloadNative.pos);
+assert.deepEqual(reloadConfigs.at(-1).queue.map(q => q.id), ['reload-a', 'reload-b'], 'post-reload configure keeps the native queue identity');
+assert.equal(reloadNative.playing, false, 'same-session configure neither starts nor pauses native audio');
+assert.ok(!reloadCalls.some(c => c === 'command:play' || c === 'command:pause' || c === 'command:seek'), 'reload path issues no transport command');
+pausedAudio.dispose(); reloadAudio.dispose();
+console.log('native audio: paused reload stays paused, late/duplicate deltas drop, post-reload sync reuses the same native session');
+
+// Swift 侧源码契约：重载后同队列/同曲 configure 不重载 item，冷启动按存档位置暂停恢复。
+const configureBody = between('@objc func configure(', '@objc func command(');
+assert.ok(configureBody.includes('let previous = self.currentID'));
+assert.ok(configureBody.includes('if call.getBool("replace") == true || previous != self.currentID')
+  && configureBody.includes('self.loadCurrent(autoplay: false)'),
+  'configure reloads the item only when the queue is replaced or the current track changes');
+assert.ok(!configureBody.includes('start(') && !configureBody.includes('audio.play('),
+  'a same-track configure cannot start a second audio session');
+assert.ok(!configureBody.includes('wantsPlayback = true'), 'same-track configure cannot resurrect playback intent');
+const coldRestore = between('if let saved = UserDefaults.standard.dictionary(forKey: savedKey)', 'private func restoredQueue(');
+assert.ok(coldRestore.includes('loadCurrent(autoplay: false, at: saved["position"] as? Double ?? 0)'),
+  'cold start restores the saved position without autoplay');
+assert.ok(coldRestore.includes('sleepState.configure(revision: saved["sleepRevision"]'),
+  'cold start keeps a valid wall-clock sleep countdown');
+assert.ok(!coldRestore.includes('start('), 'cold start never auto-plays');
+const getStateBody = between('@objc func getState(', 'private var currentID');
+assert.ok(!getStateBody.includes('loadCurrent') && !getStateBody.includes('start('),
+  'getState is a pure read for the reloaded page');
+console.log('native audio: issue #23 reload reconciliation source contract passed (same-track configure is inert, cold restore paused at saved position)');

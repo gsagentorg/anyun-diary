@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, sleepSeekProgress, sleepSeekLimit, sleepTrackHit, SLEEP_MODES, SLEEP_TRACK_HALF_WIDTH, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
+import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, sleepSeekProgress, sleepSeekLimit, sleepTrackHit, SLEEP_MODES, SLEEP_TRACK_HALF_WIDTH, SLEEP_DRAG_DEAD_ZONE, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
 import { SleepAudio } from '../src/lib/sleep-audio.ts';
 let checks = 0;
 function ok(value, message) { assert.ok(value, message); checks++; }
@@ -78,6 +78,7 @@ ok(sleepSeekProgress(90) === 0.5 && sleepSeekProgress(-10) === 0 && sleepSeekPro
 ok(sleepSeekProgress(NaN) === 0, 'invalid seek x maps to start');
 ok(sleepSeekLimit(60) === 0 && Math.abs(sleepSeekLimit(600) - 0.9) < 1e-12, 'seek limit keeps one minute');
 ok(sleepSeekLimit(0) === 0 && sleepSeekLimit(NaN) === 0, 'seek limit safe on empty timers');
+ok(SLEEP_DRAG_DEAD_ZONE > 0 && SLEEP_DRAG_DEAD_ZONE <= 0.02, 'drag dead zone swallows sub-pixel jitter only');
 
 // Position and stage indicators share the exact geometry of the preview curve.
 for (const { id } of SLEEP_MODES) {

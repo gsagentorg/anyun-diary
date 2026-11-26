@@ -134,6 +134,13 @@ export function sleepTrackHit(pointerX: number, handleX: number, halfWidth = SLE
   const half = Number.isFinite(halfWidth) && halfWidth > 0 ? halfWidth : SLEEP_TRACK_HALF_WIDTH;
   return Math.abs(pointerX - handleX) <= half;
 }
+/**
+ * Jitter dead zone for an active drag, in progress units (2 of 180 viewBox units ≈ 3 px on a
+ * phone). A resting finger still reports sub-pixel pointer moves; without the dead zone the
+ * handle and the derived countdown wobble between neighbouring values as the finger is held.
+ * Deliberate slow drags move far beyond it.
+ */
+export const SLEEP_DRAG_DEAD_ZONE = 0.01;
 /** Progress a drag may reach without dropping below the minimum remaining time. */
 export function sleepSeekLimit(plannedSeconds: number): number {
   if (!Number.isFinite(plannedSeconds) || plannedSeconds <= 0) return 0;

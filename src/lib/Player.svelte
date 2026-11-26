@@ -6,7 +6,7 @@
   import { fmtClockShort, dateCard } from './types';
   import { hasLyrics } from './lyrics';
   import { usesNativeAudio } from './native-audio';
-  import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekLimit, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
+  import { SLEEP_MODES, SLEEP_CURVE_WIDTH, SLEEP_TRACK_HALF_WIDTH, SLEEP_MIN_REMAINING_SECONDS, SLEEP_DRAG_DEAD_ZONE, clampCurveX, isSleepMode, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepSeekLimit, sleepSeekProgress, sleepStage, sleepTrackHit } from './sleep-curves';
   import { PLAY_MODES, playModeLabel } from './play-mode';
   import { Pause, Play, SkipBack, SkipForward, X, MoonStar, Shuffle, Repeat1, ListOrdered, ListMusic, Gauge, MoreVertical, Repeat, Filter } from 'lucide-svelte';
 
@@ -41,8 +41,10 @@
   // 睡眠曲线拖动：状态用普通变量，避免拖动中每帧触发响应式重算。
   let sleepDragActive = false;
   let sleepDragId = -1;
-  // 拖动中的本地进度：手势期间竖线/手柄只跟指针，定时器 tick 不得改写显示位置
-  // （否则手指没动线也会随时间漂走，下一次移动又被打回指针位置 = 回弹）。
+  // 拖动中的本地进度：手势期间竖线/手柄/剩余时间只跟指针，定时器 tick 不得改写显示，
+  // 也不逐次改写时间轴（每次 moves 都重锚会把已过时间反复吞掉 —— 手指微抖就表现为
+  // 位置与倒计时在「旧值/新值」之间跳，松手前最后一跳还会被当成最终位置）。
+  // 时间轴只在松手/取消时提交一次（见 commitSleepDrag）。
   let sleepDragProgress = $state<number | null>(null);
   let dragging = $state(false);
   let playing = $state(false);
@@ -57,12 +59,18 @@
   const sleepTotalMs = $derived(sleepRunning ? sleep.until! - sleep.started! : 0);
   // 拖动中优先用本地进度：与定时器解耦，松手后才交回墙钟（见 commitSleepDrag）。
   const sleepPosition = $derived(sleepDragProgress != null && sleepRunning ? sleepDragProgress : sleep.progress);
+  // 显示用剩余时间：拖动中按手柄位置换算（与线一致，不随定时器跳），松手后回到墙钟。
+  const sleepDisplayRemaining = $derived(
+    sleepDragProgress != null && sleepRunning
+      ? Math.max(0, Math.ceil((1 - sleepDragProgress) * sleep.plannedSeconds))
+      : sleep.remaining,
+  );
   const shownSleepCustom = $derived(sleepRunning ? sleep.activeCustom : sleep.custom);
   const customSleepBlocked = $derived(sleep.preset === 'custom' && !canStartCustomSleep());
   const sleepPoint = $derived(sleepCurvePoint(shownSleepMode.id, sleepPosition, shownSleepCustom));
   const sleepPercent = $derived(Math.floor(sleepPosition * 100 + 1e-9));
   const currentSleepStage = $derived(sleepStage(shownSleepMode.id, sleepPosition, shownSleepCustom));
-  const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleep.remaining)));
+  const sleepElapsed = $derived(Math.max(0, Math.floor(sleepTotalMs / 1000 - sleepDisplayRemaining)));
   const sleepBaseSeconds = $derived(sleepRunning ? Math.max(1, sleep.plannedSeconds) : 0);
   // 手柄横坐标：运行中按剩余比例落位；未启动时停在右端表示整档。
   const sleepCurveWidth = $derived.by(() => {
@@ -76,7 +84,7 @@
   });
   const sleepHandleLabel = $derived(
     sleepRunning
-      ? `睡眠结束时间手柄，剩余 ${fmtClockShort(sleep.remaining)}，左右拖动或方向键调整`
+      ? `睡眠结束时间手柄，剩余 ${fmtClockShort(sleepDisplayRemaining)}，左右拖动或方向键调整`
       : `睡眠时长手柄（未启动），开始后才能拖动调节进度`,
   );
 
@@ -228,7 +236,7 @@
 
   function sleepLabel() {
     if (sleep.afterTrack) return '本曲后';
-    if (sleep.until != null) return fmtClockShort(sleep.remaining);
+    if (sleep.until != null) return fmtClockShort(sleepDisplayRemaining);
     return '';
   }
 
@@ -252,11 +260,12 @@
     if (x == null) return;
     // 显示位置取「实际生效」的进度（含最少剩余时间钳制），不能显示指针原始位置。
     const target = Math.min(sleepSeekProgress(x), sleepSeekLimit(sleep.plannedSeconds));
+    // 手指按住不动时系统仍会报亚像素 pointermove：目标没离开死区就不改，避免线/倒计时抖动。
+    if (sleepDragProgress != null && Math.abs(target - sleepDragProgress) <= SLEEP_DRAG_DEAD_ZONE) return;
     sleepDragProgress = target;
-    seekSleepProgress(target);
   }
 
-  /** 松手/取消：按最后位置重新锚定时间轴，再把显示交回定时器 —— 位置不回弹。 */
+  /** 松手/取消：按最后位置提交一次时间轴，再把显示交回定时器 —— 位置与倒计时都不回弹。 */
   function commitSleepDrag() {
     const target = sleepDragProgress;
     if (target != null && sleep.until != null) seekSleepProgress(target);
@@ -573,7 +582,7 @@
   </div>
   {#if sleep.until != null}
     <p class="mt-2 px-1 text-2xs leading-relaxed" role="status">
-      进行中：{activeSleepMode.label} · 剩余 {fmtClockShort(sleep.remaining)}
+      进行中：{activeSleepMode.label} · 剩余 {fmtClockShort(sleepDisplayRemaining)}
       {#if sleep.preset !== sleep.mode || sleep.preset === 'custom'}<br />选择及参数修改在重新开始后生效；当前曲线使用启动时的快照。{/if}
     </p>
   {/if}

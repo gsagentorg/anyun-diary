@@ -74,11 +74,18 @@ function applyNativeState(state: NativeState) {
     else if (player.mode === 'random') player.mode = 'sequential';
     player.playbackRate = state.rate; player.playing = state.playing; player.loading = state.loading;
     player.error = state.error;
-    nativeSleepRevision = state.sleepRevision ?? '';
-    sleep.until = state.sleepUntil; sleep.started = state.sleepStarted; sleep.afterTrack = state.afterTrack;
-    if (isSleepMode(state.sleepMode)) sleep.mode = state.sleepMode;
-    sleep.activeCustom = state.sleepCustomVersion === SLEEP_CUSTOM_VERSION ? sleepCustomSnapshot(state.sleepCustom) : { ...DEFAULT_SLEEP_CUSTOM };
-    sleep.fired = state.sleepFired;
+    // 只有原生回声的 revision 与最近一次下发（syncNativeSleep）一致，快照里的睡眠时间轴
+    // 才代表当前意图；旧 revision 的进度事件会把刚拖动好的 until/started 覆盖回旧值
+    // （外部表现：拖动中倒计时在旧值/新值之间跳、松手回弹）。空 revision = 启动时尚未下发，
+    // 采纳原生恢复的快照。
+    const sleepRevision = state.sleepRevision ?? '';
+    if (!nativeSleepRevision || sleepRevision === nativeSleepRevision) {
+      nativeSleepRevision = sleepRevision;
+      sleep.until = state.sleepUntil; sleep.started = state.sleepStarted; sleep.afterTrack = state.afterTrack;
+      if (isSleepMode(state.sleepMode)) sleep.mode = state.sleepMode;
+      sleep.activeCustom = state.sleepCustomVersion === SLEEP_CUSTOM_VERSION ? sleepCustomSnapshot(state.sleepCustom) : { ...DEFAULT_SLEEP_CUSTOM };
+      sleep.fired = state.sleepFired;
+    }
     if (sleep.until != null && sleep.started != null) {
       sleep.plannedSeconds ||= Math.ceil((sleep.until - sleep.started) / 1000);
       sleep.remaining = Math.max(0, Math.ceil((sleep.until - Date.now()) / 1000));

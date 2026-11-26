@@ -6,6 +6,7 @@ import { monthIdAt, subtractCalendarMonths } from './month.js';
 import { nativeFetchJSON } from './native-cache';
 import { bounded, catalogTimeouts, shouldRetireOperation } from './catalog-recovery';
 import { saveCatalogSnapshot, saveMonthSnapshot, loadOfflineSnapshot, serveOfflineJson, takeOfflineServe, clearOfflineSnapshots, configureOfflineLimits, type OfflineSaveResult } from './catalog-offline';
+import { hasCachedAudioSync } from './web-audio-cache';
 export interface MonthRef { id:string; startAt:number; endAt:number; count:number; revision:string; key:string; available:boolean }
 export interface Manifest { queryMonthLimit?:number; schemaVersion:2; timezone:string; generatedAt:number; revision:string; months:MonthRef[] }
 const KEY='anyun-backend-v1';
@@ -47,11 +48,27 @@ async function catalogFetch(url:RequestInfo|URL,options?:RequestInit):Promise<Re
   throw error;
  }
 }
+/** 网页音频缓存的稳定键：与 types.audioUrl 的 web 分支一致（types 反向依赖本模块，这里不 import 以免循环）。 */
+function webAudioKey(opus: string): string {
+ return /^https?:\/\//.test(opus) ? opus : '/api/' + opus.split('/').map(encodeURIComponent).join('/');
+}
+/** owner 裁定 ④（音频优先）：这些月份含至少一首已完整缓存的音频，离线快照淘汰时优先保留其目录块。
+ *  原生侧的音频缓存由 Swift 自己保护（evict 时元数据最后淘汰），这里只对网页缓存判定。
+ *  「当前内存里的月份」每轮重算；已被内存上限裁掉的月份保留上次结论（否则恰好是要保护的那一类）。 */
+const protectedMonthIds=new Set<string>();
+function protectedOfflineMonths(months:Record<string,Audio[]>):string[]{
+ if(isNativeApp())return [];
+ for(const [id,audios] of Object.entries(months)){
+  if(audios?.some(audio=>audio?.opus&&hasCachedAudioSync(webAudioKey(audio.opus))))protectedMonthIds.add(id);
+  else protectedMonthIds.delete(id);
+ }
+ return [...protectedMonthIds];
+}
 export function isNativeApp(){return typeof window!=='undefined'&&Capacitor.isNativePlatform();}
 export function apiBase(){return isNativeApp()?backend.base:'';}
 export function requestController(){const c=new AbortController();requests.add(c);return c;}
 export function releaseController(c:AbortController){requests.delete(c);}
-export function resetCatalog(){currentEtag="";retireIndexOperation();supply.clear();for(const c of requests)c.abort();requests.clear();inflight.clear();backend.generation++;supply=createSupply();backend.manifest=null;backend.months={};backend.summaries={};monthRecency.clear();backend.errors={};backend.loading={};backend.error='';backend.offline=false;backend.offlineSavedAt=null;backend.offlineNotice='';} // reset 只清内存：离线快照属于用户数据，只有用户显式 clearOfflineCatalog 才删；切后端也不碰其他后端的快照
+export function resetCatalog(){currentEtag="";retireIndexOperation();supply.clear();for(const c of requests)c.abort();requests.clear();inflight.clear();backend.generation++;supply=createSupply();backend.manifest=null;backend.months={};backend.summaries={};monthRecency.clear();backend.errors={};backend.loading={};backend.error='';backend.offline=false;backend.offlineSavedAt=null;backend.offlineNotice='';protectedMonthIds.clear();} // reset 只清内存：离线快照属于用户数据，只有用户显式 clearOfflineCatalog 才删；切后端也不碰其他后端的快照
 export function saveBackendBase(url:string){if(!isNativeApp())return;resetCatalog();backend.base=url.trim().replace(/\/+$/,'');backend.prompt=false;try{localStorage.setItem(KEY,backend.base);}catch{}void hydrateOfflineCatalog();void fetchIndex();} // 新后端此前保存过快照则离线立即可恢复；绝不带出旧后端内容
 export function dismissBackendPrompt(){backend.prompt=false;}
 export function currentMonthId(now=Date.now()){return monthIdAt(now/1000);}
@@ -140,7 +157,7 @@ function applyOfflineResult(result:OfflineSaveResult){
 /** 事务提交后的持久化：先写不可变 manifest 文档、成功后才切换指针；任何失败都不动旧快照、不阻塞内存状态。 */
 function persistLoadedMonth(id:string,audios:Audio[],generation:number,base:string,snapshotToken:number):Promise<void>{
  if(snapshotToken!==snapshotGeneration)return Promise.resolve();
- return saveMonthSnapshot(base,backend.manifest,id,audios,{native:isNativeApp()}).then(result=>{
+ return saveMonthSnapshot(base,backend.manifest,id,audios,{native:isNativeApp(),protectedMonths:protectedOfflineMonths(backend.months)}).then(result=>{
   if(generation===backend.generation&&base===backend.base)applyOfflineResult(result);
  }).catch(()=>{});
 }
@@ -149,7 +166,7 @@ function persistIndexSnapshot(m:Manifest,nextMonths:Record<string,Audio[]>,token
  const base=backend.base;
  void (async()=>{
   const ids=[...monthRecency.keys()].filter(id=>nextMonths[id]).slice(-MAX_CACHED_MONTHS);
-  const first=await saveCatalogSnapshot(base,m,Object.fromEntries(ids.map(id=>[id,nextMonths[id]])),{native:isNativeApp()});
+  const first=await saveCatalogSnapshot(base,m,Object.fromEntries(ids.map(id=>[id,nextMonths[id]])),{native:isNativeApp(),protectedMonths:protectedOfflineMonths(nextMonths)});
   if(token.generation!==backend.generation||base!==backend.base)return;
   applyOfflineResult(first);
  })().catch(()=>{});
@@ -174,6 +191,7 @@ export function hydrateOfflineCatalog():Promise<boolean>{
   const summaries:Record<string,Audio[]>={};
   for(const [id,doc] of Object.entries(snap.months)){months[id]=doc.audios as Audio[];summaries[id]=doc.audios.map(a=>({...a,lyrics:[]}) as Audio);}
   backend.manifest=snap.manifest as Manifest;backend.months=months;backend.summaries=summaries;
+  protectedMonthIds.clear();protectedOfflineMonths(months);
   for(const id of Object.keys(months))touchMonth(id);
   supply.commitManifest(snap.manifest as Manifest);
   backend.offline=true;backend.offlineSavedAt=snap.savedAt;backend.offlineNotice=snap.notice??'';

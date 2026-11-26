@@ -4,6 +4,8 @@
 // 3 月 LRU 上限、非 TypeError 不供给、abort 直通、304 保留快照状态、默认存储选型（CacheStorage/localStorage）。
 // 运行：npx vite-node scripts/test-catalog-offline.mjs
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
 import { monthBounds } from '../src/lib/month.js';
 
 let nativeMode = false;
@@ -21,6 +23,7 @@ globalThis.document = { visibilityState: 'visible' };
 globalThis.localStorage = ls;
 
 const { ViteNodeRunner } = await import('vite-node/client');
+const cachedAudioUrls = new Set(); // 模拟网页音频缓存里已有的完整条目（#18/#19 裁定 ④）
 const original = ViteNodeRunner.prototype.dependencyRequest;
 ViteNodeRunner.prototype.dependencyRequest = function (id, fsPath, callstack) {
   const sid = String(id), sp = String(fsPath);
@@ -37,6 +40,10 @@ ViteNodeRunner.prototype.dependencyRequest = function (id, fsPath, callstack) {
   if (sp.endsWith('/native-audio.ts')) return Promise.resolve({
     NativeAudio: class { constructor() { this.ready = Promise.resolve(); } refresh() { return Promise.resolve(); } sync() { return Promise.resolve(); } },
     usesNativeAudio: () => false,
+  });
+  if (sp.endsWith('/web-audio-cache.ts')) return Promise.resolve({
+    hasCachedAudioSync: url => cachedAudioUrls.has(String(url)),
+    primeWebAudioCacheIndex: () => {},
   });
   return original.call(this, id, fsPath, callstack);
 };
@@ -528,5 +535,81 @@ const step = (cond, msg) => { assert.ok(cond, msg); checks++; };
   step((await O.loadOfflineSnapshot('')).status==='empty','pre-clear catalog fetch cannot repopulate persistent snapshot');
 }
 
-console.log(`catalog offline tests passed: ${checks} checks (hydrate/save atomicity, origin isolation, network-vs-restore ownership both ways, quota/too-large non-blocking, 3-month LRU bound, TypeError-only serving, corrupt rejection, default storage selection, no-storage degradation)`);
+// ============ S15：重验证节奏（#19）：可变的目录 JSON 远比不可变音频勤快 ============
+{
+  const root = path.resolve(import.meta.dirname, '..');
+  const page = fs.readFileSync(path.join(root, 'src/routes/+page.svelte'), 'utf8');
+  const backendSrc = fs.readFileSync(path.join(root, 'src/lib/backend.svelte.ts'), 'utf8');
+  const audioSrc = fs.readFileSync(path.join(root, 'src/lib/web-audio-cache.ts'), 'utf8');
+  // 网页目录：30s 心跳 + 回前台/pageshow/online + 手动刷新，全部走 fetchIndex（/api/current，no-store + ETag）
+  step(/setInterval\(refresh,30000\)/.test(page), 'web catalog has a 30s background revalidation cadence');
+  step(page.includes("addEventListener('visibilitychange',onLifecycle)") && page.includes("addEventListener('pageshow',onLifecycle)"), 'web catalog revalidates on visibility/pageshow');
+  step(page.includes('recoverCatalog();'), 'lifecycle events go through the coalesced recovery entry');
+  step(fs.readFileSync(path.join(root, 'src/lib/components/RefreshMenu.svelte'), 'utf8').includes('recoverCatalog({ force: true })'), 'manual refresh forces a catalog revalidation');
+  step(backendSrc.includes("window.addEventListener('online',()=>recoverCatalog())"), 'web catalog revalidates when connectivity returns');
+  step(backendSrc.includes("'/api/current'") && backendSrc.includes("cache:'no-store'") && backendSrc.includes('If-None-Match'), 'catalog pointer check bypasses HTTP cache but sends validators');
+  // 网页音频：完整条目不可变，模块里没有任何 TTL/后台重验证/条件请求。
+  step(!/revalidat|max-age|stale-while|If-None-Match/i.test(audioSrc), 'web audio cache has no revalidation policy at all (immutable complete entries)');
+  step(!page.includes('prepareWebAudio(') && !page.includes('primeWebAudioCacheIndex'), 'catalog page never triggers audio revalidation');
+}
+
+// ============ S16：迟到的旧目录响应不能覆盖已提交的新 revision（#19） ============
+{
+  freshKv(); onlineFetch(); nativeMode = false;
+  const B = await boot(); B.resetCatalog();
+  routes = [];
+  const first = deferred(), second = deferred();
+  let catalogCalls = 0;
+  on('/api/current', () => pointerRes());
+  on('/api/catalog', () => { catalogCalls += 1; return catalogCalls === 1 ? first.promise : second.promise; });
+  const stale = B.fetchIndex();
+  await sleep(10);
+  step(catalogCalls >= 1, 'first catalog request is in flight');
+  const fresh = B.fetchIndex({ force: true }); // 退休旧操作
+  second.resolve(jsonRes(catalogFixture('rev-LATE-NEW')));
+  await fresh;
+  first.resolve(jsonRes(catalogFixture('rev-LATE-OLD')));
+  await stale; await sleep(20);
+  step(B.backend.manifest?.revision === 'rev-LATE-NEW', 'late older response never overwrites the newer committed revision');
+  step(B.backend.error === '', 'retired operation does not poison the new one');
+}
+
+// ============ S17：音频优先（owner 裁定 ④）：有音频缓存的月份在 3 月上限内被保护 ============
+{
+  freshKv();
+  const ids = ['2024-01', '2024-02', '2024-03', '2024-04'];
+  const m = catalogFixture('rev-P', ids);
+  await O.saveManifestSnapshot('', m);
+  for (const id of ids) {
+    await O.saveMonthSnapshot('', m, id, monthFixture(id, 'rev-P').audios, { protectedMonths: ['2024-01'] });
+    await flush();
+    await sleep(3);
+  }
+  const p = JSON.parse(await kv.get('aof|p|same-origin'));
+  step(Object.keys(p.months).length === 3, 'protected selection stays bounded by maxMonths=3');
+  step(!!p.months['2024-01'], 'month with cached audio is kept even when it is the oldest');
+  step(!p.months['2024-02'], 'the oldest unprotected month yields the slot');
+  step(await kv.get('aof|M|same-origin|rev-P|2024-02') === null, 'dropped month doc is pruned');
+  step(await kv.get('aof|M|same-origin|rev-P|2024-01') !== null, 'protected month doc remains on disk');
+}
+
+// ============ S18：backend 接线：内存裁剪后仍保护有音频缓存的月份 ============
+{
+  freshKv(); cachedAudioUrls.clear(); onlineFetch(); nativeMode = false;
+  routes = [];
+  const B = await boot(); B.resetCatalog();
+  on('/api/current', () => pointerRes());
+  on('/api/catalog', () => jsonRes(catalogFixture('rev-AUDIO')));
+  for (const id of MONTH_IDS) on('/api/month/' + id, () => jsonRes(monthFixture(id, 'rev-AUDIO')));
+  cachedAudioUrls.add('/api/2023-11-1.opus'); // fixture 的 opus → 稳定键
+  await B.fetchIndex(); await flush();
+  for (const id of MONTH_IDS) { await B.loadMonth(id); await flush(); await sleep(3); }
+  const p = JSON.parse(await kv.get('aof|p|same-origin'));
+  step(p.revision === 'rev-AUDIO' && Object.keys(p.months).length === 3, 'snapshot still bounded to 3 months');
+  step(!!p.months['2023-11'], 'backend keeps the cached-audio month after memory trim');
+  step(!p.months['2023-12'], 'unprotected older month is the one dropped');
+  cachedAudioUrls.clear();
+}
+
+console.log(`catalog offline tests passed: ${checks} checks (hydrate/save atomicity, origin isolation, network-vs-restore ownership both ways, quota/too-large non-blocking, 3-month LRU bound, audio-first protected months, revalidation cadence, TypeError-only serving, corrupt rejection, default storage selection, no-storage degradation)`);
 process.exit(0);

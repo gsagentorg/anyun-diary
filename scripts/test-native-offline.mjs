@@ -124,6 +124,21 @@ for (const name of ['testNativeMediaSWR', 'testMediaStatus', 'testMediaStatusRea
 for (const label of ['fresh/exact-window hit never requests network', 'native SWR full 200 replaces complete cache', 'same-key stale refresh is deduplicated', 'late 200/304 cannot revive or overwrite:', 'mediaStatus rejects CRC-corrupt same-length media']) ok(swiftTests.includes(label), 'Swift scenario: ' + label);
 ok(staleRefresh.indexOf('mediaRefreshOwners[key] = slotID') < staleRefresh.indexOf('await cancelFileDownloads'), 'SWR ownership acquired before actor suspension (ABA-safe)');
 for (const label of ['repeat positive probes never rescan CRC', 'repeat negative probes never rescan CRC', 'protected negative memo must throw rather than reuse false', 'same-inode same-length corruption invalidates positive memo', 'atomic inode replacement invalidates negative memo', 'temporary open permission failure must throw', 'temporary stat permission failure must throw', 'read failure must throw instead of false', 'definite missing file never removes index', 'cold probe never repairs index sweeps or evicts', 'cold protected index must throw', 'entry replacement invalidates memo', 'eviction never reuses positive memo', 'clear releases memo memory', 'probe memo memory is bounded']) ok(swiftTests.includes(label), 'Swift probe regression: ' + label);
+// —— #18 音频 SWR：命中及时、后台重验证、失败不降级、迟到响应不越权 ——
+const serveBody = body(scheme, 'private func serve(', '/// transient 载荷的 Range 切片');
+ok(serveBody.indexOf('deliver(state: state, task: task, read: read, contentType: contentType(for: entry))') >= 0
+  && serveBody.indexOf('deliver(state: state, task: task, read: read, contentType: contentType(for: entry))') < serveBody.indexOf('scheduleRevalidate('), 'scheme 命中先交付缓存字节，再排后台重验证（启动不等网络）');
+ok(serveBody.slice(0, serveBody.indexOf('scheduleRevalidate(')).indexOf('network.get(') === -1, '命中路径在交付前不发任何网络请求');
+ok(/scheduleRevalidate\(key: key, entry: entry, remoteURL: remoteURL\)\s*\n\s*\}\s*\n\s*return/.test(serveBody), '安排重验证后直接返回，不落入未命中下载分支');
+ok(!serveBody.includes('await scheduleRevalidate'), '重验证不在命中路径上被等待（后台进行）');
+ok(staleRefresh.indexOf('now - original.createdAt > Double(policyProvider().mediaRevalidateSeconds)') < staleRefresh.indexOf('mediaRefreshOwners[key] = slotID'), '只有过期条目才进入重验证，且先取 ownership 再挂起');
+ok(staleRefresh.includes('throw error // validated cached bytes remain on network/validation failure'), '重验证失败抛出而不改动条目（完整缓存保留）');
+ok(!/removeItem\(at: fileURL\(forKey: key\)\)/.test(staleRefresh + commitRefresh), '重验证路径从不删正式文件（只清理自己的临时文件）');
+ok(commitRefresh.includes('return try commitFile(') && !commitRefresh.includes('entries.removeValue'), '完整 200 才经原子改名替换；失败/304 不删条目');
+const clearBody = body(disk, 'func clear(scope:', 'func stats(');
+ok(clearBody.indexOf('epoch += 1') < clearBody.indexOf('mediaEpoch += 1') && clearBody.indexOf('mediaEpoch += 1') < clearBody.indexOf('mediaRefreshOwners.removeAll()'), 'clear 先推进 epoch 再清 owner（迟到重验证无法复活已清内容）');
+ok(clearBody.includes('inflight.task.cancel()'), 'clear 取消在途媒体 worker');
+ok(disk.includes('private var mediaRefreshOwners: [String: UUID] = [:]') && disk.includes('static let mediaRefreshCooldown: TimeInterval = 60'), '重验证有 owner 去重与 60s 冷却（不会每次播放都打网络）');
 console.log('native-offline: ' + checks + ' source contracts passed (NOT Swift execution)');
 const sleepGate = spawnSync(process.execPath, ['scripts/test-native-sleep.mjs', ...(process.argv.includes('--require-swift') ? ['--require-swift'] : [])], { cwd: root, encoding: 'utf8', timeout: 120000 });
 process.stdout.write(sleepGate.stdout || ''); process.stderr.write(sleepGate.stderr || '');

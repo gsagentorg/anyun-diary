@@ -31,6 +31,8 @@
 - 校验 Content-Type（`audio/*`、`video/*`、`application/ogg|mp4|x-wav|octet-stream`；HTML/JSON 错误页拒收）、非零 body、`Content-Length` 与实收字节一致。
 - 跨域直连音频以 CORS 模式取；**CORS 失败=下载失败=不缓存**，在线播放路径完全不受影响（诚实降级）。
 - 缓存写入用自构 `Response`（只带 `content-type` 与两个 `x-anyun-*` 元数据头），浏览器 HTTP 缓存语义不参与判定。
+- 完整条目不可变：命中路径不发任何重验证请求，失败/206/截断响应永远不会替换已完整入库的条目；
+  读路径带每 key 代次校验，慢读拿到的旧字节在期间发生写入/失效/清除时一律丢弃（不覆盖新状态、不复活已清条目）。
 - 实测坑（Chrome for Testing 157）：缓存条目的 `matchAll()` 响应 `response.url` 为空串，真实 key 只在 `keys()`（Request.url）里；索引装载按 `keys()`/`matchAll()` 插入序配对，长度不齐时退回 `response.url`。
 
 ### 2. 稳定 key，签名零残留

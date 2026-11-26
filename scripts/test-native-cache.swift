@@ -117,6 +117,7 @@ struct AnyunCacheTests {
         await testFileClearAndLaneCancellation()
         await testScopedClearAndRevalidateABA()
         await testJSONRequestOwnership()
+        await testEvictionEvictsMediaBeforeJSON()
         await testNativeMediaSWR()
         await testMediaStatus()
         await testMediaStatusReadOnlyAndMemo()
@@ -898,6 +899,37 @@ struct AnyunCacheTests {
         check(full.memoEntries == AnyunDiskCache.mediaProbeMemoLimit && full.validations == urls.count, "probe memo memory is bounded")
         check(try! await cache.mediaStatus(urls: [urls[0]]) == [true], "discarded memo revalidates on demand")
         check(await cache.mediaProbeDiagnostics().validations == full.validations + 1, "FIFO memo eviction triggers fresh full validation")
+    }
+
+    static func testEvictionEvictsMediaBeforeJSON() async {
+        // owner ④（音频优先）：目录/月份 JSON 是缓存音频的可用性元数据，容量紧张时音频字节先走。
+        let cache = AnyunDiskCache(directoryName: "anyun-evict-priority-\(UUID().uuidString)", policyProvider: { makePolicy(maxBytes: 300) })
+        defer { try? FileManager.default.removeItem(at: cache.layout.root) }
+        let meta = anyunKey("catalog-metadata")
+        _ = try! await cache.store(key: meta, kind: .json, payload: payloadOf(50))
+        try? await Task.sleep(nanoseconds: 2_000_000)
+        let oldMedia = anyunKey("media-old")
+        _ = try! await cache.store(key: oldMedia, kind: .media, payload: payloadOf(100))
+        try? await Task.sleep(nanoseconds: 2_000_000)
+        let newMedia = anyunKey("media-new")
+        _ = try! await cache.store(key: newMedia, kind: .media, payload: payloadOf(100))
+        try? await Task.sleep(nanoseconds: 2_000_000)
+        let extraMedia = anyunKey("media-extra")
+        _ = try! await cache.store(key: extraMedia, kind: .media, payload: payloadOf(100))
+        let stats = await cache.stats()
+        check(stats.bytes <= 300, "kind-priority eviction still respects the byte cap (got \(stats.bytes))")
+        check(await cache.lookup(key: meta) != nil, "catalog metadata is evicted only after media")
+        check(await cache.lookup(key: oldMedia) == nil, "oldest media pays the price first")
+        check(await cache.lookup(key: extraMedia) != nil, "newly stored media survives")
+        // 只剩 JSON 时仍按 LRU 有界淘汰，不会无界增长。
+        let onlyJSON = AnyunDiskCache(directoryName: "anyun-evict-json-\(UUID().uuidString)", policyProvider: { makePolicy(maxBytes: 120) })
+        defer { try? FileManager.default.removeItem(at: onlyJSON.layout.root) }
+        for seed in ["json-a", "json-b", "json-c"] {
+            try? await Task.sleep(nanoseconds: 2_000_000)
+            _ = try! await onlyJSON.store(key: anyunKey(seed), kind: .json, payload: payloadOf(50))
+        }
+        let jsonStats = await onlyJSON.stats()
+        check(jsonStats.bytes <= 120 && jsonStats.entries == 2, "JSON-only caches stay bounded by the same LRU")
     }
 
     static func testScopedClearAndRevalidateABA() async {

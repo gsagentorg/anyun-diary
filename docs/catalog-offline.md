@@ -7,6 +7,10 @@ The application restores its last validated catalog independently of the current
 - Web uses CacheStorage; native Capacitor prefers a bounded localStorage fallback independent of the network bridge. Missing/denied/quota-limited storage leaves online behavior intact.
 - Backend identity includes origin and base path, without query strings or credentials. Switching backends clears memory but does not cross-hydrate or delete another backend snapshot.
 - A refresh saves the validated manifest and up to three complete loaded month documents before switching the pointer. Failure before pointer commit retains the previous complete snapshot. Unreferenced staged documents are cleaned on failure; obsolete revisions are cleaned after success.
+- Audio-first (owner ruling ④): a month whose audio is fully cached keeps its catalog block inside the same three-month cap —
+  protected months win the LRU slot selection, unprotected ones yield first. The cap itself is not raised here (removing the
+  byte/month cap is deferred until the IndexedDB migration). Native handles the mirror case by evicting media bytes before
+  catalog/month JSON, so audio never loses its availability metadata.
 - Same-revision checks preserve saved months. Individual loaded months update the pointer only after the full document is stored. At most three month references are retained. Web snapshot budget is 4 MiB; native localStorage fallback is 1 MiB; an individual month is limited to 1.5 MiB and 1500 entries. Insufficient room preserves old snapshots and reports that the offline snapshot was not updated.
 - Restore validates schema, revision, counts and audio/lyrics data. Corrupt documents are never treated as fresh. Offline state and last-save time appear above the content; successful online validation clears stale status.
 - Catalog snapshots contain stable audio keys, not signed delivery targets. Audio bytes and completeness are managed separately by Web/native audio caches.

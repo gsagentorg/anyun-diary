@@ -971,6 +971,8 @@ actor AnyunDiskCache {
     }
 
     /// LRU：从最久未用开始删，只保护刚提交项；in-flight 不得让容量越界。
+    /// 目录/月份 JSON 是音频的可用性元数据（owner 裁定 ④「音频优先」）：
+    /// 先淘汰音频字节，只有仍超额时才动 JSON —— 元数据最后淘汰，不是双向钉住。
     private func evict(protecting protectedKey: String?) {
         let policy = policyProvider()
         var total = 0
@@ -982,7 +984,12 @@ actor AnyunDiskCache {
 
         let candidates = entries.values
             .filter { $0.key != protectedKey }
-            .sorted { $0.lastAccess < $1.lastAccess }
+            .sorted { lhs, rhs in
+                let lhsMetadata = lhs.kind == .json ? 1 : 0
+                let rhsMetadata = rhs.kind == .json ? 1 : 0
+                if lhsMetadata != rhsMetadata { return lhsMetadata < rhsMetadata }
+                return lhs.lastAccess < rhs.lastAccess
+            }
 
         for candidate in candidates {
             if total <= policy.maxBytes && count <= policy.maxEntries { break }

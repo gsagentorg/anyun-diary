@@ -1,5 +1,5 @@
 // Issue #53: while an older month is still loading, its placeholder must live inside the browse flow:
-// loaded lanes -> loading block (month label + ghost bars as ONE row) -> legend. Chromium synthetic fixture only.
+// loaded lanes -> loading block (month label + a row of muted ghost blocks) -> legend. Chromium synthetic fixture only.
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {monthBounds,shiftMonthId,monthIdAt} from '../src/lib/month.js';
@@ -57,7 +57,7 @@ try{
    skeleton:rect(skeleton),chart:rect(chart),legend:rect(legend),
    labelRect:rect(label),barsRect:rect(bars),
    labelText:label.textContent.replace(/\s+/g,' ').trim(),
-   barsCount:bars.querySelectorAll('div').length,
+   blockRects:[...bars.querySelectorAll('[data-browse-skeleton-block]')].map(rect),
    barsColumnLeft:loadedBarsHost?rect(loadedBarsHost).left:null,
    lastLane,
    laneCount:lanes.length,
@@ -82,7 +82,17 @@ try{
  assert.match(snap.status.label,/正在加载/);
  assert.equal(snap.childTags[snap.skeletonIndex].attrs.includes('data-browse-skeleton-lane'),true,'pending block uses the lane layout');
  assert.match(snap.labelText,/^\d{4}-\d{2}\s*加载中…$/,'label carries the pending month id');
- assert.ok(snap.barsCount>=2,'placeholder renders ghost bars');
+ assert.ok(snap.blockRects.length>=4,'placeholder renders a row of muted song blocks');
+ // One row, like loaded songs: all blocks share the same top band and song-block height (h-5 = 20px).
+ const tops=snap.blockRects.map(b=>b.top);
+ assert.ok(Math.max(...tops)-Math.min(...tops)<=2,'ghost blocks sit on a single row, not stacked: tops='+tops.map(Math.round));
+ assert.ok(snap.blockRects.every(b=>b.h>=16&&b.h<=24),'ghost blocks use the loaded song-block height: '+snap.blockRects.map(b=>Math.round(b.h)));
+ // Varied widths with real gaps between neighbours, and the row does not run full-bleed.
+ assert.ok(new Set(snap.blockRects.map(b=>Math.round(b.w))).size>=3,'ghost block widths vary: '+snap.blockRects.map(b=>Math.round(b.w)));
+ const gaps=snap.blockRects.slice(1).map((b,i)=>b.left-snap.blockRects[i].right);
+ assert.ok(gaps.every(g=>g>=2),'ghost blocks are separated by gaps: '+gaps.map(Math.round));
+ assert.ok(snap.blockRects.every(b=>b.left>=snap.barsRect.left-1&&b.right<=snap.barsRect.right+1),'ghost blocks stay inside the bars column');
+ assert.ok(snap.barsRect.right-snap.blockRects.at(-1).right>=8,'the ghost row leaves a trailing gap instead of filling the lane');
  assert.ok(Math.abs(snap.labelRect.top-snap.barsRect.top)<snap.skeleton.h,'label and bars share one row');
  assert.ok(snap.labelRect.left<snap.barsRect.left,'label is left of its bars');
  assert.ok(snap.labelRect.bottom<=snap.skeleton.bottom+1&&snap.barsRect.bottom<=snap.skeleton.bottom+1);
@@ -104,5 +114,5 @@ try{
  assert.deepEqual(errors,[]);
  await page.screenshot({path:dir+'/resolved.png',fullPage:true});
  await writeFile(dir+'/report.json',JSON.stringify(report,null,2));
- console.log(JSON.stringify({ok:true,pending:{chartIndex:snap.chartIndex,skeletonIndex:snap.skeletonIndex,legendIndex:snap.legendIndex,labelText:snap.labelText,barsCount:snap.barsCount,barsLeft:Math.round(snap.barsRect.left),laneLeft:Math.round(snap.barsColumnLeft),skeletonTop:Math.round(snap.skeleton.top),chartBottom:Math.round(snap.chart.bottom),legendTop:Math.round(snap.legend.top)},after,screenshots:dir}));
+ console.log(JSON.stringify({ok:true,pending:{chartIndex:snap.chartIndex,skeletonIndex:snap.skeletonIndex,legendIndex:snap.legendIndex,labelText:snap.labelText,blockWidths:snap.blockRects.map(b=>Math.round(b.w)),barsLeft:Math.round(snap.barsRect.left),laneLeft:Math.round(snap.barsColumnLeft),skeletonTop:Math.round(snap.skeleton.top),chartBottom:Math.round(snap.chart.bottom),legendTop:Math.round(snap.legend.top)},after,screenshots:dir}));
 }finally{await browser.close();}

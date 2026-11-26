@@ -7,7 +7,7 @@
   import { createOfflineAvailability, offlineRowHint } from '$lib/offline-availability';
   const availability = createOfflineAvailability();
   $effect(() => availability.setTargets(player.queueOpen ? list.map(t => audioUrl(t.audio.opus)) : [], backend.generation + ':' + backend.base));
-  import { X, MoreHorizontal, Trash2 } from 'lucide-svelte';
+  import { X } from 'lucide-svelte';
 
   const list = $derived(player.playlist);
   const total = $derived.by(() =>
@@ -21,19 +21,11 @@
   let dragIdx = $state(-1);
   let dragDelta = $state(0);
   let wasDragged = $state(false);
-  let actionsOpen = $state(false);
-
-  // 清空是破坏性操作：收进次级菜单，并同时停止当前播放（内核负责复位状态）
+  // 清空是破坏性操作：直接置于队列页脚，并同时停止当前播放（内核负责复位状态）
   function clearPlaylist() {
-    actionsOpen = false;
     clearQueue();
     player.queueOpen = false;
   }
-
-  // 队列叠层被其它入口关闭时，次级菜单一并收起
-  $effect(() => {
-    if (!player.queueOpen) actionsOpen = false;
-  });
 
   let pressEl: HTMLElement | null = null;
   let pressTimer: ReturnType<typeof setTimeout> | undefined;
@@ -123,34 +115,11 @@
   }
 </script>
 
-<Sheet open={player.queueOpen} onClose={() => { actionsOpen = false; player.queueOpen = false; }} title="播放队列">
+<Sheet open={player.queueOpen} onClose={() => (player.queueOpen = false)} title="播放队列">
   <div class="flex items-center justify-between">
     <span class="rounded-full bg-accent/15 px-2 py-0.5 text-2xs tabular-nums opacity-80">
       {list.length} 首 · {fmtDur(total)}
     </span>
-    <div class="relative">
-      <button
-        class="rounded-md p-1.5 transition hover:bg-base-200"
-        onclick={() => (actionsOpen = !actionsOpen)}
-        aria-label="队列操作"
-        aria-expanded={actionsOpen}
-        title="队列操作"
-      >
-        <MoreHorizontal class="h-4 w-4" />
-      </button>
-      {#if actionsOpen}
-        <div class="absolute right-0 top-full z-20 mt-1 w-48 rounded-lg border border-base-300 bg-base-100 p-1 shadow-lg">
-          <button
-            class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-warning transition hover:bg-base-200 disabled:opacity-40"
-            onclick={clearPlaylist}
-            disabled={list.length === 0}
-          >
-            <Trash2 class="h-3.5 w-3.5" />
-            清空播放列表（停止播放）
-          </button>
-        </div>
-      {/if}
-    </div>
   </div>
 
   {#if list.length === 0}
@@ -210,8 +179,17 @@
 
     <div class="mt-3 flex items-center gap-2 border-t border-base-300 pt-3">
       <button
+        class="rounded border border-base-300 px-2.5 py-1 text-xs transition hover:bg-base-200 disabled:opacity-40"
+        onclick={clearPlaylist}
+        disabled={list.length === 0}
+        aria-label="清空播放列表（停止播放）"
+        title="清空队列并停止播放"
+      >
+        清空
+      </button>
+      <button
         class="ml-auto rounded border border-base-300 px-2.5 py-1 text-xs transition hover:bg-base-200"
-        onclick={() => { actionsOpen = false; player.queueOpen = false; }}
+        onclick={() => (player.queueOpen = false)}
       >
         关闭
       </button>

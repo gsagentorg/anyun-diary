@@ -105,21 +105,53 @@ try {
   }
   assert.deepEqual(errors, []); return { order: names };
  });
- await check('clear-only-secondary-queue-menu-and-stops', async () => {
+ await check('next-enabled-at-shuffled-tail', async () => {
+  const { page, errors } = await setup(); await begin(page);
+  const next = page.getByRole('button', { name: '下一首', exact: true });
+  // 播放源可能是网络 URL 也可能是 blob，用常驻计数「pos/total」判定当前曲目
+  const at = (label) => page.waitForFunction(l => {
+   const a = window.__anyunAudio;
+   const counter = document.querySelector('[aria-label="下一首"]')?.previousElementSibling;
+   return counter?.textContent.trim() === l && !a.paused && a.currentTime > 0.2;
+  }, label);
+  // 顺序模式走到队尾：下一首随即禁用（原有行为不变）
+  await next.click(); await at('2/2');
+  assert.equal(await next.isDisabled(), true, 'sequential tail keeps next disabled');
+  // 切到随机：抽曲逻辑上还有一首可选，下一首必须可用并能真的换曲
+  await (await control(page, '播放模式：顺序播放')).click();
+  await page.getByRole('button', { name: '播放模式：随机播放', exact: true }).waitFor();
+  assert.equal(await next.isDisabled(), false, 'shuffle tail must enable next');
+  await next.click(); await at('1/2');
+  // 随机模式再回到队尾：自然播完也应换到另一首合格曲目
+  await next.click(); await at('2/2');
+  await page.evaluate(() => { const a = window.__anyunAudio; a.currentTime = Math.max(0, a.duration - 0.15); });
+  await at('1/2');
+  assert.deepEqual(errors, []); return { sequentialTailDisabled: true, shuffleTailEnabled: true, shuffledNaturalEndAdvances: true };
+ });
+ await check('clear-direct-footer-button-no-menu-and-never-restores', async () => {
   const { page, errors } = await setup(); await begin(page);
   const clear = page.getByRole('button', { name: '清空播放列表（停止播放）', exact: true });
   assert.equal(await clear.count(), 0, 'clear must not exist in primary controls');
+  assert.equal(await page.getByRole('button', { name: '关闭播放器', exact: true }).count(), 0, 'misleading close button removed from primary controls');
   const dialog = await queue(page);
-  assert.equal(await clear.count(), 0, 'opening queue alone must not expose clear');
+  assert.equal(await clear.count(), 1, 'clear must be directly visible in the queue sheet');
+  assert.ok(await clear.isVisible(), 'clear must not hide behind a menu');
+  assert.equal(await dialog.getByRole('button', { name: '队列操作', exact: true }).count(), 0, 'no intermediate queue-actions menu');
   assert.equal(await dialog.getByRole('group', { name: /队列第/ }).count(), 2);
-  await dialog.getByRole('button', { name: '队列操作', exact: true }).click();
-  assert.equal(await dialog.getByRole('button', { name: '清空播放列表（停止播放）', exact: true }).count(), 1);
   await clear.click();
   await page.waitForFunction(() => window.__anyunAudio.paused);
   assert.equal(await page.locator('[aria-label^="队列第 "]').count(), 0);
   assert.equal(await page.getByRole('button', { name: '关闭播放器', exact: true }).count(), 0);
   assert.equal(await page.evaluate(() => localStorage.getItem('anyun-session-v2')), null);
-  assert.deepEqual(errors, []); return await audioState(page);
+  const stopped = await audioState(page);
+  await page.waitForTimeout(600);
+  assert.equal(await page.evaluate(() => localStorage.getItem('anyun-session-v2')), null, 'late debounced save cannot resurrect the snapshot');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('[data-continuous-browse][data-cached-months="1"]');
+  assert.equal(await page.getByRole('button', { name: '播放队列', exact: true }).count(), 0, 'reload cannot restore the cleared player/queue');
+  assert.equal(await page.locator('[aria-label^="队列第 "]').count(), 0);
+  assert.equal(await page.evaluate(() => localStorage.getItem('anyun-session-v2')), null);
+  assert.deepEqual(errors, []); return stopped;
  });
  await check('running-sleep-line-drag-minimum-and-pointercancel-chromium', async () => {
   const { page, errors } = await setup(); await begin(page);

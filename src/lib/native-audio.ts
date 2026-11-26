@@ -120,6 +120,21 @@ export class NativeAudio extends EventTarget {
       return this.driver.configure({ ...config, revision, replace });
     });
   }
+  /**
+   * 显式清空：payload 由调用方在清空瞬间冻结（不在这里重新读 UI 状态）。
+   * 同时立刻换 revision，把清空前已在途的命令快照（pause/seek → publish）挡在
+   * accept 之外——否则旧快照会先把队列写回 UI，下一次 dispatch 的 config()
+   * 又把队列原样送回原生（真机 #25：清空后只暂停+归零，队列仍在）。
+   */
+  clear(config: NativeConfig) {
+    const revision = `clear-${Date.now()}-${Math.random()}`;
+    this.revision = revision;
+    return this.enqueue(() => {
+      // 中间若穿插了 sync（它也会换 revision），派发前重新钉住本次清空 revision。
+      this.revision = revision;
+      return this.driver.configure({ ...config, revision, replace: true });
+    });
+  }
   command(action: string, value?: number) { return this.enqueue(() => this.driver.command({ action, value })); }
   load() { void this.sync(true).catch(() => {}); }
   play() { return this.command('play'); }

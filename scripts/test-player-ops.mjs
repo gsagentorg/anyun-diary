@@ -63,7 +63,7 @@ class AudioStub {
 }
 globalThis.Audio = AudioStub;
 
-const { player, clearQueue, setPlayMode, cyclePlayMode, onTrackEnded, getAudio, step } = await import(
+const { player, clearQueue, setPlayMode, cyclePlayMode, onTrackEnded, getAudio, step, hasNextTrack, initSession, scheduleSessionSave, __resetSessionGuardForTest } = await import(
   '../src/lib/player.svelte.ts'
 );
 
@@ -97,6 +97,9 @@ const reset = () => {
   player.playedTitles = ['T:Ops fixture 0'];
   player.shuffleRedo = [2];
 };
+const forceMode = (m) => {
+  if (player.mode !== m) setPlayMode(m);
+};
 
 // T1 清空：队列/当前曲/进度/播放态/媒体会话/快照全部复位
 reset();
@@ -123,6 +126,23 @@ ok(media.playbackState === 'none', 'media session playbackState none');
 ok(media.metadata === null, 'media session metadata cleared');
 ok(!store.has('anyun-session-v2'), 'session snapshot removed');
 ok(player.sessionRestored === false, 'restored flag reset');
+
+// T1b 清空后的迟到期保存与重载都不能复活队列/当前曲
+reset();
+store.set(
+  'anyun-session-v2',
+  JSON.stringify({ v: 2, queue: tracks, cur: 1, t: 30, shuffle: false, skipSame: true, dedup: true, rate: 1 }),
+);
+scheduleSessionSave(); // 清空前已排队的去抖保存
+clearQueue();
+await new Promise((resolve) => setTimeout(resolve, 400));
+ok(!store.has('anyun-session-v2'), 'late debounced save cannot resurrect snapshot');
+__resetSessionGuardForTest();
+initSession();
+ok(
+  player.playlist.length === 0 && player.track === null && player.pos === -1,
+  'reload cannot restore cleared queue or current track',
+);
 
 // T2 三态循环：随机 → 单曲循环 → 顺序 → 随机
 setPlayMode('random');
@@ -176,6 +196,78 @@ player.pos = 0;
 player.track = player.playlist[0];
 step(1);
 ok(player.pos === 1, 'repeat-one manual next follows the queue');
+
+// T7 随机模式队尾（issue #4 复现路径）：顺序走到队尾后切随机，「下一首」可用且真的换曲
+reset();
+forceMode('sequential');
+player.pos = player.playlist.length - 1;
+player.track = player.playlist[player.pos];
+forceMode('random'); // 切随机：已播池只剩当前曲
+ok(hasNextTrack() === true, 'shuffle at tail: next is available');
+const shuffleTail = player.pos;
+step(1);
+ok(player.pos !== shuffleTail && player.playlist[player.pos] != null, 'shuffle at tail: manual next moves to another track');
+
+// T8 随机模式队尾自然播完：同样要换到另一首合格曲目
+reset();
+forceMode('sequential');
+player.pos = player.playlist.length - 1;
+player.track = player.playlist[player.pos];
+player.playing = true;
+forceMode('random');
+const naturalTail = player.pos;
+const playsBeforeNatural = getAudio().plays;
+onTrackEnded();
+ok(player.pos !== naturalTail, 'shuffle at tail: natural completion picks another track');
+ok(player.track === player.playlist[player.pos], 'shuffle at tail: natural completion keeps track<->pos in sync');
+ok(getAudio().plays === playsBeforeNatural + 1, 'shuffle at tail: natural completion starts playback');
+
+// T9 顺序模式队尾：保持原行为（下一首禁用、自然结束不前进）
+reset();
+forceMode('sequential');
+player.pos = player.playlist.length - 1;
+player.track = player.playlist[player.pos];
+ok(hasNextTrack() === false, 'sequential tail: next disabled');
+const seqTail = player.pos;
+onTrackEnded();
+step(1);
+ok(player.pos === seqTail, 'sequential tail: neither natural end nor manual next advances');
+
+// T10 单曲队列：随机/顺序下「下一首」都保持禁用，step 不动
+reset();
+player.playlist = [tracks[0]];
+player.pos = 0;
+player.track = player.playlist[0];
+forceMode('random');
+ok(hasNextTrack() === false, 'one-track queue: shuffle next disabled');
+step(1);
+ok(player.pos === 0, 'one-track queue: shuffle step does not move');
+forceMode('sequential');
+ok(hasNextTrack() === false, 'one-track queue: sequential next disabled');
+
+// T11 随机模式回退栈：栈顶有可回跳项时「下一首」可用，且 step 走栈（与按钮态一致）
+reset();
+forceMode('random');
+player.pos = player.playlist.length - 1;
+player.track = player.playlist[player.pos];
+player.playedTitles = tracks.map((_, i) => 'T:Ops fixture ' + i);
+player.shuffleRedo = [0];
+ok(hasNextTrack() === true, 'shuffle redo top: next available');
+step(1);
+ok(player.pos === 0, 'shuffle redo top: next pops the redo stack');
+
+// T12 全同名队列（避开同名 + 已播池抽干）：按钮态跟随「池重置」回退，而不是判成没有下一首
+reset();
+const twins = [0, 1].map((i) => ({ queueEntryId: 'ops-twin-' + i, audio: { ...audio(i), title: 'Same title' } }));
+player.playlist = twins;
+player.pos = 1;
+player.track = player.playlist[1];
+player.shuffleSkipSameTitle = true;
+player.playedTitles = ['T:Same title'];
+forceMode('random');
+ok(hasNextTrack() === true, 'shuffle all-same-title pool reset: next available');
+step(1);
+ok(player.pos === 0, 'shuffle all-same-title pool reset: next advances via reset fallback');
 
 console.log(`player-ops: ${pass} checks passed`);
 process.exit(process.exitCode ?? 0);

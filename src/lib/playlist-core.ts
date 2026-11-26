@@ -130,3 +130,41 @@ export function pickShuffleIndex(
   if (candidates.length === 0) return null;
   return { index: candidates[Math.floor(Math.random() * candidates.length)], reset };
 }
+
+/**
+ * 「随机避开同名」命中的下标集合：与已播曲目同名的项。
+ * 无命中时返回 undefined（调用方据此跳过 avoid 判定）。
+ */
+export function shuffleAvoidIdx(
+  titles: string[],
+  keys: string[],
+  playedKeys: string[],
+): Set<number> | undefined {
+  const played = new Set(playedKeys);
+  const avoidTitles = new Set(titles.filter((_, i) => played.has(keys[i])));
+  if (avoidTitles.size === 0) return undefined;
+  const avoid = new Set<number>();
+  titles.forEach((t, i) => {
+    if (avoidTitles.has(t)) avoid.add(i);
+  });
+  return avoid.size ? avoid : undefined;
+}
+
+/**
+ * 随机模式下「下一首」会去哪儿：镜像 step(1) 的取曲路径——先看回退栈顶，
+ * 栈空才随机抽（含池抽干重置）。只读，不消耗回退栈。
+ * @returns 目标下标（含是否需要重置已播池），无可去处时 null
+ */
+export function peekShuffleNext(
+  keys: string[],
+  playedKeys: string[],
+  currentPos: number,
+  redo: number[],
+  avoidIdx?: Set<number>,
+): { index: number; reset: boolean } | null {
+  const n = keys.length;
+  if (n === 0) return null;
+  const top = redo.length ? redo[redo.length - 1] : null;
+  if (top != null && top >= 0 && top < n && top !== currentPos) return { index: top, reset: false };
+  return pickShuffleIndex(keys, playedKeys, currentPos, avoidIdx);
+}

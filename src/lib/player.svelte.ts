@@ -13,7 +13,7 @@ export function setPlayerCatalog(audios: DiaryAudio[]) {
   if (nativeAudio) void nativeAudio.refresh().catch(() => {});
   if (typeof window !== 'undefined') initSession();
 }
-import { trackKeyOf, pickShuffleIndex } from './playlist-core';
+import { trackKeyOf, pickShuffleIndex, shuffleAvoidIdx, peekShuffleNext } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
 import { DEFAULT_SLEEP_CUSTOM, SLEEP_CUSTOM_VERSION, parseSleepCustom, sleepCustomSnapshot, validateSleepCustom, type SleepCustomParameters, isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
@@ -535,15 +535,18 @@ export function moveTrack(from: number, to: number) {
  * 媒体会话（metadata/playbackState）、随机历史与会话快照一并清掉。
  */
 export function clearQueue() {
+  const native = usesNativeAudio();
   const a = getAudio();
   a.pause();
-  try {
-    a.currentTime = 0;
-  } catch {
-    /* 某些 UA 在无 src 时拒绝写 currentTime */
+  if (!native) {
+    try {
+      a.currentTime = 0;
+    } catch {
+      /* 某些 UA 在无 src 时拒绝写 currentTime */
+    }
+    a.removeAttribute('src');
+    a.load();
   }
-  a.removeAttribute('src');
-  a.load();
 
   player.playlist = [];
   player.pos = -1;
@@ -577,7 +580,25 @@ export function clearQueue() {
     }
   }
   // 原生壳：把空队列推给原生侧，否则后台播放在 App 内还会继续。
-  syncNative();
+  // 显式清空必须无条件送达：常规 syncNative 的守卫（bootstrap 未完成 / 队列未映射 /
+  // 正在 applyNativeState）任一为假，空队列就到不了原生，原生继续持有曲目，
+  // 下一次 publish 会把队列重新带回 UI（真机 #25 症状：只暂停+归零，没清掉）。
+  if (native) flushNativeClear();
+}
+
+/**
+ * 显式清空专用：payload 在此刻（Web 状态已清空）冻结后交给 adapter。
+ * 不能走 sync() 的「派发时再读状态」——pause/seek 的旧快照可能先把队列写回 UI，
+ * 于是派发时读到的又是满队列，空 configure 永远发不出去。
+ */
+function flushNativeClear() {
+  ensureAudio();
+  if (!nativeAudio) return;
+  const config = nativeConfig();
+  void nativeAudio.clear(config).then(
+    () => console.info('[clear] native queue cleared'),
+    error => console.warn('[clear] native clear failed', error),
+  );
 }
 
 /** 切到随机/关闭随机（保留为旧调用点的薄封装；UI 已改用三态循环） */
@@ -601,22 +622,30 @@ export function playRandom() {
   if (usesNativeAudio()) { ensureAudio(); void nativeAudio!.command('random').catch(() => {}); return; }
   if (player.playlist.length === 0) return;
   const keys = player.playlist.map(trackKey);
-  let avoid: Set<number> | undefined;
-  if (player.shuffleSkipSameTitle) {
-    const played = new Set(player.playedTitles);
-    const avoidTitles = new Set(
-      player.playlist.filter((_, i) => played.has(keys[i])).map((t) => t.audio.title),
-    );
-    avoid = new Set(
-      player.playlist.map((_, i) => i).filter((i) => avoidTitles.has(player.playlist[i].audio.title)),
-    );
-    if (avoid.size === 0) avoid = undefined;
-  }
+  const avoid = player.shuffleSkipSameTitle
+    ? shuffleAvoidIdx(player.playlist.map((t) => t.audio.title), keys, player.playedTitles)
+    : undefined;
   const pick = pickShuffleIndex(keys, player.playedTitles, player.pos, avoid);
   if (!pick) return;
   if (pick.reset) player.playedTitles = [];
   player.shuffleRedo = []; // 主动随机开新曲：旧的「下一曲回退栈」作废
   stepTo(pick.index);
+}
+
+/** 「下一首」是否还有去处：随机模式按 step(1) 的取曲路径判（不看队尾），其余按队列顺序。
+ * 与随机抽曲共用 pickShuffleIndex / 回退栈，避免按钮态与实际行为脱节。 */
+export function hasNextTrack(): boolean {
+  const n = player.playlist.length;
+  if (player.mode === 'random') {
+    if (n < 2) return false; // 单曲队列没有「另一首」可换
+    const keys = player.playlist.map(trackKey);
+    const avoid = player.shuffleSkipSameTitle
+      ? shuffleAvoidIdx(player.playlist.map((t) => t.audio.title), keys, player.playedTitles)
+      : undefined;
+    return peekShuffleNext(keys, player.playedTitles, player.pos, player.shuffleRedo, avoid) != null;
+  }
+  const cur = player.pos >= 0 ? player.pos : 0;
+  return cur < n - 1;
 }
 
 /** 跳到列表内第 i 项（记录历史与已播曲目，供随机模式去重/回退） */

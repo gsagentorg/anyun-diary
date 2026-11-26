@@ -13,12 +13,14 @@ ViteNodeRunner.prototype.dependencyRequest = function(id, fsPath, callstack) {
   if (id === '$env/dynamic/public' || String(fsPath).includes('env/dynamic/public')) return Promise.resolve({env:{}});
   return original.call(this,id,fsPath,callstack);
 };
-let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[];
+let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[]; const nativeCommands=[];
 class NativeStub extends EventTarget {
   constructor(config,update){super();this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
   refresh(){return Promise.resolve();} sync(){nativeSyncs.push(structuredClone(this.config()));return Promise.resolve();}
+  clear(cfg){nativeSyncs.push(structuredClone(cfg));return Promise.resolve();}
+  command(action){nativeCommands.push(action);return Promise.resolve();}
   // Media-element surface used by clearQueue/stopCurrent (the real adapter has the same three).
-  pause(){this.paused=true;} load(){} removeAttribute(){}
+  pause(){this.paused=true;nativeCommands.push('pause');} load(){} removeAttribute(){}
 }
 const stubbed = ViteNodeRunner.prototype.dependencyRequest;
 ViteNodeRunner.prototype.dependencyRequest = function(id,fsPath,callstack) {
@@ -116,6 +118,15 @@ const syncCount=nativeSyncs.length;
 nativeUpdate({...nativeState,queue:[{id:'unmapped'}]});
 m.scheduleSessionSave();
 assert.equal(nativeSyncs.length,syncCount,'incomplete mapping blocks native configure');
+// issue #25 真机：UI 上有当前曲时点清空，必须同时发 pause 并推空队列（不能只暂停+归零）。
+assert.ok(m.player.track,'precondition: a current track is loaded before clear');
+const cmdsBefore=nativeCommands.length, syncsBefore=nativeSyncs.length;
+m.clearQueue();
+assert.ok(nativeCommands.slice(cmdsBefore).includes('pause'),'explicit clear sends pause to native');
+assert.equal(nativeSyncs.at(-1).queue.length,0,'explicit clear pushes an empty queue to native from a populated state');
+assert.equal(nativeSyncs.length>syncsBefore,true,'explicit clear performs a native configure');
+assert.equal(m.player.playlist.length,0,'explicit clear empties the web queue');
+assert.equal(m.player.track,null,'explicit clear drops the current track');
 m.player.track=null;m.player.pos=-1;m.clearQueue();
 assert.equal(nativeSyncs.at(-1).queue.length,0,'explicit user clear permits replacing an unmapped queue');
 console.log('session: snapshots, duplicate identity, history/redo, atomic legacy migration, delayed months and v2 priority passed');process.exit(0);

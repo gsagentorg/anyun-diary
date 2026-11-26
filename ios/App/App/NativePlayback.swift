@@ -191,8 +191,17 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
     }
     @objc func configure(_ call: CAPPluginCall) {
         DispatchQueue.main.async {
-            guard let items = call.getArray("queue") as? [[String: Any]], self.valid(items) else {
-                call.reject("原生播放需要有效的 HTTPS 音频地址"); return
+            // 空队列是合法的显式清空（issue #25）：不能因为空数组/缺省字段被 guard 拒绝，
+            // 否则 Web 的清空请求会静默失败，原生继续持有曲目。非空队列仍然逐条校验。
+            let rawQueue = call.getArray("queue") ?? []
+            let items: [[String: Any]]
+            if rawQueue.isEmpty {
+                items = []
+            } else {
+                guard let typed = rawQueue as? [[String: Any]], self.valid(typed) else {
+                    call.reject("原生播放需要有效的 HTTPS 音频地址"); return
+                }
+                items = typed
             }
             let previous = self.currentID
             let previousRate = self.rate
@@ -213,7 +222,11 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 custom: NativeSleepCustom.decode(call.getObject("sleepCustom")?.mapValues { $0 as Any }, version: call.getInt("sleepCustomVersion")))
             // Expiry and gain must be applied before a rate update can resume audio.
             self.tick()
-            if call.getBool("replace") == true || previous != self.currentID {
+            // 空队列 = 显式清空：无论 replace/当前曲目相同与否都必须停掉并置空 item，
+            // 不能依赖 id 比较（真机 #25：清空后队列仍在原生侧存活）。
+            if self.queue.isEmpty {
+                self.loadCurrent(autoplay: false)
+            } else if call.getBool("replace") == true || previous != self.currentID {
                 self.loadCurrent(autoplay: false)
             } else if self.rate != previousRate && self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
             self.tick(); self.persist(); self.publish()

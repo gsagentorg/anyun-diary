@@ -1,12 +1,13 @@
 <script lang="ts">
 import TimelineLegend from './components/TimelineLegend.svelte';
+import BrowseSkeleton from './components/BrowseSkeleton.svelte';
 import {onMount} from 'svelte';
 import {backend} from './backend.svelte';
 import {shDayStart} from './playlist-core';
 import type {Audio} from './types';
 
 
-let {view,laneMode,startAt,endAt,expanded=$bindable<number|null>(null)}:{view:number;laneMode:'linear'|'compress';startAt:number;endAt:number;expanded?:number|null}=$props();
+let {view,laneMode,startAt,endAt,expanded=$bindable<number|null>(null),pending=[],onretry}:{view:number;laneMode:'linear'|'compress';startAt:number;endAt:number;expanded?:number|null;pending?:{id:string;error:string|null}[];onretry?:(id:string)=>void}=$props();
 let host:HTMLElement,scroll=$state(0),viewport=$state(900),columns=$state(3),origin=$state(0);
 const all=$derived(Object.values(backend.summaries).flat().filter(a=>a.startAt>=startAt&&a.startAt<endAt));
 const days=$derived.by(()=>{const map=new Map<number,Audio[]>();for(const a of all){const day=shDayStart(a.startAt);const list=map.get(day)??[];list.push(a);map.set(day,list);}return [...map].sort(([a],[b])=>b-a);});
@@ -28,6 +29,11 @@ onMount(()=>{const update=()=>{scroll=window.scrollY;viewport=innerHeight;column
 {#if view===0}{#await import('./Timeline.svelte') then module}<module.default audios={windowAudios} {laneMode}/>{/await}
 {:else}{#await import('./DayStrip.svelte') then module}<module.default audios={windowAudios} bind:expanded/>{/await}{/if}
 <div style:height={Math.max(0,offsets[rowCount]-(offsets[last]??0))+'px'} aria-hidden="true"></div>
+<!-- 未就绪月份跟在已加载数据之后、图例之前：占位块属于同一段流，标签与骨架条同一行 -->
+{#each pending as ref (ref.id)}
+{#if ref.error}<p role="alert" class="mb-2 text-xs text-warning">{ref.error} <button onclick={()=>onretry?.(ref.id)}>重试此月</button></p>
+{:else}<BrowseSkeleton label={'正在加载 '+ref.id+'…'} caption={view===0?ref.id:''} height={laneMode==='linear'?'h-10':'h-12'}/>{/if}
+{/each}
 {#if view===0}<TimelineLegend {laneMode}/>{/if}
 
 </div>

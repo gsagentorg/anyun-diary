@@ -213,7 +213,11 @@ public class NativePlaybackPlugin: CAPPlugin, CAPBridgedPlugin {
                 custom: NativeSleepCustom.decode(call.getObject("sleepCustom")?.mapValues { $0 as Any }, version: call.getInt("sleepCustomVersion")))
             // Expiry and gain must be applied before a rate update can resume audio.
             self.tick()
-            if call.getBool("replace") == true || previous != self.currentID {
+            // 空队列 = 显式清空：无论 replace/当前曲目相同与否都必须停掉并置空 item，
+            // 不能依赖 id 比较（真机 #25：清空后队列仍在原生侧存活）。
+            if self.queue.isEmpty {
+                self.loadCurrent(autoplay: false)
+            } else if call.getBool("replace") == true || previous != self.currentID {
                 self.loadCurrent(autoplay: false)
             } else if self.rate != previousRate && self.wantsPlayback && !self.audioActivationPending { self.audio.rate = self.rate }
             self.tick(); self.persist(); self.publish()

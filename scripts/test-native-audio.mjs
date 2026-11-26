@@ -4,6 +4,8 @@ import { NativeAudio } from '../src/lib/native-audio.ts';
 // Source assertions only: this runner does not compile Swift or exercise iOS SDKs.
 const swift = readFileSync(new URL('../ios/App/App/NativePlayback.swift', import.meta.url), 'utf8');
 const restore = swift.slice(swift.indexOf('private func restoredQueue('), swift.indexOf('private func valid('));
+// issue #25 真机：清空必须让原生真的丢掉曲目——空队列不能依赖 id 比较就跳过 loadCurrent。
+assert.ok(/if self\.queue\.isEmpty \{\s*self\.loadCurrent\(autoplay: false\)\s*\}/.test(swift), 'an empty configure always stops and detaches the native item (explicit clear)');
 assert.ok(restore.indexOf('saved["queueJSON"]') < restore.indexOf('saved["queue"]'), 'valid JSON queue wins over legacy queue');
 assert.ok(restore.includes('JSONSerialization.jsonObject(with: data)') && restore.includes('valid(items) {'));
 assert.ok(restore.includes('if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }'), 'invalid/missing JSON falls back without remapping legacy identity or metadata');

@@ -577,7 +577,17 @@ export function clearQueue() {
     }
   }
   // 原生壳：把空队列推给原生侧，否则后台播放在 App 内还会继续。
-  syncNative();
+  // 显式清空必须无条件送达：常规 syncNative 的守卫（bootstrap 未完成 / 队列未映射 /
+  // 正在 applyNativeState）任一为假，空队列就到不了原生，原生继续持有曲目，
+  // 下一次 publish 会把队列重新带回 UI（真机 #25 症状：只暂停+归零，没清掉）。
+  flushNativeClear();
+}
+
+/** 显式清空专用：绕过常规同步守卫，直接让原生收到空队列（adapter 按 ready 串行，安全）。 */
+function flushNativeClear() {
+  if (!usesNativeAudio()) return;
+  ensureAudio();
+  void nativeAudio?.sync().catch(() => {});
 }
 
 /** 切到随机/关闭随机（保留为旧调用点的薄封装；UI 已改用三态循环） */

@@ -36,6 +36,11 @@ for(const raw of [null,'{','[]','null','true',JSON.stringify({version:2,paramete
 assert.deepEqual(parseSleepCustom(JSON.stringify({version:1,parameters:parameterSets[0]})),parameterSets[0]); checks++;
 near(sleepCustomWindow({ ...defaults, holdPercent:90,tailPercent:30 }).tail,.05,'overlap explicit clamp');
 ok(sleepStage('custom',.1,defaults)==='保持音量' && sleepStage('custom',.95,defaults)==='归零尾段','custom stages');
+// 尾段为 0：没有微弱尾声，而是在终点前保持 endDb 再干脆切断。
+const noTail={...defaults,tailPercent:0};
+ok(sleepStage('custom',.5,noTail)==='自定义渐弱' && sleepStage('custom',.97,noTail)==='即将切断','no-tail custom announces the cut');
+near(sleepGain('custom',1-1e-9,noTail),10**(defaults.endDb/20),'no-tail custom cuts from its end dB',1e-6);
+ok(sleepGain('custom',1,noTail)===0,'no-tail custom is silent at the deadline');
 let now=100000;
 Date.now=()=>now;
 const timers=new Map();let timerId=0;
@@ -110,6 +115,8 @@ const editor=readFileSync(new URL('../src/lib/components/SleepCurveEditor.svelte
 ok(editor.includes('type="range"') && editor.includes('type="number"') && editor.includes('{#each SLEEP_CUSTOM_FIELDS'),'four paired accessible controls');
 for(const f of SLEEP_CUSTOM_FIELDS) ok(f.label.length>0,'labels defined');
 ok(editor.includes('aria-label=') && editor.includes('恢复默认参数') && editor.includes('sleepCurvePath(\'custom\', parameters)'),'editor preview/reset contracts');
+// 控件上下限必须绑定校验用的同一份 schema，UI 允许输入的值范围与 validateSleepCustom 不得漂移。
+ok((editor.match(/min=\{field\.min\} max=\{field\.max\} step=\{field\.step\}/g)??[]).length===2,'range and number inputs bound by the validated schema');
 console.log('sleep-custom: '+checks+' assertions passed (clock/audio/storage mocks; browser runs only with --browser; no Swift execution)');
 
 // Optional real Chromium component/Player-state behavior, isolated Vite middleware.

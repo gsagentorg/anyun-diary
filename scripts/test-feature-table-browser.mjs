@@ -63,10 +63,10 @@ try {
   Promise.resolve(handler(req, res)).catch(e => { serverErrors.push(e.message); if (!res.headersSent) res.writeHead(500); res.end(); });
  }));
  browser = await chromium.launch({ executablePath: CHROMIUM_PATH, headless: true, args: ['--no-sandbox', '--autoplay-policy=no-user-gesture-required'] });
- async function setup() {
+ async function setup(options = {}) {
   // SW is blocked in this suite so every network request obeys the two-origin allowlist.
   // Actual SW cold-shell coverage belongs to test-offline-app-browser.mjs.
-  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, serviceWorkers: 'block', timezoneId: 'Asia/Shanghai' });
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1080 }, serviceWorkers: 'block', timezoneId: 'Asia/Shanghai', ...options });
   contexts.push(context);
   await context.route('**/*', route => {
    const url = route.request().url();
@@ -184,6 +184,152 @@ try {
   const afterCancel = Number(await page.locator('[data-sleep-handle]').getAttribute('aria-valuenow'));
   assert.ok(Math.abs(afterCancel - clamped) <= 1, 'cancel must not revert or continue dragging');
   assert.deepEqual(errors, []); return { midway, clamped, remainingText, afterCancel, engine: 'Chromium; not iOS' };
+ });
+ await check('running-sleep-line-drag-hold-and-release-chromium', async () => {
+  const { page, errors } = await setup(); await begin(page);
+  await (await control(page, '睡眠定时器')).click();
+  // 2 分钟档：可拖区间 0–50%（最少留 1 分钟）。定时器每 100ms 推进 ~0.08%，按住不动
+  // 2 秒就有 ~1.7% 的漂移，足以区分「手柄跟指针」与「手柄跟墙钟」。#26 的回归点。
+  await page.getByRole('spinbutton', { name: '自定义睡眠分钟数', exact: true }).fill('2');
+  await page.getByRole('button', { name: '开始', exact: true }).click();
+  const svg = page.locator('svg[aria-label*="音量变化示意"]');
+  const handle = page.locator('[data-sleep-handle]');
+  await handle.waitFor();
+  const percent = async () => Number(await handle.getAttribute('aria-valuenow'));
+  const dotX = async () => Number(await page.locator('[data-sleep-position]').getAttribute('cx'));
+  /** Screen point on the vertical line at viewBox x=targetX (top of the line, away from the dot). */
+  async function screenPoint(targetX) {
+   return svg.evaluate((el, targetX) => {
+    const c = el.querySelector('[data-sleep-position]');
+    const x = Number(c.getAttribute('cx')), y = 32;
+    const matrix = el.getScreenCTM();
+    const p = new DOMPoint(x, y).matrixTransform(matrix), end = new DOMPoint(targetX, y).matrixTransform(matrix);
+    return { x: p.x, y: p.y, endX: end.x, endY: end.y };
+   }, targetX);
+  }
+  const secondsLeft = async () => {
+   const text = await page.getByRole('status').filter({ hasText: /进行中：.*剩余/ }).innerText();
+   const m = text.match(/剩余 (\d+):(\d+)/);
+   assert.ok(m, 'running status must show remaining time: ' + text);
+   return Number(m[1]) * 60 + Number(m[2]);
+  };
+  // 键盘接力不受拖动改动影响（唯一一次非拖动状态下的方向键调整）。
+  await handle.focus(); await page.keyboard.press('ArrowRight');
+  const nudged = await percent();
+  assert.ok(nudged >= 1 && nudged <= 3, 'keyboard nudge must still work: ' + nudged);
+  let p = await screenPoint(72); // 40%
+  await page.mouse.move(p.x, p.y); await page.mouse.down();
+  await page.mouse.move(p.endX, p.endY, { steps: 6 });
+  const grabbed = await percent();
+  assert.ok(grabbed >= 39 && grabbed <= 41, 'drag should follow the pointer to 40%: ' + grabbed);
+  assert.ok(Math.abs((await dotX()) - 72) <= 0.6, 'line must sit at the pointer, not at a timer-derived x');
+  // 按住不动，跨过多次定时器 tick（4 × 650ms）：线与倒计时都必须钉在拖动位置
+  // （拖动期间不逐次重锚时间轴，倒计时不随 tick 跳动，也不吞掉已过时间）。
+  const held = [grabbed], xs = [await dotX()];
+  const leftBefore = await secondsLeft();
+  for (let i = 0; i < 4; i++) { await page.waitForTimeout(650); held.push(await percent()); xs.push(await dotX()); }
+  assert.deepEqual(held, held.map(() => grabbed), 'held gesture must not drift with timer ticks: ' + held.join(','));
+  assert.equal(new Set(xs.map(x => x.toFixed(2))).size, 1, 'line x must stay at the pointer while held: ' + xs.join(','));
+  const leftAfterHold = await secondsLeft();
+  assert.equal(leftAfterHold, leftBefore, 'countdown must stay with the dragged position while held: ' + leftBefore + '→' + leftAfterHold);
+  // 慢拖：每次只挪 3 个单位并停顿（大于死区），位置始终贴指针。
+  for (let i = 1; i <= 6; i++) {
+   const targetX = 72 + i * 3; // 40% → 50%，仍在最少剩余时间上限内
+   const q = await screenPoint(targetX);
+   await page.mouse.move(q.endX, q.endY, { steps: 2 });
+   await page.waitForTimeout(220);
+   const nowX = await dotX();
+   assert.ok(Math.abs(nowX - targetX) <= 0.6, 'slow drag must track the pointer at x=' + targetX + ', got ' + nowX);
+  }
+  // 最少剩余时间钳制不变：2 分钟档最多拖到 50%。
+  const edge = await screenPoint(175);
+  await page.mouse.move(edge.endX, edge.endY, { steps: 4 });
+  await page.waitForTimeout(150);
+  const clamped = await percent();
+  assert.equal(clamped, 50, '2-minute run must clamp at one minute remaining: ' + clamped);
+  const leftAtClamp = await secondsLeft();
+  assert.ok(leftAtClamp >= 55 && leftAtClamp <= 60, 'clamp must keep at least one minute: ' + leftAtClamp);
+  assert.ok(Math.abs((await dotX()) - 90) <= 0.6, 'clamped line must show the applied position, not the raw pointer');
+  // 松手：位置与倒计时都从选中位置继续（不回弹），随后倒计时正常推进。
+  await page.mouse.up();
+  const released = await percent();
+  assert.equal(released, clamped, 'release must keep the selected position: ' + released);
+  const leftAtRelease = await secondsLeft();
+  assert.ok(leftAtRelease >= 54 && leftAtRelease <= 60, 'release keeps the selected remaining time: ' + leftAtRelease);
+  await page.waitForTimeout(1400);
+  const afterRelease = await percent();
+  assert.ok(afterRelease > released && afterRelease <= released + 3, 'timer must resume advancing after release: ' + released + '→' + afterRelease);
+  const leftAfterRelease = await secondsLeft();
+  assert.ok(leftAfterRelease < leftAtRelease && leftAfterRelease >= leftAtRelease - 3, 'countdown must resume from the selected position: ' + leftAtRelease + '→' + leftAfterRelease);
+  // 松手后方向键仍可用（向左即在钳制区间内）。
+  const beforeKey = await percent();
+  await handle.focus(); await page.keyboard.press('ArrowLeft');
+  const afterKey = await percent();
+  assert.ok(afterKey <= beforeKey && afterKey >= beforeKey - 3, 'keyboard adjustment must keep working after a drag: ' + beforeKey + '→' + afterKey);
+  assert.deepEqual(errors, []);
+  return { grabbed, held, clamped, released, afterRelease, leftBefore, leftAfterHold, leftAtRelease, leftAfterRelease, engine: 'Chromium mouse; not iOS' };
+ });
+ await check('running-sleep-line-drag-touch-hold-no-flicker-chromium', async () => {
+  // 复现 #26 的真机路径：hasTouch 上下文 + 触摸指针事件；手指按住时系统仍上报
+  // 亚像素 pointermove，旧实现每次 move 都重锚时间轴，表现为线/倒计时在旧值新值间跳。
+  const { page, errors } = await setup({ hasTouch: true }); await begin(page);
+  await (await control(page, '睡眠定时器')).click();
+  await page.getByRole('spinbutton', { name: '自定义睡眠分钟数', exact: true }).fill('2');
+  await page.getByRole('button', { name: '开始', exact: true }).click();
+  const svg = page.locator('svg[aria-label*="音量变化示意"]');
+  const handle = page.locator('[data-sleep-handle]');
+  await handle.waitFor();
+  const percent = async () => Number(await handle.getAttribute('aria-valuenow'));
+  const dotX = async () => Number((await page.locator('[data-sleep-position]').getAttribute('cx')));
+  const secondsLeft = async () => {
+   const text = await page.getByRole('status').filter({ hasText: /进行中：.*剩余/ }).innerText();
+   const m = text.match(/剩余 (\d+):(\d+)/);
+   assert.ok(m, 'running status must show remaining time: ' + text);
+   return Number(m[1]) * 60 + Number(m[2]);
+  };
+  async function screenPoint(targetX) {
+   return svg.evaluate((el, targetX) => {
+    const c = el.querySelector('[data-sleep-position]');
+    const x = Number(c.getAttribute('cx')), y = 32;
+    const m = el.getScreenCTM();
+    const p = new DOMPoint(x, y).matrixTransform(m), end = new DOMPoint(targetX, y).matrixTransform(m);
+    return { x: p.x, y: p.y, endX: end.x, endY: end.y };
+   }, targetX);
+  }
+  const cdp = await page.context().newCDPSession(page);
+  const touch = (type, x, y) => cdp.send('Input.dispatchTouchEvent', {
+   type, touchPoints: type === 'touchEnd' ? [] : [{ x, y, id: 1 }], modifiers: 0,
+  });
+  const p = await screenPoint(72); // 40%
+  await touch('touchStart', p.x, p.y);
+  await touch('touchMove', p.endX, p.endY);
+  await page.waitForTimeout(120);
+  const grabbed = { p: await percent(), x: Number((await dotX()).toFixed(2)), left: await secondsLeft() };
+  assert.ok(grabbed.p >= 39 && grabbed.p <= 41, 'touch drag should follow the finger to 40%: ' + grabbed.p);
+  assert.ok(Math.abs(grabbed.x - 72) <= 0.6, 'touch line must sit under the finger: ' + grabbed.x);
+  // 按住并施加真机式 ±1px 抖动，跨多次定时器 tick；任何一项读数变化都算抖动。
+  const samples = [];
+  for (let i = 0; i < 5; i++) {
+   await touch('touchMove', p.endX + (i % 2 ? 1 : -1), p.endY + (i % 3 - 1));
+   await page.waitForTimeout(650);
+   samples.push({ p: await percent(), x: Number((await dotX()).toFixed(2)), left: await secondsLeft() });
+  }
+  assert.deepEqual(samples.map(s => s.p), samples.map(() => grabbed.p), 'touch jitter must not move the handle: ' + JSON.stringify(samples));
+  assert.deepEqual(samples.map(s => s.x), samples.map(() => grabbed.x), 'touch jitter must not move the line: ' + JSON.stringify(samples));
+  assert.deepEqual(samples.map(s => s.left), samples.map(() => grabbed.left), 'countdown must not flicker while the finger rests: ' + JSON.stringify(samples));
+  // 松手即提交：线留在手指处，倒计时从该处继续倒数。
+  await touch('touchEnd');
+  await page.waitForTimeout(80);
+  const released = { p: await percent(), x: Number((await dotX()).toFixed(2)), left: await secondsLeft() };
+  assert.equal(released.p, grabbed.p, 'release must keep the touched position: ' + JSON.stringify(released));
+  assert.ok(Math.abs(released.x - grabbed.x) <= 0.6, 'release must not snap the line back: ' + JSON.stringify(released));
+  assert.equal(released.left, grabbed.left, 'release keeps the selected remaining time: ' + JSON.stringify(released));
+  await page.waitForTimeout(1500);
+  const later = { p: await percent(), x: Number((await dotX()).toFixed(2)), left: await secondsLeft() };
+  assert.ok(later.p > released.p && later.p <= released.p + 3, 'timer must resume from the released position: ' + JSON.stringify(later));
+  assert.ok(later.left < released.left && later.left >= released.left - 3, 'countdown must resume from the released position: ' + JSON.stringify(later));
+  assert.deepEqual(errors, []);
+  return { grabbed, samples, released, later, engine: 'Chromium touch emulation (hasTouch); not iOS hardware' };
  });
  await check('custom-sleep-editor-live-preview-and-running-snapshot', async () => {
   const { page, errors } = await setup(); await begin(page);

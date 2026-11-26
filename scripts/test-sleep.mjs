@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, sleepSeekProgress, sleepSeekLimit, sleepTrackHit, SLEEP_MODES, SLEEP_TRACK_HALF_WIDTH, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
+import { sleepGain, sleepCurvePath, sleepCurvePoint, sleepProgress, sleepStage, sleepSecondsFromHandle, sleepMinutesFromHandle, sleepSeekProgress, sleepSeekLimit, sleepTrackHit, SLEEP_MODES, SLEEP_TRACK_HALF_WIDTH, SLEEP_DRAG_DEAD_ZONE, isSleepMode, MIN_SLEEP_SECONDS, MIN_SLEEP_MINUTES } from '../src/lib/sleep-curves.ts';
 import { SleepAudio } from '../src/lib/sleep-audio.ts';
 let checks = 0;
 function ok(value, message) { assert.ok(value, message); checks++; }
@@ -38,6 +38,29 @@ ok(Math.abs(sleepGain('hold', 0.995) - 10 ** (-12 / 20)) < 1e-3, 'hold settles n
 ok(Math.abs(sleepGain('stair', 0.3) - sleepGain('stair', 0.45)) < 1e-12, 'stair holds each level steady');
 ok(sleepGain('stair', 0.3) < sleepGain('stair', 0.1), 'stair steps down');
 ok(sleepGain('stair', 0.8) < sleepGain('stair', 0.6) && sleepGain('stair', 0.99) > 0.05, 'stair ends audible then cuts');
+// —— 形态约定逐条对齐 UI 文案（describe 与曲线必须说同一件事）——
+const dbGain = (mode, t) => 20 * Math.log10(sleepGain(mode, t));
+// cliff：起手近乎不动，末段 -14.4 dB 仍可听清后切断。
+ok(Math.abs(dbGain('cliff', 0.25)) < 0.25, 'cliff barely moves through the first quarter: ' + dbGain('cliff', 0.25).toFixed(3));
+ok(Math.abs(dbGain('cliff', 0.9999) + 14.4) < 0.02, 'cliff cuts from -14.4 dB, not a whisper: ' + dbGain('cliff', 0.9999).toFixed(2));
+// hold：82% 之前一字不降，之后降到 -12 dB 并保持到切断。
+ok(sleepGain('hold', 0.82) === 1, 'hold keeps unity exactly through 82%');
+ok(Math.abs(dbGain('hold', 0.97) + 12) < 1e-9, 'hold settles to exactly -12 dB by 97%');
+ok(sleepGain('hold', 0.99) === sleepGain('hold', 0.97), 'hold keeps that level steady until the cut');
+// stair：恰好四级 0/-6/-12/-18 dB，每级平台都稳定。
+for (const [t, expectedDb] of [[0.1, 0], [0.3, -6], [0.6, -12], [0.8, -18]]) {
+  ok(Math.abs(dbGain('stair', t) - expectedDb) < 1e-9, `stair level at ${t} is ${expectedDb} dB`);
+}
+// 唯一的跳变必须落在截止点上：界内相邻采样步长极小，最后一步才是悬崖。
+for (const id of ['cliff', 'hold', 'stair', 'gentle', 'steady']) {
+  let interior = 0;
+  // 只看到 0.999 为止；最后一步（0.999→1）单独算，正是截止点上的跳变。
+  for (let i = 0; i < 999; i++) interior = Math.max(interior, Math.abs(sleepGain(id, i / 1000) - sleepGain(id, (i + 1) / 1000)));
+  const finalStep = sleepGain(id, 0.999) - sleepGain(id, 1);
+  ok(interior < 0.05, `${id}: no interior discontinuity (max step ${interior.toFixed(4)})`);
+  if (id === 'cliff' || id === 'hold' || id === 'stair') ok(finalStep > 0.1, `${id}: the only jump is at the deadline (${finalStep.toFixed(4)})`);
+  else ok(finalStep < 0.001, `${id}: gradual modes close to zero without a step (${finalStep.toExponential(2)})`);
+}
 ok(sleepStage('cliff', 0.3) === '缓慢下降' && sleepStage('cliff', 0.7) === '加速下降' && sleepStage('cliff', 0.97) === '即将切断', 'cliff stages');
 ok(sleepStage('hold', 0.5) === '保持音量' && sleepStage('hold', 0.9) === '末段轻降' && sleepStage('hold', 0.99) === '即将切断', 'hold stages');
 ok(sleepStage('stair', 0.5) === '阶梯渐弱' && sleepStage('stair', 0.99) === '即将切断', 'stair stages');
@@ -55,6 +78,7 @@ ok(sleepSeekProgress(90) === 0.5 && sleepSeekProgress(-10) === 0 && sleepSeekPro
 ok(sleepSeekProgress(NaN) === 0, 'invalid seek x maps to start');
 ok(sleepSeekLimit(60) === 0 && Math.abs(sleepSeekLimit(600) - 0.9) < 1e-12, 'seek limit keeps one minute');
 ok(sleepSeekLimit(0) === 0 && sleepSeekLimit(NaN) === 0, 'seek limit safe on empty timers');
+ok(SLEEP_DRAG_DEAD_ZONE > 0 && SLEEP_DRAG_DEAD_ZONE <= 0.02, 'drag dead zone swallows sub-pixel jitter only');
 
 // Position and stage indicators share the exact geometry of the preview curve.
 for (const { id } of SLEEP_MODES) {
@@ -156,6 +180,27 @@ await getAudio().play();
 ok(param.value === 1 && getAudio().volume === 0.7, 'next playback normal volume');
 startSleep(1); await settle(); cancelSleep();
 ok(sleep.until === null && param.value === 1 && graphCount === 1, 'cancel restores and graph reused');
+
+// —— 终止语义：暂停中到期、渐弱中途取消、到期后重开新计划 ——
+setSleepPreset('hold'); startSleep(2); await settle();
+getAudio().pause();
+now = sleep.until; syncSleep();
+ok(sleep.fired && sleep.until === null && getAudio().paused, 'expiry while paused keeps playback paused');
+ok(param.value === 1, 'expiry while paused restores full gain');
+await getAudio().play();
+ok(param.value === 1 && getAudio().volume === 0.7, 'play after a paused expiry is not attenuated');
+setSleepPreset('stair'); startSleep(2); await settle();
+now = sleep.until - 60000; syncSleep();
+const midFade = param.value;
+ok(midFade > 0.05 && midFade < 0.9, 'mid-run gain is attenuated before cancel: ' + midFade.toFixed(3));
+cancelSleep();
+ok(param.value === 1 && getAudio().volume === 0.7, 'cancel from a mid-fade restores normal volume');
+ok(sleep.fired === false && sleep.remaining === 0, 'cancel is not an expiry and clears the countdown');
+setSleepPreset('cliff'); startSleep(1); await settle();
+ok(sleep.mode === 'cliff' && sleep.fired === false, 'restart after expiry applies the newly selected preset');
+ok(sleep.progress === 0 && Math.abs(curves.at(-1).values[0] - 1) < 1e-9, 'restart schedules the new plan from unity');
+cancelSleep();
+ok(sleep.until === null && param.value === 1, 'restart block leaves no active timer');
 startSleep(2); await settle(); const existing = sleep.until;
 for (const invalid of [NaN, Infinity, -1, 0, 601]) startSleep(invalid);
 ok(sleep.until === existing, 'invalid input does not destroy active timer');

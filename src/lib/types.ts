@@ -62,13 +62,12 @@ export function hueOf(title: string): number {
 
 /** 切片音频基础地址：默认同源 /audio；Vercel 等静态托管不带宽音频时用 PUBLIC_AUDIO_BASE 指向外部 */
 import { backend, isNativeApp } from './backend.svelte';
-import { nativeAudioSrc } from './native-cache';
 import { env as _env } from '$env/dynamic/public';
 export const AUDIO_BASE = ((_env && _env.PUBLIC_AUDIO_BASE) as string | undefined ?? '').replace(/\/+$/, '');
-/** Audio keys use the same route on web and the runtime-selected native backend.
- * 原生壳内再换一次地址：`anyun-cache://` 由原生磁盘缓存提供（命中即刻播放），web 原样返回。 */
+/** Stable audio routes remain HTTPS in the native queue. AVPlayer owns its disk-cache
+ * lookup; WKWebView-only anyun-cache URLs must never enter the native playback bridge. */
 export function audioUrl(opus: string): string {
   if (/^https?:\/\//.test(opus)) return opus;
   const base = isNativeApp() ? backend.base : '';
-  return nativeAudioSrc(base + '/api/' + opus.split('/').map(encodeURIComponent).join('/'));
+  return base + '/api/' + opus.split('/').map(encodeURIComponent).join('/');
 }

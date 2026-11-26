@@ -7,6 +7,8 @@ import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 const config = {
   preprocess: vitePreprocess(),
   kit: {
+    // Registration is web-only and guarded in the root layout (never Capacitor).
+    serviceWorker: { register: false },
     // DEPLOY_TARGET=vercel → Vercel（Serverless 函数）；
     // DEPLOY_TARGET=capacitor → 静态单目录（cap/，给 Capacitor webDir 用）；
     // 默认 node（本地自托管部署，node build）

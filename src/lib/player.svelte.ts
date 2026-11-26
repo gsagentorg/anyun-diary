@@ -16,7 +16,7 @@ export function setPlayerCatalog(audios: DiaryAudio[]) {
 import { trackKeyOf, pickShuffleIndex } from './playlist-core';
 import { hasLyrics, lyricsFingerprint, lyricDisplayIndexAt, sameTimeGroupBounds } from './lyrics';
 import { SleepAudio } from './sleep-audio';
-import { isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
+import { DEFAULT_SLEEP_CUSTOM, SLEEP_CUSTOM_VERSION, parseSleepCustom, sleepCustomSnapshot, validateSleepCustom, type SleepCustomParameters, isSleepMode, MIN_SLEEP_SECONDS, sleepSeekLimit, type SleepMode } from './sleep-curves';
 import { nextPlayMode, isPlayMode, type PlayMode } from './play-mode';
 
 export type { Track };
@@ -35,10 +35,11 @@ function nativeConfig() {
     pos: player.track ? player.pos : -1, shuffle: player.mode === 'random', skipSame: player.shuffleSkipSameTitle,
     repeatOne: player.mode === 'repeat-one',
     history: [...player.history], redo: [...player.shuffleRedo], played: [...player.playedTitles], rate: player.playbackRate,
-    sleepRevision: nativeSleepRevision, sleepUntil: sleep.until, sleepStarted: sleep.started, sleepMode: sleep.mode, afterTrack: sleep.afterTrack,
+    sleepRevision: nativeSleepRevision, sleepUntil: sleep.until, sleepStarted: sleep.started, sleepMode: sleep.mode, sleepCustom: { ...sleep.activeCustom }, sleepCustomVersion: SLEEP_CUSTOM_VERSION, afterTrack: sleep.afterTrack,
   };
 }
 function applyNativeState(state: NativeState) {
+  sleep.supportsCustomSleep = state.supportsCustomSleep === true;
   if (!state.queue.length && player.playlist.length) return;
   applyingNativeState = true;
   try {
@@ -67,14 +68,16 @@ function applyNativeState(state: NativeState) {
     }
     player.history = state.history; player.shuffleRedo = state.redo; player.playedTitles = state.played;
     player.shuffle = state.shuffle; player.shuffleSkipSameTitle = state.skipSame;
-    // The native side only carries the random flag; repeat-one is kept as-is until it is sent back.
+    // Native owns its persisted mode; older bridges without repeatOne keep the prior non-random mode.
     if (state.shuffle) player.mode = 'random';
+    else if (typeof state.repeatOne === 'boolean') player.mode = state.repeatOne ? 'repeat-one' : 'sequential';
     else if (player.mode === 'random') player.mode = 'sequential';
     player.playbackRate = state.rate; player.playing = state.playing; player.loading = state.loading;
     player.error = state.error;
     nativeSleepRevision = state.sleepRevision ?? '';
     sleep.until = state.sleepUntil; sleep.started = state.sleepStarted; sleep.afterTrack = state.afterTrack;
     if (isSleepMode(state.sleepMode)) sleep.mode = state.sleepMode;
+    sleep.activeCustom = state.sleepCustomVersion === SLEEP_CUSTOM_VERSION ? sleepCustomSnapshot(state.sleepCustom) : { ...DEFAULT_SLEEP_CUSTOM };
     sleep.fired = state.sleepFired;
     if (sleep.until != null && sleep.started != null) {
       sleep.plannedSeconds ||= Math.ceil((sleep.until - sleep.started) / 1000);
@@ -899,7 +902,7 @@ export function getAudio(): HTMLAudioElement {
   return ensureAudio();
 }
 
-/** 睡眠定时器：墙钟截止时间跨切歌/暂停不重置；只记忆预设，不恢复倒计时。 */
+/** 睡眠定时器：墙钟截止时间跨切歌/暂停不重置；Web 只记忆下一次计划；原生恢复运行快照及墙钟截止时间。 */
 export const sleep = $state<{
   until: number | null;
   started: number | null;
@@ -910,10 +913,14 @@ export const sleep = $state<{
   fired: boolean;
   preset: SleepMode;
   mode: SleepMode; // 本次已启动的方式，和下一次选择分开
+  custom: SleepCustomParameters; // Editable next-start plan only.
+  activeCustom: SleepCustomParameters; // Detached running snapshot.
+  supportsCustomSleep: boolean | null;
   notice: string | null;
 }>({ until: null, started: null, afterTrack: false, remaining: 0, progress: 0, plannedSeconds: 0,
-  fired: false, preset: 'gentle', mode: 'gentle', notice: null });
+  fired: false, preset: 'gentle', mode: 'gentle', custom: { ...DEFAULT_SLEEP_CUSTOM }, activeCustom: { ...DEFAULT_SLEEP_CUSTOM }, supportsCustomSleep: null, notice: null });
 
+const SLEEP_CUSTOM_KEY = 'anyun-sleep-custom-v1';
 const SLEEP_PRESET_KEY = 'anyun-sleep-preset-v1';
 export function initSleep() {
   if (typeof window === 'undefined') return;
@@ -921,12 +928,24 @@ export function initSleep() {
     const value = window.localStorage.getItem(SLEEP_PRESET_KEY);
     if (isSleepMode(value)) sleep.preset = value;
   } catch { /* Storage is optional. */ }
+  try { sleep.custom = parseSleepCustom(window.localStorage.getItem(SLEEP_CUSTOM_KEY)); }
+  catch { sleep.custom = { ...DEFAULT_SLEEP_CUSTOM }; }
 }
 export function setSleepPreset(mode: SleepMode) {
   if (!isSleepMode(mode)) return;
   sleep.preset = mode;
   try { window.localStorage.setItem(SLEEP_PRESET_KEY, mode); } catch { /* SSR/storage denied */ }
 }
+/** Missing capability means old shell (or bootstrap pending), never assume support. */
+export function canStartCustomSleep() { return !usesNativeAudio() || sleep.supportsCustomSleep === true; }
+export function setSleepCustom(value: unknown) {
+  const parameters = validateSleepCustom(value);
+  if (!parameters) return false;
+  sleep.custom = parameters;
+  try { window.localStorage.setItem(SLEEP_CUSTOM_KEY, JSON.stringify({ version: SLEEP_CUSTOM_VERSION, parameters })); } catch { /* Optional storage. */ }
+  return true;
+}
+export function resetSleepCustom() { setSleepCustom({ ...DEFAULT_SLEEP_CUSTOM }); }
 function sleepAudio() {
   return gAudio.__anyunSleepAudio ??= new SleepAudio(ensureAudio());
 }
@@ -945,8 +964,8 @@ export function syncSleep(now = Date.now(), reschedule = true) {
   sleep.remaining = Math.max(0, Math.ceil((sleep.until - now) / 1000));
   if (now >= sleep.until) { stopForSleep(); return; }
   if (sleep.mode !== 'off') {
-    sleepAudio().tick(sleep.mode, sleep.progress);
-    if (reschedule) sleepAudio().schedule(sleep.mode, sleep.started, sleep.until, now);
+    sleepAudio().tick(sleep.mode, sleep.progress, sleep.activeCustom);
+    if (reschedule) sleepAudio().schedule(sleep.mode, sleep.started, sleep.until, now, sleep.activeCustom);
   }
 }
 gAudio.__anyunSyncSleep = () => syncSleep();
@@ -964,6 +983,10 @@ function clearSleepTimer() {
 /** Click handler calls prepare before yielding, preserving the audio user gesture. */
 export function startSleep(minutes: number | null, afterTrack = false) {
   if (!afterTrack && (minutes == null || !Number.isFinite(minutes) || minutes <= 0 || minutes > 600)) return;
+  if (!afterTrack && sleep.preset === 'custom' && !canStartCustomSleep()) {
+    sleep.notice = '当前 App 壳尚未确认支持自定义睡眠曲线，请更新原生 App；原有预设仍可使用。';
+    return; // Preserve any existing timer; never silently substitute gentle.
+  }
   cancelSleep();
   sleep.fired = false;
   sleep.notice = null;
@@ -973,6 +996,8 @@ export function startSleep(minutes: number | null, afterTrack = false) {
     return;
   }
   sleep.mode = sleep.preset;
+  sleep.activeCustom = sleepCustomSnapshot(sleep.custom);
+  sleep.progress = 0;
   sleep.started = Date.now();
   sleep.plannedSeconds = Math.ceil(minutes! * 60);
   sleep.until = sleep.started + sleep.plannedSeconds * 1000;

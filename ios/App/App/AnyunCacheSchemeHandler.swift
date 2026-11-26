@@ -7,6 +7,9 @@
 //  `WKURLSchemeHandler`：处理 `anyun-cache://media?u=<percent-encoded https URL>`。
 //  命中即回（支持 Range → 206），超出 revalidate 窗口时先回缓存再后台条件刷新；
 //  未命中走网络，200 才写盘。任何失败都绝不删除已有缓存。
+//  v2：未命中路径改用 `AnyunDownloadOutcome` —— 单曲超过容量时不落盘（不把残片/
+//  超限内容当完整），直接内存内切片服务；后台 revalidate 的写回带 requireExisting，
+//  已被用户 clear 的条目不会复活。订阅者取消不再杀共享下载（见 AnyunDiskCache）。
 //
 
 import Foundation
@@ -57,6 +60,7 @@ final class AnyunCacheSchemeHandler: NSObject, WKURLSchemeHandler {
     /// 强引用自己持有的 task（WKWebView 只弱持有 scheme handler，这里再持有进行中的 task 以便 stop 时取消）。
     private var runningTasks: [ObjectIdentifier: (state: AnyunSchemeTaskState, work: Task<Void, Never>)] = [:]
     private let tasksLock = NSLock()
+    private var revalidatingKeys: Set<String> = []
 
     init(
         disk: AnyunDiskCache = AnyunDiskCache.shared,
@@ -142,9 +146,11 @@ final class AnyunCacheSchemeHandler: NSObject, WKURLSchemeHandler {
         }
 
         // 2) 未命中：整段拉取（不透传 Range，保证落盘的是完整文件），成功后写盘再按需切段服务。
+        //    单曲超过 maxBytes：commit 会返回 transient（不落盘、标记 skip），用内存里的
+        //    完整字节切段服务本次请求 —— 能播，但不把装不下的东西伪装成缓存。
         let network = self.network
         do {
-            _ = try await disk.downloadOnce(key: key, kind: .media) {
+            let outcome = try await disk.downloadOnce(key: key, kind: .media) {
                 let response = try await network.get(remoteURL)
                 guard response.status == 200, !response.data.isEmpty else {
                     throw AnyunCacheError.http(response.status)
@@ -158,11 +164,22 @@ final class AnyunCacheSchemeHandler: NSObject, WKURLSchemeHandler {
             }
 
             guard !state.isCancelled else { return }
-            guard let read = await disk.readRange(key: key, start: start, end: end) else {
-                fail(state: state, task: task, error: AnyunCacheError.http(0))
-                return
+            switch outcome {
+            case .stored:
+                guard let read = await disk.readRange(key: key, start: start, end: end) else {
+                    fail(state: state, task: task, error: AnyunCacheError.http(0))
+                    return
+                }
+                deliver(state: state, task: task, read: read, contentType: AnyunCacheConstants.defaultMediaContentType)
+            case .transient(let payload):
+                guard let read = AnyunCacheSchemeHandler.slice(payload.data, start: start, end: end) else {
+                    fail(state: state, task: task, error: AnyunCacheError.http(0))
+                    return
+                }
+                let stored = payload.contentType ?? ""
+                let type = stored.isEmpty ? AnyunCacheConstants.defaultMediaContentType : stored
+                deliver(state: state, task: task, read: read, contentType: type)
             }
-            deliver(state: state, task: task, read: read, contentType: AnyunCacheConstants.defaultMediaContentType)
         } catch {
             // 离线/失败：绝不删除既有缓存，只把这个 task 判失败。
             guard !state.isCancelled else { return }
@@ -170,35 +187,46 @@ final class AnyunCacheSchemeHandler: NSObject, WKURLSchemeHandler {
         }
     }
 
+    /// transient 载荷的 Range 切片（与 AnyunDiskCache.readRange 同一套边界规则）。
+    static func slice(_ data: Data, start: Int, end: Int?) -> AnyunRangeRead? {
+        let total = data.count
+        guard total > 0 else { return nil }
+        let safeStart = max(0, min(start, total - 1))
+        let requestedEnd = end.map { min($0, total - 1) } ?? (total - 1)
+        let safeEnd = max(safeStart, requestedEnd)
+        let lower = data.index(data.startIndex, offsetBy: safeStart)
+        let upper = data.index(data.startIndex, offsetBy: safeEnd)
+        return AnyunRangeRead(data: data[lower...upper], start: safeStart, endInclusive: safeEnd, totalBytes: total)
+    }
+
     /// 后台条件请求：304 只刷新 age，200 覆盖内容，失败一律保留缓存。
+    /// requireExisting：条目若已被用户 clear / LRU 淘汰，迟到的 revalidate 写回作废，不复活。
     private func scheduleRevalidate(key: String, entry: AnyunCacheEntry, remoteURL: URL) {
+        tasksLock.lock()
+        let inserted = revalidatingKeys.insert(key).inserted
+        tasksLock.unlock()
+        guard inserted else { return }
         let disk = self.disk
         let network = self.network
-        Task.detached(priority: .utility) {
+        Task.detached(priority: .utility) { [self] in
+            defer { finishRevalidation(key: key) }
             do {
                 let response = try await network.get(
                     remoteURL,
                     etag: entry.etag,
                     lastModified: entry.lastModified
                 )
-                if response.isNotModified {
-                    await disk.markRevalidated(key: key)
-                } else if response.status == 200, !response.data.isEmpty {
-                    _ = try? await disk.store(
-                        key: key,
-                        kind: .media,
-                        payload: AnyunDownloadedPayload(
-                            data: response.data,
-                            etag: response.etag,
-                            lastModified: response.lastModified,
-                            contentType: response.contentType
-                        )
-                    )
-                }
+                try await disk.revalidateMedia(key: key, original: entry, response: response)
             } catch {
                 // 失败保留旧缓存（SWR 语义）。
             }
         }
+    }
+
+    private func finishRevalidation(key: String) {
+        tasksLock.lock()
+        revalidatingKeys.remove(key)
+        tasksLock.unlock()
     }
 
     // MARK: - 投递

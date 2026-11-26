@@ -1,4 +1,4 @@
-import { sleepGain, type SleepMode } from './sleep-curves';
+import { sleepGain, type SleepCustomParameters, type SleepMode } from './sleep-curves';
 
 /** One graph per media element. Never disconnect a routed source or close its context:
  * doing so would silence the normal player as well. No new graph for each track. */
@@ -57,21 +57,21 @@ export class SleepAudio {
     return '当前浏览器不支持网页音量渐弱，将仅在到时停止。';
   }
 
-  schedule(mode: SleepMode, started: number, until: number, now: number) {
+  schedule(mode: SleepMode, started: number, until: number, now: number, custom?: SleepCustomParameters) {
     if (!this.gain || !this.context || this.route !== 'web-audio') return;
     const remaining = (until - now) / 1000;
     const param = this.gain.gain;
     param.cancelScheduledValues(this.context.currentTime);
     if (remaining <= 0) { param.setValueAtTime(0, this.context.currentTime); return; }
     const values = Float32Array.from({ length: 301 }, (_, i) =>
-      sleepGain(mode, (now + (until - now) * i / 300 - started) / (until - started)));
+      sleepGain(mode, (now + (until - now) * i / 300 - started) / (until - started), custom));
     // AudioParam automation, not a foreground-only JS animation loop.
     param.setValueCurveAtTime(values, this.context.currentTime, remaining);
   }
 
-  tick(mode: SleepMode, progress: number) {
+  tick(mode: SleepMode, progress: number, custom?: SleepCustomParameters) {
     if (this.route === 'volume' && this.baseVolume != null) {
-      this.audio.volume = this.baseVolume * sleepGain(mode, progress);
+      this.audio.volume = this.baseVolume * sleepGain(mode, progress, custom);
     }
   }
 

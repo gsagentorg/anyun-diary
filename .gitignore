@@ -9,5 +9,8 @@ static/audio/
 scripts/__pycache__/
 RUNBOOK.md
 
-# Generated from src/lib/data.json before build.
+# Legacy generated lyric bundle; current builds carry runtime queue metadata instead.
 static/native-lyrics.json
+
+# Local historical catalog only; runtime catalogs live in configured storage.
+src/lib/data.json

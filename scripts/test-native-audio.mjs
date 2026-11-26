@@ -18,7 +18,7 @@ assert.ok(persist.includes('guard let data = try? JSONSerialization.data(withJSO
 assert.ok(persist.indexOf('guard let data') < persist.indexOf('saved.removeValue(forKey: "queue")'));
 assert.ok(persist.indexOf('saved["queueJSON"] = data') < persist.indexOf('UserDefaults.standard.set'), 'only persist a completely encoded migration');
 const listeners = new Map();
-globalThis.document = { hidden: false, addEventListener: (type, fn) => listeners.set(type, fn) };
+globalThis.document = { hidden: false, removeEventListener() {}, addEventListener: (type, fn) => listeners.set(type, fn) };
 const fixture = id => ({ id, file:id+'.wav', opus:id+'.opus', title:id, startAt:1, duration:null, lyrics:[], monthId:'2026-01' });
 const queue = [{ audio: fixture('a'), id: 'entry-a', url: 'https://audio.example/a.opus', title: 'A', key: 'A' }, { audio: fixture('a'), id: 'entry-b', url: 'https://audio.example/b.opus', title: 'B', key: 'B' }];
 let config = { queue, pos: 0, shuffle: false, skipSame: true, history: [], redo: [], played: ['A'], rate: 1, sleepRevision: '', sleepUntil: null, sleepStarted: null, sleepMode: 'off', afterTrack: false };
@@ -146,3 +146,62 @@ console.log('native audio: deferred sync, native recovery, foreground reconcilia
 receive({ ...resumed, playing: false, position: 0 });
 assert.equal(audio.currentTime, 85, 'duplicate event/command response is applied only once');
 assert.equal(audio.paused, false);
+
+// —— AVPlayer 磁盘缓存接线：源码契约（本机不编译 Swift；行为断言见 scripts/test-native-cache.swift，
+//    编译与真机验证仍待 Xcode/iPhone）——
+const load = swift.slice(swift.indexOf('private func loadCurrent('), swift.indexOf('private func start(recovering:'));
+assert.ok(load.includes('AnyunCacheKey.hash(url.absoluteString)'), 'cache key derives from the stable queue URL');
+assert.ok(load.includes('localPlaybackURL(forKey: key)'), 'loadCurrent prefers a validated local file');
+assert.ok(load.includes('url.scheme == "https"'), 'only stable HTTPS reaches AVPlayer/cache lookup; file URLs are never opened');
+assert.ok(load.includes('loadGeneration += 1') && load.includes('prefetchTask?.cancel()'), 'each load invalidates older async results');
+assert.ok(load.includes('attach(AVPlayerItem(url: url)'), 'uncached playback streams the stable URL immediately (no download-first regression)');
+const attach = swift.slice(swift.indexOf('private func attach('), swift.indexOf('private func startPrefetch('));
+assert.ok(attach.includes('audio.replaceCurrentItem(with: item)') && attach.includes('if at > 0 { seek(at) }') && attach.includes('_ = start(recovering: recovering)'), 'cache and stream paths share identical attach/seek/autoplay behaviour');
+const prefetch = swift.slice(swift.indexOf('private func startPrefetch('), swift.indexOf('private static func keyPrefix('));
+assert.ok(prefetch.includes('downloadFileOnce(key: key, expectedMediaEpoch: expectedEpoch)'), 'streaming playback kicks a parallel full-file download into AnyunDiskCache');
+assert.ok(prefetch.includes('loadGeneration == generation'), 'late prefetch results are generation-guarded (cannot override a later track)');
+assert.ok(!prefetch.includes('replaceCurrentItem') && !prefetch.includes('playImmediately') && !prefetch.includes('audio.play'), 'download completion never re-attaches items or auto-plays over a user pause');
+assert.ok(prefetch.includes('离线且未缓存，无法播放'), 'offline cache miss gets an explicit Chinese message');
+const start = swift.slice(swift.indexOf('private func start(recovering:'), swift.indexOf('private func pause()'));
+assert.ok(start.includes('case .streaming(let key, let url) = playbackSource'), 'prefetch targets only the current streaming track');
+assert.ok(start.includes('!prefetchAttempted') && swift.includes('prefetchAttempted = false; skipLocalForCurrentTrack = false'), 'one prefetch attempt per explicit selection, transient failure can retry on reselection');
+const disk = readFileSync(new URL('../ios/App/App/AnyunDiskCache.swift', import.meta.url), 'utf8');
+assert.ok(disk.includes('if !leasesSwept { releasePlaybackLeases(); leasesSwept = true }'), 'disk actor sweeps leftover leases before first lookup');
+assert.ok(swift.includes('AnyunPlaybackCache.shared.releaseAllLeases()'), 'empty/guard failure releases lease references');
+assert.ok(!swift.includes('expiresAt'), 'signed delivery targets/expiry never appear in native playback state');
+assert.ok(/if recovering, let duration = audio\.currentItem\?\.duration/.test(load), 'freeze recovery keeps lastKnownDuration');
+console.log('native audio: AVPlayer disk-cache wiring source contract passed (compile/device verification pending Xcode)');
+
+// Custom sleep capability is opt-in; absence from an older installed shell must
+// not turn "custom" into the native formula's legacy gentle fallback.
+const custom = { holdPercent: 90, endDb: -12, exponent: .25, tailPercent: 30 };
+config = { ...config, sleepMode: 'custom', sleepCustomVersion: 1, sleepCustom: custom, sleepUntil: 61000, sleepStarted: 1000, sleepRevision: 'custom-one' };
+assert.equal(audio.supportsCustomSleep, false, 'missing capability is old-shell unsupported');
+const beforeCustom = calls.filter(c => c === 'configure-start').length;
+await assert.rejects(audio.sync(), /不支持自定义/);
+assert.equal(calls.filter(c => c === 'configure-start').length, beforeCustom, 'never sends unsupported custom to an old shell');
+config.sleepMode = 'steady';
+await audio.sync();
+assert.equal(current.sleepMode, 'steady', 'old shells continue accepting all presets');
+state = { ...state, supportsCustomSleep: true, sequence: ++state.sequence };
+receive(state);
+assert.equal(audio.supportsCustomSleep, true);
+config = { ...config, sleepMode: 'custom', sleepCustom: { ...custom }, sleepCustomVersion: 1 };
+await audio.sync();
+assert.deepEqual(current.sleepCustom, custom, 'native configuration receives detached running snapshot');
+assert.equal(current.sleepRevision, 'custom-one');
+const receivedSnapshot = current.sleepCustom;
+const { queue: q2, history: h2, redo: r2, played: p2, ...deltaCustom } = state;
+receive({ ...deltaCustom, position: 31, sequence: ++state.sequence });
+assert.deepEqual(current.sleepCustom, receivedSnapshot, 'compact progress retains running custom parameters');
+const { sleepCustom: omittedCustom, sleepCustomVersion: omittedVersion, ...oldDelta } = deltaCustom;
+receive({ ...oldDelta, sequence: ++state.sequence });
+assert.deepEqual(current.sleepCustom, receivedSnapshot, 'optional omitted fields retain known snapshot');
+audio.dispose();
+const restoredAudio = new NativeAudio(() => structuredClone(config), s => { current = s; }, m => errors.push(m), driver);
+await restoredAudio.ready;
+assert.deepEqual(current.sleepCustom, custom, 'cold adapter reads native-restored custom snapshot');
+assert.equal(current.sleepRevision, 'custom-one', 'native-restored revision preserved');
+assert.equal(restoredAudio.supportsCustomSleep, true);
+restoredAudio.dispose();
+console.log('native audio: opt-in custom capability, old-shell refusal/preset compatibility, snapshot/delta/cold restore passed');

@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { HardDrive, Trash2 } from 'lucide-svelte';
   import Sheet from './Sheet.svelte';
+  import { clearOfflineCatalog } from '$lib/backend.svelte';
   import {
     CACHE_POLICY_LIMITS,
     DEFAULT_CACHE_POLICY,
@@ -55,6 +56,7 @@
   async function clear(scope: CacheScope) {
     if (busy) return;
     busy = true;
+    if(scope!=='media')await clearOfflineCatalog('all');
     const result = await clearNativeCache(scope, api);
     busy = false;
     notice = result ? `已清理 ${formatBytes(result.freedBytes)}（${result.entries} 项）` : '清理失败：原生接口未响应';
@@ -75,7 +77,7 @@
   <div class="flex flex-col gap-3 px-4 py-4 text-xs leading-relaxed">
     <p class="opacity-70">
       音频与索引缓存在 App 原生层：命中缓存立即播放，后台再校验更新；音频视为不可变，索引校验更频繁。
-      网页端没有这层缓存。
+      网页另有独立的离线缓存。离线目录快照最多保留三个已加载月份，清除索引也会清除这些快照。
     </p>
     {#if !supported}
       <p class="rounded-lg border border-base-300 bg-base-200/60 px-3 py-2 text-warning">
@@ -140,7 +142,7 @@
 
       {#if notice}<p class="text-2xs text-accent" role="status">{notice}</p>{/if}
       <p class="text-2xs opacity-50">
-        清除后当前播放可能中断；离线时清理会让未播放过的曲目暂时不可用。
+        清除后已获租约的当前音频仍可继续播放；已清除内容下次需联网重新缓存。
       </p>
     {/if}
   </div>

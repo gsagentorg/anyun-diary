@@ -1,4 +1,40 @@
 /** Relative gain, not system volume. Curves are defined in dB for predictable fading. */
+export const SLEEP_CUSTOM_VERSION = 1;
+export interface SleepCustomParameters { holdPercent: number; endDb: number; exponent: number; tailPercent: number; }
+export const DEFAULT_SLEEP_CUSTOM: Readonly<SleepCustomParameters> = Object.freeze({ holdPercent: 30, endDb: -24, exponent: 2, tailPercent: 10 });
+export const SLEEP_CUSTOM_FIELDS = [
+  { key: 'holdPercent', label: '保持原音量（%）', min: 0, max: 90, step: 1 },
+  { key: 'endDb', label: '渐弱终点（dB）', min: -60, max: 0, step: 1 },
+  { key: 'exponent', label: '下降指数', min: 0.25, max: 4, step: 0.05 },
+  { key: 'tailPercent', label: '归零尾段（%）', min: 0, max: 30, step: 1 },
+] as const;
+/** Strict, atomic validation: corrupt/unknown payloads never partially change a plan. */
+export function validateSleepCustom(value: unknown): SleepCustomParameters | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  for (const { key, min, max } of SLEEP_CUSTOM_FIELDS) {
+    const n = record[key];
+    if (typeof n !== 'number' || !Number.isFinite(n) || n < min || n > max) return null;
+  }
+  return Object.fromEntries(SLEEP_CUSTOM_FIELDS.map(({ key }) => [key, record[key]])) as unknown as SleepCustomParameters;
+}
+export function sleepCustomSnapshot(value: unknown): SleepCustomParameters {
+  return validateSleepCustom(value) ?? { ...DEFAULT_SLEEP_CUSTOM };
+}
+export function parseSleepCustom(raw: string | null): SleepCustomParameters {
+  try {
+    const data = JSON.parse(raw ?? 'null');
+    return data?.version === SLEEP_CUSTOM_VERSION ? sleepCustomSnapshot(data.parameters) : { ...DEFAULT_SLEEP_CUSTOM };
+  } catch { return { ...DEFAULT_SLEEP_CUSTOM }; }
+}
+/** Reserve at least half the post-hold interval for dB descent. A requested tail
+ * overlapping hold is shortened, not shifted into hold: h=.9, tail=.3 => tail=.05. */
+export function sleepCustomWindow(value: unknown) {
+  const parameters = sleepCustomSnapshot(value);
+  const hold = parameters.holdPercent / 100;
+  const tail = Math.min(parameters.tailPercent / 100, (1 - hold) / 2);
+  return { parameters, hold, tail, fade: 1 - hold - tail };
+}
 export const SLEEP_MODES = [
   { id: 'gentle', label: '柔和渐隐', description: '轻轻起步，中段变轻，最后柔和收尾。' },
   { id: 'steady', label: '匀速渐隐', description: '全程按相同分贝速度，稳定地变轻。' },
@@ -7,6 +43,7 @@ export const SLEEP_MODES = [
   { id: 'cliff', label: '长听快断', description: '开始几乎不降，随后逐渐加速下降，最后从仍能听清的音量直接切断。' },
   { id: 'hold', label: '平稳后切', description: '绝大部分时间保持原音量，末端小幅下降后干脆切断。' },
   { id: 'stair', label: '阶梯渐弱', description: '分四级稳定下降，每级都保持可听清的音量，最后切断。' },
+  { id: 'custom', label: '自定义参数', description: '保持、分贝终点、下降指数和归零尾段均可调整。' },
   { id: 'off', label: '到时停止（不渐弱）', description: '保持原音量，到时间直接暂停。' },
 ] as const;
 export type SleepMode = (typeof SLEEP_MODES)[number]['id'];
@@ -27,10 +64,16 @@ function stairDepth(t: number): number {
   const to = levels[Math.min(3, index + 1)];
   return from + (to - from) * smooth(Math.max(0, Math.min(1, (local - 0.9) / 0.1)));
 }
-export function sleepGain(mode: SleepMode, progress: number): number {
+export function sleepGain(mode: SleepMode, progress: number, custom?: SleepCustomParameters): number {
   const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
   if (mode === 'off') return 1;
   if (t >= 1) return 0;
+  if (mode === 'custom') {
+    const { parameters, hold, tail, fade } = sleepCustomWindow(custom);
+    const u = Math.max(0, Math.min(1, (t - hold) / fade));
+    const gain = Math.pow(10, parameters.endDb * Math.pow(u, parameters.exponent) / 20);
+    return gain * (tail > 0 && t > 1 - tail ? 1 - smooth((t - (1 - tail)) / tail) : 1);
+  }
   let depth: number;
   if (mode === 'steady') depth = t;
   else if (mode === 'companion') {
@@ -50,15 +93,15 @@ export function sleepGain(mode: SleepMode, progress: number): number {
   return gain * (t > 0.98 ? 1 - smooth((t - 0.98) / 0.02) : 1);
 }
 /** Shared coordinates keep the moving marker exactly on the plotted dB curve. */
-export function sleepCurvePoint(mode: SleepMode, progress: number) {
+export function sleepCurvePoint(mode: SleepMode, progress: number, custom?: SleepCustomParameters) {
   const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
-  const gain = sleepGain(mode, t);
+  const gain = sleepGain(mode, t, custom);
   const height = gain <= 0 ? 0 : Math.max(0, 1 + 20 * Math.log10(gain) / 60);
   return { x: 180 * t, y: Number((38 - 34 * height).toFixed(2)) };
 }
-export function sleepCurvePath(mode: SleepMode): string {
+export function sleepCurvePath(mode: SleepMode, custom?: SleepCustomParameters): string {
   return Array.from({ length: 61 }, (_, i) => {
-    const point = sleepCurvePoint(mode, i / 60);
+    const point = sleepCurvePoint(mode, i / 60, custom);
     return `${i ? 'L' : 'M'}${point.x},${point.y}`;
   }).join(' ');
 }
@@ -123,10 +166,14 @@ export function sleepProgress(totalMs: number, remainingSeconds: number): number
   if (!Number.isFinite(totalMs) || totalMs <= 0 || !Number.isFinite(remainingSeconds)) return 0;
   return Math.max(0, Math.min(1, (totalMs - remainingSeconds * 1000) / totalMs));
 }
-export function sleepStage(mode: SleepMode, progress: number): string {
+export function sleepStage(mode: SleepMode, progress: number, custom?: SleepCustomParameters): string {
   const t = Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : 0;
   if (t >= 1) return '已结束';
   if (mode === 'off') return '保持音量';
+  if (mode === 'custom') {
+    const { hold, tail } = sleepCustomWindow(custom);
+    return t < hold ? '保持音量' : tail > 0 && t >= 1 - tail ? '归零尾段' : tail === 0 && t >= 0.96 ? '即将切断' : '自定义渐弱';
+  }
   if (mode === 'late' && t < 2 / 3) return '保持音量';
   // Cut modes announce the jump instead of the whisper tail.
   if (mode === 'cliff') return t >= 0.94 ? '即将切断' : t < 0.55 ? '缓慢下降' : '加速下降';

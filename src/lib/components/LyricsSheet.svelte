@@ -1,23 +1,29 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import Sheet from './Sheet.svelte';
   import { player, getAudio } from '$lib/player.svelte.ts';
   import { hasLyrics, lyricDisplayIndexAt, sameTimeGroupBounds } from '$lib/lyrics';
+  import { createLyricsFollow } from '$lib/lyrics-follow';
   import { dateCard } from '$lib/types';
   import { LocateFixed } from 'lucide-svelte';
 
   /** 统一行高（px）：偏移量按它算，避免测量每行 */
   const LINE_H = 44;
-  /** 手动滚动停止后自动恢复跟随的等待（ms；owner 选定 3 秒） */
-  const RESUME_MS = 3000;
 
   let boxEl = $state<HTMLDivElement>();
   let boxH = $state(0);
   let posAudio = $state(0);
   let follow = $state(true);
+  let autoCenter = $state(true);
 
-  /** 程序平滑滚动期间，屏蔽 scroll 事件里的「用户滚动」判定 */
-  let suppressUntil = 0;
-  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 跟随状态机（issue #27）：手势中不回中；持续手动 ⇒ 持久手动，只能显式恢复 */
+  const followState = createLyricsFollow({
+    onChange: (s) => {
+      follow = s.following;
+      autoCenter = s.autoCenter;
+    },
+  });
+  onDestroy(() => followState.destroy());
 
   const clock = (epoch: number) =>
     new Date(epoch * 1000).toLocaleTimeString('zh-CN', {
@@ -50,7 +56,7 @@
   $effect(() => {
     void clip?.file;
     posAudio = 0;
-    follow = true;
+    followState.resume();
   });
 
   // 打开时按 250ms 读一次本地音频进度（页面别处已有全局监听，不重复挂）
@@ -66,53 +72,56 @@
 
   // 打开面板 = 回到跟随（每次打开都先看当前行）
   $effect(() => {
-    if (player.lyricsOpen) follow = true;
+    if (player.lyricsOpen) followState.resume();
   });
 
   // 跟随：当前行变化 / 恢复跟随 / 容器尺寸变化 → 滚动把当前行摆在中央。
   // 顶部占位已是半个视口高，因此 scrollTop = idx*LINE_H 即居中；开面板/切歌瞬移，行进平滑。
   let lastCenterKey = '';
   $effect(() => {
-    if (!follow || boxH <= 0 || !player.track || !boxEl) return;
+    // 手势进行中或手动模式下绝不自动居中（手指停住、行变化都不行）
+    if (!autoCenter || boxH <= 0 || !player.track || !boxEl) return;
     const key = (clip?.file ?? '') + ':' + String(player.lyricsOpen);
     const instant = key !== lastCenterKey;
     lastCenterKey = key;
     const max = boxEl.scrollHeight - boxEl.clientHeight;
     const target = Math.max(0, Math.min(max, activeIdx * LINE_H));
-    suppressUntil = Date.now() + (instant ? 200 : 600);
     boxEl.scrollTo({ top: target, behavior: instant ? 'auto' : 'smooth' });
   });
 
-  function armAutoResume() {
-    if (idleTimer) clearTimeout(idleTimer);
-    idleTimer = setTimeout(() => (follow = true), RESUME_MS);
-  }
-
-  function markUserScroll() {
-    if (Date.now() < suppressUntil) return;
-    if (follow) follow = false; // 当前行仍高亮，只是不再自动居中
-    armAutoResume();
-  }
-
   function onWheel(e: WheelEvent) {
     if (!e.deltaY) return;
-    markUserScroll();
+    followState.noteManualScroll();
   }
 
   function onTouchStart() {
-    markUserScroll();
+    followState.beginGesture();
   }
 
-  function onPointerDown(e: PointerEvent) {
-    // 鼠标拖滚动条；行点击会在 click 里立即恢复跟随，不受影响
-    if (e.pointerType === 'mouse') markUserScroll();
+  // 触屏滚动开始后浏览器会接管手势（pointercancel 先到），手指仍在移动：
+  // 用 touchmove 续上同一轮手动控制，避免拖动途中空闲超时把面板拽回去。
+  function onTouchMove() {
+    followState.noteManualScroll();
+  }
+
+  function onTouchEnd() {
+    followState.endGesture();
+  }
+
+  function onPointerDown() {
+    // 触屏按下 / 鼠标拖滚动条：手指或按键离开才算手势结束
+    followState.beginGesture();
+  }
+
+  function onPointerUp() {
+    followState.endGesture();
   }
 
   function seekLine(i: number) {
     const a = getAudio();
     a.currentTime = lines[i]?.t ?? 0;
     posAudio = a.currentTime;
-    follow = true; // 点行 = 跳这句并立即回跟
+    followState.resume(); // 点行 = 跳这句并立即回跟
   }
 </script>
 
@@ -136,7 +145,12 @@
           tabindex="-1"
           onwheel={onWheel}
           ontouchstart={onTouchStart}
+          ontouchmove={onTouchMove}
+          ontouchend={onTouchEnd}
+          ontouchcancel={onTouchEnd}
           onpointerdown={onPointerDown}
+          onpointerup={onPointerUp}
+          onpointercancel={onPointerUp}
         >
           <div
             style:padding-top="{Math.max(0, (boxH - LINE_H) / 2)}px"
@@ -157,7 +171,7 @@
         {#if !follow}
           <button
             class="absolute right-4 bottom-4 flex items-center gap-1 rounded-full border border-base-300 bg-base-100/90 px-3 py-1.5 text-xs shadow-md transition hover:border-accent"
-            onclick={() => (follow = true)}
+            onclick={() => followState.resume()}
           >
             <LocateFixed class="h-3.5 w-3.5" /> 回到当前
           </button>

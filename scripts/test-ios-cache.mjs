@@ -27,6 +27,7 @@ const swifts = [
   'AnyunCacheSchemeHandler.swift',
   'AnyunCachePlugin.swift',
   'AnyunBridgeViewController.swift',
+  'AnyunPlaybackCache.swift',
 ];
 const tsSource = fs.readFileSync(path.join(root, 'src/lib/native-cache.ts'), 'utf8');
 const pbx = fs.readFileSync(path.join(root, 'ios/App/App.xcodeproj/project.pbxproj'), 'utf8');
@@ -48,6 +49,10 @@ const core = source['AnyunCacheConstants.swift'];
 const plugin = source['AnyunCachePlugin.swift'];
 const handler = source['AnyunCacheSchemeHandler.swift'];
 const bridge = source['AnyunBridgeViewController.swift'];
+const disk = source['AnyunDiskCache.swift'];
+const network = source['AnyunCacheNetwork.swift'];
+const lease = source['AnyunPlaybackCache.swift'];
+const playback = fs.readFileSync(path.join(appDir, 'NativePlayback.swift'), 'utf8');
 
 // —— 1. 文件与免责标记 ——
 for (const name of swifts) {
@@ -74,7 +79,7 @@ ok(core.includes('policyDefaultsKey = "anyun.cache.policy.v1"'), '策略持久�
 
 // 方法名：TS 列表 ⇄ Swift CAPPluginMethod(name:) 双向覆盖
 const tsMethods = [...tsSource.matchAll(/'([a-zA-Z]+)'/g)].map((m) => m[1]);
-const declared = ['configure', 'stats', 'clear', 'setPolicy', 'fetchJSON'];
+const declared = ['configure', 'stats', 'clear', 'setPolicy', 'fetchJSON', 'mediaStatus'];
 const swiftMethods = [...plugin.matchAll(/CAPPluginMethod\(name: "([a-zA-Z]+)"/g)].map((m) => m[1]);
 eq([...swiftMethods].sort().join(','), [...declared].sort().join(','), 'Swift 暴露的方法集合与契约一致');
 for (const name of declared) {
@@ -128,10 +133,44 @@ ok(handler.includes('"Accept-Ranges"'), '声明 Accept-Ranges');
 ok(handler.includes('mediaRevalidateSeconds'), '音频 revalidate 使用策略窗口');
 ok(plugin.includes('"stale"') && plugin.includes('"offline"'), 'fetchJSON 返回 stale/offline 语义');
 ok(plugin.includes('"UNAVAILABLE"') && plugin.includes('离线且无缓存'), '无缓存离线时明确 reject');
+// JSON 200/304 are fenced inside the disk actor, for foreground fetch and background SWR.
+ok(plugin.includes('beginJSONRequest(key: key)') && plugin.includes('self.revalidateJSON(request: request, url: url, entry: entry)'), 'JSON 请求在网络前取得 actor ownership，SWR 沿用该 token');
+eq((plugin.match(/storeJSON\(\s*request: request,/g) ?? []).length, 2, '前台/后台 JSON 写入均携带 token');
+eq((plugin.match(/disk\.revalidateJSON\(request: request\)/g) ?? []).length, 2, '前台/后台 304 均由 actor 校验');
+ok(!plugin.includes('markRevalidated(') && !disk.includes('func storeJSON(key:'), 'JSON 插件无未保护写回/304 捷径');
+ok(disk.includes('request.epoch == jsonEpoch') && disk.includes('jsonRequests[request.key] == request.id'), 'JSON epoch 与最新请求 UUID 双重校验');
 ok(source['AnyunDiskCache.swift'].includes('CryptoKit') && source['AnyunDiskCache.swift'].includes('SHA256'), '缓存键是 SHA-256');
 ok(source['AnyunDiskCache.swift'].includes('maxEntries') && source['AnyunDiskCache.swift'].includes('lastAccess'), 'LRU 淘汰按 lastAccess/maxEntries');
 ok(source['AnyunDiskCache.swift'].includes('.atomic'), '索引原子写');
 ok(/clear\(scope/.test(source['AnyunDiskCache.swift']), 'clear 支持 scope');
+
+// —— 4b. AVPlayer 真正命中磁盘（2026-11-21 接通）——
+// 缓存键永远是队列里的稳定 https 源地址；签名目标不落盘、不进日志、不进索引。
+ok(playback.includes('AnyunCacheKey.hash(url.absoluteString)'), 'AVPlayer 命中键源自稳定源 URL');
+ok(playback.includes('localPlaybackURL(forKey: key)'), 'loadCurrent 优先本地完整文件');
+ok(disk.includes('if !leasesSwept { releasePlaybackLeases(); leasesSwept = true }'), 'actor 首次命中前清扫残留租约（不与主线程文件 IO 竞态）');
+ok(!playback.includes('expiresAt'), '签名目标/过期时间不在 NativePlayback 出现（不持久化）');
+// 租约层：硬链接 + 正确扩展名（Ogg Opus）+ 数量有界 + 不把残片当命中。
+ok(lease.includes('linkItem(') && disk.includes('static let playbackExtension = "ogg"'), '播放租约：硬链接 + .ogg 扩展名（Opus in Ogg）');
+ok(lease.includes('fileExists(atPath: media.path)') && lease.includes('Darwin.rename(staged.path, link.path) == 0'), '先建硬链接再原子替换；失败保留当前租约，无完整 bin 不伪造命中');
+ok(lease.includes('prefix(2)'), '租约数量有界（≤ 2，不无限副本）');
+// 磁盘层：超限/取消/epoch 有界语义。
+ok(disk.includes('AnyunDownloadOutcome') && disk.includes('case transient'), '单曲>容量：不落盘，transient 内存服务');
+ok(disk.includes('skippedKeys.contains(key)') && disk.includes('AnyunCacheOversizeError.oversize'), '超限后不再反复下载');
+ok(disk.includes('epoch += 1') && disk.includes('.task.cancel()'), 'clear 推进 epoch 并取消在途，不复活');
+ok(disk.includes('releaseDataSlot') && disk.includes('releaseFileSlot'), '槽位由 worker 按 id 释放（旧任务不释放新槽）');
+const sharedDataDownload = disk.slice(disk.indexOf('func downloadOnce('), disk.indexOf('private func commitData('));
+ok(!/onCancel:[\s\S]{0,80}worker\.cancel/.test(sharedDataDownload), 'scheme 共享 data worker：订阅者取消不杀其他订阅（旧缺陷已修）');
+ok(disk.includes('onCancel: { worker.cancel() }'), '当前曲 SWR 私有订阅取消会终止文件 worker');
+ok(disk.includes('requireExisting: true') && handler.includes('revalidateMedia(key: key, original: entry, response: response)'), '后台 revalidate 不复活已清条目');
+ok(disk.includes('actual == file.bytes') && disk.includes('incompleteFile'), '提交前校验真实字节数，残片不当完整');
+ok(network.includes('func downloadFile(') && network.includes('expectedContentLength'), '流式下载有 Content-Length 预检');
+ok(network.includes('bytes > maxBytes') && network.includes('withTaskCancellationHandler'), '流式下载超限中断 + Task 取消有界');
+ok(playback.includes('.part")'), '预取临时文件路径存在且位于 incoming 隔离区');
+ok(playback.includes('UUID().uuidString'), '预取临时路径按订阅唯一（旧 worker 收尾不撞新 worker）');
+// 离线与恢复：未缓存时流式首播不退化；下载完成绝不替换当前 item。
+ok(playback.includes('离线且未缓存，无法播放'), '离线 cache miss 有中文说明');
+ok(handler.includes('case .transient'), 'scheme 未命中路径处理 transient 载荷');
 
 // —— 5. 不留真实地址/凭据 ——
 const urlish = [...all.matchAll(/https?:\/\/[^\s"'<>)]+/g)].map((m) => m[0]);

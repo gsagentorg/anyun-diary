@@ -10,10 +10,9 @@ Two jobs, both on pull requests targeting `feat/public-v2` / `main`, pushes to
 Every step is self-contained: browsers, S3 and network are replaced by fixtures and
 mocks, so no secrets or services are needed.
 
-**Known-red dependency:** `test:architecture` currently fails because `package.json`
-still declares the orphaned `upload-blob` scripts. That cleanup is PR #42
-(`issue-9-orphan-scripts`). The gate is intentionally left untouched; this job turns
-green once #42 is merged and the branch is rebased.
+**Architecture gate:** `test:architecture` rejects the orphaned `upload-blob`
+scripts; PR #42 removed them from `package.json`, so this job is expected green
+on top of current `main`.
 
 ## `macos` — `macos-latest`
 
@@ -22,9 +21,14 @@ execute Swift on macOS. On Linux they print `SKIP: ... UNVERIFIED` and check sou
 contracts only. `--require-swift` makes a missing toolchain exit non-zero, so this job
 is a real release gate rather than a silent pass.
 
-Steps: `npm ci` → `xcrun --find swiftc` → `npm run check` →
+Steps: `npm ci` → `xcrun --find swiftc` → pin `SDKROOT` (`xcrun --sdk macosx
+--show-sdk-path`) → `npm run check` →
 `npm run test:native-offline:required` → `npm run test:runtime-lyrics:required` →
 the orphaned `scripts/test-native-retry.swift` compiled and run directly.
+
+`SDKROOT` is exported to `$GITHUB_ENV` because the wrappers spawn `swiftc`
+directly without `-sdk`; without it the driver can choose a mismatched target
+(`arm64-apple-macosx26.0`) and fail to load the standard library.
 
 What the required variants actually execute:
 

@@ -38,10 +38,9 @@ jobs:
       - run: npm ci
       - name: svelte-check
         run: npm run check
-      # KNOWN-RED until PR #42 (branch issue-9-orphan-scripts) lands: `test:architecture`
-      # fails because package.json still lists the orphaned upload-blob scripts.
-      # The gate itself is correct and stays untouched here; this job goes green once
-      # #42 is merged and this branch is rebased on top of it.
+      # `test:architecture` used to fail while package.json still listed the
+      # orphaned upload-blob scripts; PR #42 removed them, so the full chain is
+      # expected green on top of current main (this branch is rebased on it).
       - name: Full test chain (npm test)
         run: npm test
 
@@ -57,6 +56,12 @@ jobs:
       - run: npm ci
       - name: Swift toolchain available (release gate)
         run: xcrun --find swiftc
+      # swiftc resolves its default SDK through SDKROOT; without it the driver can
+      # pick a mismatched target (arm64-apple-macosx26.0) and fail with
+      # "unable to load standard library for target". Pin the actual macOS SDK for
+      # every following Swift compile/run step.
+      - name: Pin macOS SDK for Swift tests
+        run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
       - name: svelte-check
         run: npm run check
       # test-native-offline.mjs --require-swift:

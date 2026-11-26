@@ -535,15 +535,18 @@ export function moveTrack(from: number, to: number) {
  * 媒体会话（metadata/playbackState）、随机历史与会话快照一并清掉。
  */
 export function clearQueue() {
+  const native = usesNativeAudio();
   const a = getAudio();
   a.pause();
-  try {
-    a.currentTime = 0;
-  } catch {
-    /* 某些 UA 在无 src 时拒绝写 currentTime */
+  if (!native) {
+    try {
+      a.currentTime = 0;
+    } catch {
+      /* 某些 UA 在无 src 时拒绝写 currentTime */
+    }
+    a.removeAttribute('src');
+    a.load();
   }
-  a.removeAttribute('src');
-  a.load();
 
   player.playlist = [];
   player.pos = -1;
@@ -580,14 +583,22 @@ export function clearQueue() {
   // 显式清空必须无条件送达：常规 syncNative 的守卫（bootstrap 未完成 / 队列未映射 /
   // 正在 applyNativeState）任一为假，空队列就到不了原生，原生继续持有曲目，
   // 下一次 publish 会把队列重新带回 UI（真机 #25 症状：只暂停+归零，没清掉）。
-  flushNativeClear();
+  if (native) flushNativeClear();
 }
 
-/** 显式清空专用：绕过常规同步守卫，直接让原生收到空队列（adapter 按 ready 串行，安全）。 */
+/**
+ * 显式清空专用：payload 在此刻（Web 状态已清空）冻结后交给 adapter。
+ * 不能走 sync() 的「派发时再读状态」——pause/seek 的旧快照可能先把队列写回 UI，
+ * 于是派发时读到的又是满队列，空 configure 永远发不出去。
+ */
 function flushNativeClear() {
-  if (!usesNativeAudio()) return;
   ensureAudio();
-  void nativeAudio?.sync().catch(() => {});
+  if (!nativeAudio) return;
+  const config = nativeConfig();
+  void nativeAudio.clear(config).then(
+    () => console.info('[clear] native queue cleared'),
+    error => console.warn('[clear] native clear failed', error),
+  );
 }
 
 /** 切到随机/关闭随机（保留为旧调用点的薄封装；UI 已改用三态循环） */

@@ -6,6 +6,8 @@ const swift = readFileSync(new URL('../ios/App/App/NativePlayback.swift', import
 const restore = swift.slice(swift.indexOf('private func restoredQueue('), swift.indexOf('private func valid('));
 // issue #25 真机：清空必须让原生真的丢掉曲目——空队列不能依赖 id 比较就跳过 loadCurrent。
 assert.ok(/if self\.queue\.isEmpty \{\s*self\.loadCurrent\(autoplay: false\)\s*\}/.test(swift), 'an empty configure always stops and detaches the native item (explicit clear)');
+assert.ok(/let rawQueue = call\.getArray\("queue"\) \?\? \[\]/.test(swift), 'an empty queue is decoded as an explicit clear instead of being rejected by the per-item guard');
+assert.ok(swift.includes('if rawQueue.isEmpty {'), 'empty queues bypass per-item URL validation');
 assert.ok(restore.indexOf('saved["queueJSON"]') < restore.indexOf('saved["queue"]'), 'valid JSON queue wins over legacy queue');
 assert.ok(restore.includes('JSONSerialization.jsonObject(with: data)') && restore.includes('valid(items) {'));
 assert.ok(restore.includes('if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }'), 'invalid/missing JSON falls back without remapping legacy identity or metadata');
@@ -148,6 +150,38 @@ console.log('native audio: deferred sync, native recovery, foreground reconcilia
 receive({ ...resumed, playing: false, position: 0 });
 assert.equal(audio.currentTime, 85, 'duplicate event/command response is applied only once');
 assert.equal(audio.paused, false);
+
+// —— issue #25 真机回归：显式清空必须送出「调用时冻结」的空队列；清空前的在途快照
+//    （pause/seek 的 publish）不得先把队列写回 UI，再被派发时重读后原样送回原生。 ——
+{
+  const base = { shuffle: false, skipSame: true, history: [], redo: [], played: [], rate: 1, sleepRevision: '', sleepUntil: null, sleepStarted: null, sleepMode: 'off', afterTrack: false };
+  let nativeState = { ...base, queue: [queue[0]], pos: 0, revision: 'r0', sequence: 5, position: 7, duration: 120, playing: true, loading: false, error: '', sleepFired: false };
+  const sent = []; const applied = []; let push;
+  const clearDriver = {
+    async addListener(_, fn) { push = fn; return { remove: async () => {} }; },
+    async getState() { return { ...nativeState }; },
+    async configure(options) { sent.push(structuredClone(options)); nativeState = { ...nativeState, ...options, sequence: nativeState.sequence + 1 }; return { ...nativeState }; },
+    async command({ action }) { if (action === 'pause') nativeState = { ...nativeState, playing: false, sequence: nativeState.sequence + 1 }; return { ...nativeState }; }
+  };
+  let liveConfig = { ...base, queue: [queue[0]], pos: 0 };
+  const cleared = new NativeAudio(() => structuredClone(liveConfig), s => applied.push(s), () => {}, clearDriver);
+  await cleared.ready;
+  const clearing = cleared.clear({ ...base, queue: [], pos: -1 });
+  // Web 状态被旧快照回填：adapter 仍必须发调用时冻结的空队列，而不是派发时重读的满队列。
+  liveConfig = { ...base, queue: [queue[0]], pos: 0 };
+  const appliedBefore = applied.length;
+  push({ ...nativeState, revision: 'r0', queue: [queue[0]], pos: 0, playing: false, position: 0, sequence: 99 });
+  assert.equal(applied.length, appliedBefore, 'pre-clear revisions cannot repopulate the UI while a clear is pending');
+  await clearing;
+  assert.equal(sent.at(-1).queue.length, 0, 'explicit clear sends the frozen empty queue, not a re-read snapshot');
+  assert.equal(sent.at(-1).replace, true, 'explicit clear asks native to replace the queue');
+  assert.equal(applied.at(-1).queue.length, 0, 'the cleared snapshot is applied after the empty configure');
+  assert.equal(cleared.src, '', 'no source remains after an explicit clear');
+  push({ ...nativeState, revision: 'r0', queue: [queue[0]], pos: 0, sequence: 200 });
+  assert.equal(applied.at(-1).queue.length, 0, 'late pre-clear snapshots still cannot resurrect the queue');
+  cleared.dispose();
+  console.log('native audio: explicit clear freezes an empty queue and drops pre-clear snapshots passed');
+}
 
 // —— AVPlayer 磁盘缓存接线：源码契约（本机不编译 Swift；行为断言见 scripts/test-native-cache.swift，
 //    编译与真机验证仍待 Xcode/iPhone）——

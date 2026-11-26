@@ -17,6 +17,7 @@ let nativeMode=false; let nativeState; let nativeUpdate; const nativeSyncs=[]; c
 class NativeStub extends EventTarget {
   constructor(config,update){super();this.config=config;nativeUpdate=update;this.paused=false;this.currentTime=19;this.ready=Promise.resolve().then(()=>{update(nativeState);return nativeState;});}
   refresh(){return Promise.resolve();} sync(){nativeSyncs.push(structuredClone(this.config()));return Promise.resolve();}
+  clear(cfg){nativeSyncs.push(structuredClone(cfg));return Promise.resolve();}
   command(action){nativeCommands.push(action);return Promise.resolve();}
   // Media-element surface used by clearQueue/stopCurrent (the real adapter has the same three).
   pause(){this.paused=true;nativeCommands.push('pause');} load(){} removeAttribute(){}

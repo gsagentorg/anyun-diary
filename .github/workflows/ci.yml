@@ -1,0 +1,86 @@
+name: CI
+
+# Owner ruling ⑥: the iOS `--require-swift` variants must run in CI.
+#
+# Those wrappers only compile/execute Swift on macOS; on Linux they print
+# "SKIP: ... UNVERIFIED" and merely re-check source contracts. `--require-swift`
+# turns "no Swift toolchain" into a non-zero exit, so the macOS job below is the
+# only place the Swift regression set is ACTUALLY compiled and executed -- and it
+# fails loudly instead of passing silently if the toolchain disappears.
+#
+# All tests are self-contained fixtures/mocks; no secrets are required or used.
+
+on:
+  pull_request:
+    branches: [feat/public-v2, main]
+  push:
+    branches: [feat/public-v2]
+  workflow_dispatch:
+
+# Superseded pushes to the same ref cancel their in-flight run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: Linux · check + full test chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - name: svelte-check
+        run: npm run check
+      # `test:architecture` used to fail while package.json still listed the
+      # orphaned upload-blob scripts; PR #42 removed them, so the full chain is
+      # expected green on top of current main (this branch is rebased on it).
+      - name: Full test chain (npm test)
+        run: npm test
+
+  macos:
+    name: macOS · Swift regression (--require-swift)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - name: Swift toolchain available (release gate)
+        run: xcrun --find swiftc
+      # swiftc resolves its default SDK through SDKROOT; without it the driver can
+      # pick a mismatched target (arm64-apple-macosx26.0) and fail with
+      # "unable to load standard library for target". Pin the actual macOS SDK for
+      # every following Swift compile/run step.
+      - name: Pin macOS SDK for Swift tests
+        run: echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+      - name: svelte-check
+        run: npm run check
+      # test-native-offline.mjs --require-swift:
+      #   source contracts -> spawns test-native-sleep.mjs --require-swift
+      #   (vite-node fixtures + NativeSleep.swift + test-native-sleep.swift)
+      #   -> compiles AnyunCacheConstants/Network/DiskCache/PlaybackCache/
+      #      SchemeHandler + test-native-cache.swift and runs it.
+      - name: Native cache/offline Swift behavior
+        run: npm run test:native-offline:required
+      # test-runtime-lyrics.mjs --require-swift: cleanup contracts, then compiles
+      # NativeLyrics.swift + test-native-lyrics.swift and runs it.
+      - name: Runtime lyrics Swift behavior
+        run: npm run test:runtime-lyrics:required
+      # scripts/test-native-retry.swift is currently orphaned: no npm script or
+      # wrapper invokes it. Compile and run it explicitly so the retry-table
+      # regression actually executes instead of rotting unrun.
+      - name: Native retry table (orphaned Swift test, run directly)
+        run: |
+          set -euo pipefail
+          out="$(mktemp -d)"
+          swiftc ios/App/App/NativeRetry.swift scripts/test-native-retry.swift -o "$out/native-retry-tests"
+          "$out/native-retry-tests"

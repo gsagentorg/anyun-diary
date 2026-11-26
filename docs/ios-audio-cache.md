@@ -10,6 +10,10 @@
 所有原生缓存键 = 稳定源 URL 的 SHA-256；307 的签名目标仅存在于单次 URLSession/AVPlayer
 传输，不进索引、队列、日志或 UserDefaults。
 
+准入（#33）：`configure` 与冷启动恢复都只接受稳定地址——绝对 https、裸路径、无
+query/fragment/userinfo。带签名或查询串的条目直接丢弃、索引/历史重映射并留一条
+`admission-drop` 诊断，不恢复、不缓存，也不作为缓存键；剩余队列照常播放。
+
 - loadCurrent 异步询问磁盘 actor：校验索引、实际长度、Ogg/Opus 页结构/CRC/结束页，
   命中后建立 playback/<key>.ogg **硬链接**，再把本地 URL 交给 AVPlayer。
 - 未命中立即安装稳定 HTTPS AVPlayerItem，不等待全曲下载后才开始首播。

@@ -634,10 +634,15 @@
 {#if player.track}
   {@const t = player.track}
   <div class="fixed inset-x-0 bottom-0 z-40 border-t border-base-300 bg-base-100/95 backdrop-blur">
-    {#if player.error}
+    {#if player.error || player.queueNotice}
       <div class="absolute inset-x-0 bottom-full border-t border-base-300 bg-base-100/95">
         <div class="mx-auto min-w-0 max-w-6xl px-3 py-1.5 sm:px-4">
-          <p class="line-clamp-2 break-all text-xs text-warning" role="alert" title={player.error}>{player.error}</p>
+          {#if player.error}
+            <p class="line-clamp-2 break-all text-xs text-warning" role="alert" title={player.error}>{player.error}</p>
+          {/if}
+          {#if player.queueNotice}
+            <p class="line-clamp-2 break-all text-xs text-base-content/70" role="status" title={player.queueNotice}>{player.queueNotice}</p>
+          {/if}
         </div>
       </div>
     {/if}

@@ -3,24 +3,49 @@ import { readFileSync } from 'node:fs';
 import { NativeAudio } from '../src/lib/native-audio.ts';
 // Source assertions only: this runner does not compile Swift or exercise iOS SDKs.
 const swift = readFileSync(new URL('../ios/App/App/NativePlayback.swift', import.meta.url), 'utf8');
-const restore = swift.slice(swift.indexOf('private func restoredQueue('), swift.indexOf('private func valid('));
+const restoreStart = swift.indexOf('private func restoredQueue(');
+const restore = swift.slice(restoreStart, swift.indexOf('@objc func configure'));
 // issue #25 真机：清空必须让原生真的丢掉曲目——空队列不能依赖 id 比较就跳过 loadCurrent。
 assert.ok(/if self\.queue\.isEmpty \{\s*self\.loadCurrent\(autoplay: false\)\s*\}/.test(swift), 'an empty configure always stops and detaches the native item (explicit clear)');
 assert.ok(/let rawQueue = call\.getArray\("queue"\) \?\? \[\]/.test(swift), 'an empty queue is decoded as an explicit clear instead of being rejected by the per-item guard');
 assert.ok(swift.includes('if rawQueue.isEmpty {'), 'empty queues bypass per-item URL validation');
 assert.ok(restore.indexOf('saved["queueJSON"]') < restore.indexOf('saved["queue"]'), 'valid JSON queue wins over legacy queue');
-assert.ok(restore.includes('JSONSerialization.jsonObject(with: data)') && restore.includes('valid(items) {'));
-assert.ok(restore.includes('if let items = saved["queue"] as? [[String: Any]], valid(items) { return items }'), 'invalid/missing JSON falls back without remapping legacy identity or metadata');
-const validation = swift.slice(swift.indexOf('private func valid('), swift.indexOf('@objc func configure'));
+assert.ok(restore.includes('JSONSerialization.jsonObject(with: data)') && restore.includes('return admit(items)'));
+assert.ok(restore.includes('if let items = saved["queue"] as? [[String: Any]] { return admit(items) }'), 'legacy queue falls back without remapping identity or metadata and is admitted by the same rule');
+const validation = swift.slice(swift.indexOf('private func restoredQueue('), swift.indexOf('@objc func configure'));
 for (const field of ['monthId', '["audio"]', 'startAt']) assert.ok(!validation.includes(field), 'legacy queues need no invented audio metadata or date');
-assert.ok(swift.includes('let items = restoredQueue(saved)'));
+const restoreCall = swift.slice(swift.indexOf('if let saved = UserDefaults.standard.dictionary(forKey: savedKey)'), restoreStart);
+assert.ok(restoreCall.includes('let admitted = restoredQueue(saved)'));
+assert.ok(restoreCall.includes('pos = admitted.indexes[') && restoreCall.includes('history = remap(') && restoreCall.includes('redo = remap('), 'restored pos/history/redo are index-remapped after admission');
+assert.ok(!swift.includes('private func valid('), 'queue admission replaces the all-or-nothing shape check');
 for (const key of ['pos', 'rate', 'shuffle', 'skipSame', 'history', 'redo', 'played', 'sleepRevision', 'sleepUntil', 'sleepStarted', 'sleepMode', 'afterTrack', 'position']) {
-  assert.ok(swift.slice(swift.indexOf('let items = restoredQueue(saved)'), swift.indexOf('private func restoredQueue(')).includes('saved["' + key + '"]'), 'restore retains ' + key);
+  assert.ok(restoreCall.includes('saved["' + key + '"]'), 'restore retains ' + key);
 }
 const persist = swift.slice(swift.indexOf('private func persist()'));
 assert.ok(persist.includes('guard let data = try? JSONSerialization.data(withJSONObject: queue) else { return }'));
 assert.ok(persist.indexOf('guard let data') < persist.indexOf('saved.removeValue(forKey: "queue")'));
 assert.ok(persist.indexOf('saved["queueJSON"] = data') < persist.indexOf('UserDefaults.standard.set'), 'only persist a completely encoded migration');
+
+// —— issue #33：原生队列准入（一次性签名/带查询串地址丢弃，稳定地址照常播放）——
+const admission = swift.slice(swift.indexOf('private struct AdmittedQueue'), swift.indexOf('@objc func configure'));
+for (const rule of ['url.scheme?.lowercased() == "https"', 'url.host != nil', 'url.user == nil', 'url.password == nil', 'url.query == nil', 'url.fragment == nil', 'url.path.count > 1']) {
+  assert.ok(admission.includes(rule), 'stable audio address rule present: ' + rule);
+}
+assert.ok(admission.includes('private struct AdmittedQueue') && admission.includes('let indexes: [Int: Int]'), 'admission returns kept entries plus an index remap');
+assert.ok(/guard item\["id"\] is String, item\["key"\] is String, item\["title"\] is String,\s*Self\.isStableAudioAddress\(item\["url"\] as\? String\) else \{ continue \}/.test(admission), 'inadmissible entries are dropped individually, not the whole queue');
+const admitBody = admission.slice(admission.indexOf('private func admit('), admission.indexOf('private func remap('));
+assert.ok((admitBody.match(/diagnostic\("/g) ?? []).length === 1, 'one aggregated diagnostic per admission, never per-item spam');
+const dropLine = admitBody.split('\n').find(line => line.includes('diagnostic('));
+assert.ok(dropLine.includes('dropped=\\(dropped) kept=\\(kept.count)') && !/url|item\[/.test(dropLine), 'drop diagnostic reports counts only, never the URL');
+assert.ok(swift.includes('admitted = self.admit(typed)') && !swift.includes('self.valid(typed)'), 'configure admits/drops per entry instead of rejecting the whole queue');
+assert.ok(swift.includes('self.admissionDropped = admitted.dropped') && swift.includes('"admissionDropped": admissionDropped'), 'snapshot exposes the dropped count for one bridge notice');
+const loadBody = swift.slice(swift.indexOf('private func loadCurrent('), swift.indexOf('private func attach('));
+assert.ok(loadBody.indexOf('Self.isStableAudioAddress(raw)') < loadBody.indexOf('AnyunCacheKey.hash(url.absoluteString)'), 'cache identity derives only from an address that passed admission; a signed target is never a key');
+const bridgeSource = readFileSync(new URL('../src/lib/native-audio.ts', import.meta.url), 'utf8');
+const playerSource = readFileSync(new URL('../src/lib/player.svelte.ts', import.meta.url), 'utf8');
+assert.ok(bridgeSource.includes('admissionDropped?: number'), 'bridge state carries the dropped count');
+assert.ok(playerSource.includes('state.admissionDropped') && playerSource.includes('已跳过 ${admittedDropped} 个一次性链接曲目'), 'web surfaces one merged notice, not one message per dropped entry');
+
 const listeners = new Map();
 globalThis.document = { hidden: false, removeEventListener() {}, addEventListener: (type, fn) => listeners.set(type, fn) };
 const fixture = id => ({ id, file:id+'.wav', opus:id+'.opus', title:id, startAt:1, duration:null, lyrics:[], monthId:'2026-01' });

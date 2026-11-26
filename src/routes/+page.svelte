@@ -238,6 +238,7 @@ $effect(()=>{void backend.generation;untrack(()=>revealed=1);});
 {:else}<button class="flex w-full items-center justify-between rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm" onclick={()=>playlistOpen=true}><span class="flex items-center gap-1.5"><ListMusic class="h-4 w-4"/> 播放列表</span><span class="text-xs opacity-60">展开</span></button>{/if}
 </div></div>
 {#if player.error&&!player.track}<p role="alert" class="text-xs text-warning">{player.error}</p>{/if}
+{#if player.queueNotice&&!player.track}<p role="status" class="text-xs opacity-70">{player.queueNotice}</p>{/if}
 {#if backend.error}<p role="alert">{backend.error} <button onclick={()=>recoverCatalog({force:true})}>重试目录</button></p>{:else if !backend.manifest}<BrowseSkeleton/>{/if}
 {#if backend.manifest}
 {#if view===2&&months.length&&!Object.keys(backend.summaries).length}

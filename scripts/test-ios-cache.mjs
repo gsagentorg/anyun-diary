@@ -147,6 +147,9 @@ ok(/clear\(scope/.test(source['AnyunDiskCache.swift']), 'clear 支持 scope');
 // —— 4b. AVPlayer 真正命中磁盘（2026-11-21 接通）——
 // 缓存键永远是队列里的稳定 https 源地址；签名目标不落盘、不进日志、不进索引。
 ok(playback.includes('AnyunCacheKey.hash(url.absoluteString)'), 'AVPlayer 命中键源自稳定源 URL');
+ok(playback.includes('private static func isStableAudioAddress(') && playback.includes('url.query == nil') && playback.includes('url.fragment == nil'), '队列准入拒绝带查询串/签名的地址（#33）');
+ok(playback.indexOf('Self.isStableAudioAddress(raw)') < playback.indexOf('AnyunCacheKey.hash(url.absoluteString)'), '准入先于缓存键推导：签名目标永不成为键（#33）');
+ok(playback.includes('admitted = self.admit(typed)') && playback.includes('admissionDropped'), 'configure 逐条准入并上报丢弃数（#33）');
 ok(playback.includes('localPlaybackURL(forKey: key)'), 'loadCurrent 优先本地完整文件');
 ok(disk.includes('if !leasesSwept { releasePlaybackLeases(); leasesSwept = true }'), 'actor 首次命中前清扫残留租约（不与主线程文件 IO 竞态）');
 ok(!playback.includes('expiresAt'), '签名目标/过期时间不在 NativePlayback 出现（不持久化）');

@@ -40,6 +40,11 @@ function nativeConfig() {
 }
 function applyNativeState(state: NativeState) {
   sleep.supportsCustomSleep = state.supportsCustomSleep === true;
+  // #33 准入：原生已丢弃一次性链接条目（快照带条数）。只给一条合并提示，不逐条报告。
+  const admittedDropped = Number(state.admissionDropped ?? 0);
+  if (admittedDropped > 0) {
+    player.queueNotice = `已跳过 ${admittedDropped} 个一次性链接曲目：签名或带查询串的地址无法恢复播放，请重新选播。`;
+  }
   if (!state.queue.length && player.playlist.length) return;
   applyingNativeState = true;
   try {
@@ -97,6 +102,8 @@ function syncNative() {
 /** 全局单例：当前播放项 + 加载态 + 当前播放列表 */
 export const player = $state<{
   error: string;
+  /** 队列准入提示（#33）：一次性签名/带查询串条目被丢弃时的单条说明，不逐条刷屏。 */
+  queueNotice: string;
   track: Track | null;
   loading: boolean;
   playing: boolean; // 真实播放状态（由 audio 事件驱动 + 看门狗纠偏）
@@ -115,6 +122,7 @@ export const player = $state<{
   lyricsOpen: boolean; // 歌词面板开关
 }>({
   error: '',
+  queueNotice: '',
   track: null,
   loading: false,
   playing: false,
@@ -557,6 +565,7 @@ export function clearQueue() {
   player.playedTitles = [];
   player.shuffleRedo = [];
   player.sessionRestored = false;
+  player.queueNotice = '';
   nativeQueueMapped = true;
 
   setMediaPlaybackState('none');

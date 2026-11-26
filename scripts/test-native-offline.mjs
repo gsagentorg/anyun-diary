@@ -47,6 +47,7 @@ ok(loading.includes('Task { @MainActor') && loading.includes('await AnyunPlaybac
 ok(loading.includes('self.loadGeneration == generation') && loading.includes('!Task.isCancelled'), 'late lookup cannot attach a previous track');
 ok(loading.includes('self.wantsPlayback && !self.expired && !self.sleepState.fired'), 'late cache hit respects pause and sleep intent');
 ok(loading.includes('at: self.lastPosition'), 'seek while lookup pending is honored');
+ok(loading.includes('Self.isStableAudioAddress(raw)') && !loading.includes('url.query != nil'), 'load gate admits only stable https addresses (no signed/query targets reach cache or AVPlayer)');
 const prefetch = body(playback, 'private func startPrefetch(', 'private static func keyPrefix(');
 ok(!prefetch.includes('audio.play') && !prefetch.includes('replaceCurrentItem'), 'prefetch completion never resumes paused playback');
 ok(playback.includes('recoveryAttempts >= 8') && playback.includes('skipLocalForCurrentTrack = true'), 'local decoder failure bypasses cache and retries are finite');

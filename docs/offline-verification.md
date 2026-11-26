@@ -15,7 +15,7 @@ Status: feature-line work; not deployed and no data publication. Background-reco
 
 ## Explicit gates
 
-- npm test still stops at the pre-existing architecture assertion that forbids upload-blob references in package scripts. The same audio:upload/audio:migrate/test:blob script names are present at baseline 84491e1. This unrelated compatibility-tool policy was not removed or weakened to manufacture a green suite.
+- [Historical, resolved] npm test used to stop at the pre-existing architecture assertion that forbids upload-blob references in package scripts. The same audio:upload/audio:migrate/test:blob script names were present at baseline 84491e1. This unrelated compatibility-tool policy was not removed or weakened to manufacture a green suite. The orphaned entries were later removed from package.json (issue #9); see "Package script cleanup" below.
 - Native implementation/source review is complete, including scoped JSON clear and latest-started-request ownership for 200/304 (no stale resurrection or ABA age reset). Parent reran native bridge/cache tests (59), iOS source assertions (138) and native-offline source contracts (56). Swift execution was explicitly SKIPPED; --require-swift fails on this host rather than claiming success. Static contracts do not prove an Xcode build or iPhone playback. No macOS/Xcode toolchain is available on this host. iPhone codec/local-file playback, seek, lock-screen and long-background acceptance remain device gates.
 - Chromium testing does not establish Safari/iPhone browser behavior. Browser/OS storage may be evicted; audio not completely saved cannot play offline.
 
@@ -31,7 +31,7 @@ Use npm run test:web-offline, npm run test:catalog-offline, npm run check and np
 - Native mode reconciliation now honors the persisted repeatOne flag; a regression covers repeat-one, sequential and random snapshots.
 - Parent reruns: availability 59, runtime-lyrics cleanup/source 13, native-offline source 79, native-sleep source 12, iOS source 142; session/native bridge passed; check 0 errors/0 warnings. Source checks explicitly do not execute Swift. Required-Swift mode was observed to fail without the toolchain.
 - Fresh Node build plus the real production UI harness passed **8/8**: mode order, secondary clear including current playback, non-dot sleep-line drag and cancellation/minimum time, refresh without restarting playback, confirmed-only reload, cached-vs-uncached offline playback, cross-origin images without ACAO/crossorigin and heatmap through today. See feature-table-browser.md. Separate offline cold-reopen playback also passed.
-- Full npm test still stops at the unchanged pre-existing architecture/upload-blob policy assertion; interactions, migration 44 and queue-budget were run separately and passed. This is not a green-full-suite claim.
+- [Historical, resolved] Full npm test used to stop at the unchanged pre-existing architecture/upload-blob policy assertion; interactions, migration 44 and queue-budget were run separately and passed. This was not a green-full-suite claim at the time. After the issue #9 cleanup the assertion is satisfied; see below.
 - Custom curve editor remains an unresolved product choice, not silently abandoned. Swift/Xcode/App-target/iPhone and publication remain separate acceptance/authorization gates.
 
 ### Stable frontend re-verification after interrupted integration
@@ -41,3 +41,17 @@ The final five-component offline marking snapshot was independently checked agai
 ### Native probe review follow-up
 
 Parent reviewed the final probe increment and reran native-offline 119 source contracts, native-sleep 12 source contracts, ios-cache 142 source assertions, native-cache 59 checks and native-audio bridge tests. Transient probe IO now propagates to unknown without index invalidation; repeated integrity results use bounded, fingerprint-guarded memoization with fresh open/read checks. See native-table-closure.md for unexecuted macOS fixtures and performance boundaries. Both native-offline and runtime-lyrics required-Swift commands were observed to fail on this Linux host; there is still no native compilation/device acceptance claim.
+
+## Package script cleanup (issue #9)
+
+package.json advertised four commands whose targets are gone: `audio:upload`, `audio:migrate` and
+`test:blob` (all pointed at `scripts/upload-blob.mjs` / `scripts/test-upload-blob.mjs`) and
+`test:storage` (`scripts/test-storage.mjs`). All four scripts were deleted in 9c281cf
+("retire S3 catalog and legacy migration paths") together with `src/lib/server/s3-presign.ts`;
+nothing in src/, docs/ or README consumed the commands any more. They were removed from package.json.
+
+`test:storage` was not repointed: its only subject was the retired `s3-presign` helper. Maintained
+storage coverage is `npm run test:s3` (S3 adapter, path-style/prefix validation, publisher
+verify-after-write, legacy env resolution) and the `test-month-storage.mjs` step inside
+`npm run test:catalog`. The architecture gate (scripts/test-architecture.mjs) was left unchanged and
+now passes, because package scripts no longer mention upload-blob.

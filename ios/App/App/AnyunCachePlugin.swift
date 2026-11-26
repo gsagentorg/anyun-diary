@@ -38,6 +38,7 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
             } else if self.policyStore.loadIfPresent() == nil {
                 _ = self.policyStore.save(AnyunCachePolicy.default)
             }
+            await self.disk.enforcePolicy() // 启动即按当前预算收口，不靠下一次写入/统计
             let effective = self.policyStore.load()
             call.resolve(["policy": effective.dictionaryRepresentation])
         }
@@ -50,6 +51,7 @@ public class AnyunCachePlugin: CAPPlugin, CAPBridgedPlugin {
                 return
             }
             let effective = self.policyStore.save(requested)
+            await self.disk.enforcePolicy() // 选定上限立刻生效（缩小后立即淘汰，不等统计）
             call.resolve(["policy": effective.dictionaryRepresentation])
         }
     }

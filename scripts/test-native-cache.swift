@@ -53,6 +53,12 @@ actor Counter {
     func bump() { value += 1 }
 }
 
+/// Mutable policy for tests: models the settings panel changing the limit at runtime.
+final class PolicyBox: @unchecked Sendable {
+    var policy: AnyunCachePolicy
+    init(_ policy: AnyunCachePolicy) { self.policy = policy }
+}
+
 func waitUntil(_ condition: () async -> Bool) async {
     var spins = 0
     while !(await condition()) {
@@ -121,7 +127,9 @@ struct AnyunCacheTests {
         await testMediaStatus()
         await testMediaStatusReadOnlyAndMemo()
         await testMediaStatusMemoBound()
-        print("AnyunCache: layout/lease/LRU/oversize/coalesce/cancel/epoch/JSON-ownership-ABA/integrity/sweep passed (macOS, no network)")
+        await testEvictionOrderBudgetAndAgreement()
+        await testStorageIOFailureDegradesGracefully()
+        print("AnyunCache: layout/lease/LRU/oversize/coalesce/cancel/epoch/JSON-ownership-ABA/integrity/sweep/budget-agreement/io-degrade passed (macOS, no network)")
     }
 
     // MARK: - 纯逻辑
@@ -918,6 +926,130 @@ struct AnyunCacheTests {
         let response = AnyunHTTPResponse(status: 200, data: Data(repeating: 1, count: 80), etag: nil, lastModified: nil, contentType: nil)
         do { try await cache.revalidateMedia(key: key, original: old, response: response); check(false, "old refresh cannot overwrite replacement after clear") } catch { }
         check(await cache.lookup(key: key)?.bytes == 120, "new entry survives old revalidation")
+    }
+
+    // MARK: - #17 预算：淘汰顺序、记账与「上报占用 = 真实可用」
+
+    static func testEvictionOrderBudgetAndAgreement() async {
+        let dirName = "anyun-cache-test-\(UUID().uuidString)"
+        let box = PolicyBox(makePolicy(maxBytes: 300))
+        let cache = AnyunDiskCache(directoryName: dirName, policyProvider: { box.policy })
+        let fm = FileManager.default, root = cache.layout.root
+        defer { try? fm.removeItem(at: root) }
+        let urls = ["m1", "m2", "m3"].map { "https://example.invalid/api/audio/\($0).opus" }
+        let audio = urls.map(anyunKey)
+        let catalog = anyunKey("https://example.invalid/api/data.json")
+        func mediaPayload() -> AnyunDownloadedPayload {
+            AnyunDownloadedPayload(data: opusFixture(bytes: 100), etag: nil, lastModified: nil, contentType: "audio/ogg")
+        }
+
+        // 目录快照最旧（应当活下来），随后三首音频；预算只够两首。
+        _ = try! await cache.store(key: catalog, kind: .json, payload: payloadOf(40))
+        try? await Task.sleep(nanoseconds: 2_000_000)
+        for key in audio {
+            _ = try! await cache.store(key: key, kind: .media, payload: mediaPayload())
+            try? await Task.sleep(nanoseconds: 2_000_000)
+        }
+
+        var snapshot = await cache.stats()
+        check(snapshot.bytes == 240, "exact bytes accounting matches reported stats (got \(snapshot.bytes))")
+        check(snapshot.entries == 3 && snapshot.mediaEntries == 2 && snapshot.jsonEntries == 1,
+              "audio leaves before metadata under budget pressure (entries \(snapshot.entries))")
+        check(await cache.lookup(key: audio[0]) == nil, "oldest audio is the eviction victim")
+        check(!fm.fileExists(atPath: cache.layout.mediaFile(forKey: audio[0]).path), "evicted bytes removed from disk")
+        check(await cache.lookup(key: catalog) != nil, "metadata retained for still-cached audio")
+        check(await cache.read(key: catalog) == payloadOf(40).data, "retained metadata still readable")
+        let firstStatus = try! await cache.mediaStatus(urls: urls)
+        check(firstStatus == [false, true, true], "mediaStatus agrees with evicted entries")
+        check(firstStatus.filter { $0 }.count == snapshot.mediaEntries, "reported usage equals actually available media")
+
+        // 用户选更小的档 → 立即收口；音频先走、快照留着。
+        box.policy = makePolicy(maxBytes: 150)
+        await cache.enforcePolicy()
+        snapshot = await cache.stats()
+        check(snapshot.bytes <= 150, "selected preset is enforced immediately (got \(snapshot.bytes))")
+        check(snapshot.jsonEntries == 1 && snapshot.mediaEntries == 1, "shrinking drops audio before metadata")
+        check(await cache.lookup(key: audio[1]) == nil && await cache.lookup(key: audio[2]) != nil,
+              "LRU picks the older audio to drop")
+        let shrunkStatus = try! await cache.mediaStatus(urls: urls)
+        check(shrunkStatus.filter { $0 }.count == snapshot.mediaEntries,
+              "reported usage equals actually available media")
+
+        // 元数据不是钉子：只剩它、且超过预算时照样淘汰。
+        box.policy = makePolicy(maxBytes: 8)
+        await cache.enforcePolicy()
+        snapshot = await cache.stats()
+        check(snapshot.entries == 0 && snapshot.bytes == 0, "metadata alone is never pinned past the budget")
+        let emptyStatus = try! await cache.mediaStatus(urls: urls)
+        check(emptyStatus == [false, false, false], "availability agrees after full eviction")
+        check(!fm.fileExists(atPath: cache.layout.mediaFile(forKey: catalog).path), "evicting metadata removes its bytes")
+
+        // 系统清理（文件被外面删掉）不能留下幽灵占用。
+        box.policy = makePolicy(maxBytes: 300)
+        _ = try! await cache.store(key: audio[0], kind: .media, payload: mediaPayload())
+        try! fm.removeItem(at: cache.layout.mediaFile(forKey: audio[0]))
+        snapshot = await cache.stats()
+        check(snapshot.entries == 0 && snapshot.bytes == 0, "system purge cannot leave phantom usage")
+        let durable = try! JSONDecoder().decode(AnyunCacheIndexFile.self, from: Data(contentsOf: cache.layout.indexFile))
+        check(durable.entries.isEmpty, "phantom entry is removed from the durable index")
+        let prunedStatus = try! await cache.mediaStatus(urls: [urls[0]])
+        check(prunedStatus == [false], "availability agrees with pruned usage")
+    }
+
+    // MARK: - #17 IO 失败：不丢缓存、不脏索引、不断播放
+
+    static func testStorageIOFailureDegradesGracefully() async {
+        let dirName = "anyun-cache-test-\(UUID().uuidString)"
+        let cache = AnyunDiskCache(directoryName: dirName, policyProvider: { makePolicy(maxBytes: 4096) })
+        let fm = FileManager.default, root = cache.layout.root
+        defer {
+            try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? fm.removeItem(at: root)
+        }
+        check(geteuid() != 0, "permission regression requires an unprivileged test process")
+        let key = anyunKey("io-keep"), other = anyunKey("io-other")
+        let valid = opusFixture(bytes: 120)
+        let payload = AnyunDownloadedPayload(data: valid, etag: nil, lastModified: nil, contentType: "audio/ogg")
+        _ = try! await cache.store(key: key, kind: .media, payload: payload)
+        let keep = try! Data(contentsOf: cache.layout.indexFile)
+
+        // 目录只读 = 写盘必失败（模拟磁盘满/配额耗尽，不碰真实磁盘容量）。
+        try! fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+        do {
+            _ = try await cache.store(key: other, kind: .media, payload: payload)
+            check(false, "failed write must surface as ioFailure")
+        } catch AnyunDiskCacheFailure.ioFailure {
+            // expected
+        } catch { check(false, "unexpected write error: \(error)") }
+        check(try! Data(contentsOf: cache.layout.indexFile) == keep,
+              "out-of-space-only retry never evicts on unrelated IO errors")
+        check(await cache.lookup(key: key) != nil, "permission write failure keeps the old complete entry")
+        check(!fm.fileExists(atPath: cache.layout.mediaFile(forKey: other).path), "failed write leaves no partial entry file")
+
+        // 权限恢复后：写入正常、记账一致、完整条目仍能建租约（播放不受影响）。
+        try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        let lease = await cache.acquirePlaybackLease(key: key)
+        check(lease.url != nil, "playback lease survives failed cache write")
+        if let leaseURL = lease.url { check((try! Data(contentsOf: leaseURL)) == valid, "lease bytes intact after failed write") }
+        let recovered = try! await cache.store(key: other, kind: .media, payload: payload)
+        check(recovered.bytes == 120, "cache writes recover after IO pressure clears")
+        let after = await cache.stats()
+        check(after.entries == 2 && after.bytes == 240, "index accounting stays consistent after recovery (got \(after.entries)/\(after.bytes))")
+        let probe = try! await cache.mediaStatus(urls: ["https://example.invalid/api/audio/probe.opus"])
+        check(probe == [false], "failed write never fakes a cached status")
+
+        // 瞬时 stat 失败（权限/EIO）只算一次 miss，绝不删掉可能完整的缓存。
+        try! fm.setAttributes([.posixPermissions: 0o000], ofItemAtPath: root.path)
+        check(await cache.lookup(key: key) == nil, "transient stat failure is a miss, not a valid hit")
+        let opaque = await cache.stats()
+        check(opaque.entries == 2 && opaque.bytes == 240, "transient stat failure never prunes reported usage (got \(opaque.entries))")
+        try! fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+        check(await cache.lookup(key: key) != nil, "cache entry survives a transient stat failure")
+        check(fm.fileExists(atPath: cache.layout.mediaFile(forKey: key).path), "transient failure never deletes the cached bytes")
+
+        _ = await cache.clear(scope: "all")
+        let empty = await cache.stats()
+        check(empty.entries == 0, "clear still works after an IO failure episode")
     }
 
 }

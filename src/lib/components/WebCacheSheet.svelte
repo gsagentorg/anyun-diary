@@ -9,8 +9,6 @@
   import { formatBytes } from '$lib/native-cache';
   import {
     DEFAULT_WEB_AUDIO_MAX_BYTES,
-    WEB_AUDIO_MAX_LIMIT,
-    WEB_AUDIO_MIN_BYTES,
     clearWebAudioCache,
     getWebAudioEntryState,
     getWebAudioCacheLimit,
@@ -24,6 +22,8 @@
 
   let { open, onClose }: { open: boolean; onClose: () => void } = $props();
 
+  // 只展示四档预设；WEB_AUDIO_MIN_BYTES…WEB_AUDIO_MAX_LIMIT 的夹取范围是存储层实现细节，
+  // 由 setWebAudioCacheLimit 保证，不作为用户文案展示。
   const LIMIT_CHOICES = [
     { label: '256 MB', value: 256 * 1024 * 1024 },
     { label: '512 MB', value: DEFAULT_WEB_AUDIO_MAX_BYTES },
@@ -176,7 +176,7 @@
           {/each}
         </div>
         <p class="mt-1 text-2xs opacity-50">
-          范围 {formatBytes(WEB_AUDIO_MIN_BYTES)}–{formatBytes(WEB_AUDIO_MAX_LIMIT)}；默认与 App 一致（512 MB）。
+          默认与 App 一致（512 MB）。
         </p>
       </div>
 

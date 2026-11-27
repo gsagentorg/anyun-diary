@@ -890,6 +890,9 @@ async function syncObject(object,{source,target,retries,sleep,stats,verifyFull,c
 
   const existing=await op(()=>target.head(object.targetKey));
   if(existing){
+    // A content-addressed audio key proves the content: HEAD is enough, and
+    // only --verify-full is allowed to read the body back.
+    if(expectedHash&&!verifyFull)return 'skipped';
     if(v1Mode&&object.kind!=='pointer'&&!verifyFull)return 'skipped';
     const current=await op(()=>target.get(object.targetKey));
     if(expectedHash){
@@ -912,8 +915,9 @@ async function syncObject(object,{source,target,retries,sleep,stats,verifyFull,c
     if(verifyFull&&sha256(await op(()=>target.get(object.targetKey)))!==sha256(payload))throw Error('Destination integrity mismatch');
     return 'uploaded';
   }
-  const check=await withRetry(()=>target.get(object.targetKey),{retries,sleep,stats});
-  if(sha256(check)!==sha256(payload))throw Error('Target verification failed');
+  // No post-upload read-back: a content-addressed object is its own proof, and
+  // --verify-full is the only mode that compares bytes again.
+  if(verifyFull&&sha256(await withRetry(()=>target.get(object.targetKey),{retries,sleep,stats}))!==sha256(payload))throw Error('Target verification failed');
   return 'uploaded';
 }
 

@@ -3,7 +3,9 @@ import {mkdtemp,writeFile,readFile,readdir,stat,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {test} from 'node:test';
-import {prepareAudio,resolveCacheDir,resolveConcurrency} from './publish-data.mjs';
+import {publish,prepareAudio,resolveCacheDir,resolveConcurrency} from './publish-data.mjs';
+import {localStore} from '../src/lib/server/storage.mjs';
+import {monthBounds} from '../src/lib/server/months.mjs';
 
 const SIGNATURE='ffmpeg version 0.0-test | -vn -c:a libopus -b:a 96k';
 
@@ -126,4 +128,33 @@ test('first failure rejects without leaving running work',async()=>{
   await assert.rejects(prepareAudio(audios,sources,temp,failing,{cacheDir:join(await workspace('fail-cache'),'c'),concurrency:2,encoderSignature:SIGNATURE}),/transcode exploded/);
   assert.equal(started,settled,'every started transcode must be awaited');
   assert.ok(started<=audios.length);
+});
+
+test('a second publish over unchanged inputs reads and writes no audio',async()=>{
+  const root=await workspace('republish');
+  const base=localStore(root);
+  const stats={reads:0,writes:0,audioReads:0,audioWrites:0};
+  const store={
+    async read(key,options){stats.reads++;if(key.startsWith('audio/'))stats.audioReads++;return base.read(key,options);},
+    async write(key,bytes,type){stats.writes++;if(key.startsWith('audio/'))stats.audioWrites++;return base.write(key,bytes,type);},
+    async remove(key){return base.remove(key);}
+  };
+  const mediaDir=await workspace('republish-media');
+  const now=monthBounds('2026-11').startAt+100;
+  const audios=[],media=new Map();
+  for(let i=0;i<2;i++){
+    const file=join(mediaDir,`track-${i}.opus`);
+    await writeFile(file,Buffer.concat([Buffer.from('OggS'),Buffer.from(`prepared-${i}`)]));
+    const audio={id:`track-${i}`,file:`track-${i}.opus`,title:`Track ${i}`,startAt:now+3600*(i+1),monthId:'2026-11',duration:5,lyrics:[]};
+    audios.push(audio);media.set(audio.id,file);
+  }
+  const first=await publish(audios,media,store,{now});
+  assert.equal(stats.audioWrites,2,'every prepared audio is uploaded once');
+  assert.equal(stats.audioReads,0,'a fresh publication never reads audio back');
+  stats.reads=0;stats.writes=0;stats.audioReads=0;stats.audioWrites=0;
+  const second=await publish(audios,media,store,{now});
+  assert.equal(second.revision,first.revision);
+  assert.equal(stats.audioReads,0,'referenced audio keys are never read');
+  assert.equal(stats.audioWrites,0,'already published audio is not uploaded again');
+  assert.equal(stats.writes,0,'an unchanged release writes nothing at all');
 });

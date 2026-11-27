@@ -9,7 +9,8 @@ import {fileURLToPath} from 'node:url';
 import {promisify} from 'node:util';
 import {execFile} from 'node:child_process';
 import {configuredStore} from '../src/lib/server/storage.mjs';
-import {publishMonths,digest} from '../src/lib/server/publisher.mjs';
+import {publishMonths,loadPrevious,audioKey,digest} from '../src/lib/server/publisher.mjs';
+import {validateMonth} from '../src/lib/catalog-schema.js';
 import {maxQueryMonths,monthId,monthBounds,queryMonths} from '../src/lib/server/months.mjs';
 const execute=promisify(execFile);
 export {publishMonths};
@@ -44,6 +45,12 @@ export async function prepareAudio(audios,sources,temp,executeMedia=execute,opti
   });
   return new Map(audios.map((a,index)=>[a.id,prepared[index]]));
 }
-export async function publish(audios,media,store,options={}){const uploaded=new Map();for(const a of audios){const bytes=await readFile(media.get(a.id));if(bytes.subarray(0,4).toString()!=='OggS')throw Error('Invalid Opus');const key='audio/'+digest(bytes)+'.opus';const existing=await store.read(key);if(existing.status===404){await store.write(key,bytes,'audio/ogg');const check=await store.read(key);if(!check.ok||digest(Buffer.from(await check.arrayBuffer()))!==digest(bytes))throw Error('Audio verification failed');}else if(!existing.ok)throw Error('Audio unavailable');else {if(digest(Buffer.from(await existing.arrayBuffer()))!==digest(bytes))throw Error('Existing audio integrity mismatch');}uploaded.set(a.id,{...a,opus:key});}return publishMonths(audios.map(a=>uploaded.get(a.id)??a),store,options);}
+// Audio keys already referenced by the previous release. Keys are content-addressed,
+// so a reference alone proves the object exists; only the (small) month blocks of
+// the months in this run are read, never the audio bodies.
+export async function referencedAudioKeys(store,previous,audios){const keys=new Set();if(!previous)return keys;const months=new Set(audios.map(a=>monthId(a.startAt)));for(const entry of previous.months){if(!months.has(entry.id))continue;const r=await store.read(entry.key);if(!r.ok)throw Error('Previous month unavailable');const block=validateMonth(await r.json(),entry);for(const a of block.audios)keys.add(audioKey(a.opus));}return keys;}
+// `options.previous` may be the previous release manifest, null, or a Set of audio keys
+// that are already published; omitted means "load it from the current pointer".
+export async function publish(audios,media,store,options={}){const {previous:given,audioKeys,...rest}=options;const previous=given instanceof Set?await loadPrevious(store):given===undefined?await loadPrevious(store):given;const referenced=audioKeys??(given instanceof Set?given:await referencedAudioKeys(store,previous,audios));const uploaded=new Map();for(const a of audios){const bytes=await readFile(media.get(a.id));if(bytes.subarray(0,4).toString()!=='OggS')throw Error('Invalid Opus');const key='audio/'+digest(bytes)+'.opus';uploaded.set(a.id,{...a,opus:key});if(referenced.has(key))continue;await store.write(key,bytes,'audio/ogg');}return publishMonths(audios.map(a=>uploaded.get(a.id)??a),store,{...rest,previous});}
 export async function run(args=process.argv.slice(2),env=process.env){const options={};for(let i=0;i<args.length;i++){if(!['--audio-dir','--lrc-dir'].includes(args[i])||!args[i+1]||args[i+1].startsWith('--'))throw Error('Usage: --audio-dir DIRECTORY --lrc-dir DIRECTORY');options[args[i]]=args[++i];}if(!options['--audio-dir']||!options['--lrc-dir'])throw Error('Both source directories required');const maxMonths=maxQueryMonths(env.MAX_QUERY_MONTHS),store=configuredStore(env);const result=await execute('python3',[join(dirname(fileURLToPath(import.meta.url)),'derive-catalog.py'),options['--audio-dir'],options['--lrc-dir']],{env,maxBuffer:64*1024*1024});const {audios,sources}=JSON.parse(result.stdout);const temp=await mkdtemp(join(tmpdir(),'diary-publish-'));try{const publicationOptions={maxMonths,now:Date.now()/1000,concurrency:resolveConcurrency(env.PUBLISH_CONCURRENCY),cacheDir:resolveCacheDir(env.PUBLISH_CACHE_DIR)};const media=await preparePublicationAudio(audios,sources,temp,publicationOptions);const manifest=await publish(audios,media,store,publicationOptions);console.log(JSON.stringify({revision:manifest.revision,months:manifest.months.length}));}finally{await rm(temp,{recursive:true,force:true});}}
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))run().catch(()=>{console.error('Publication failed; verify source inputs and storage configuration. Re-read manifest before retrying an uncertain write.');process.exitCode=1;});

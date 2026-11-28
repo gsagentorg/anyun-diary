@@ -23,4 +23,6 @@ console.log('S3 SDK mock: config/prefix, binary/range, abort, 404/403/5xx, metad
 assert.equal(s3Options({...env,S3_SESSION_TOKEN:'YOUR-TOKEN-HERE'}).clientOptions.credentials.sessionToken,'YOUR-TOKEN-HERE');
 assert.throws(()=>s3Options({...env,S3_ENDPOINT:'not-a-url'}),/ENDPOINT/);
 const interrupted=new AbortController(),pending=s3Store(env,{async send(c,{abortSignal}){return new Promise((resolve,reject)=>abortSignal.addEventListener('abort',()=>reject(abortSignal.reason),{once:true}));}}).read(key,{signal:interrupted.signal});interrupted.abort();await assert.rejects(pending,{name:'AbortError'});
-const corrupt={...store,async read(k,o){if(k.startsWith('months/'))return new Response('{}');return store.read(k,o);}};await assert.rejects(publishMonths([row],corrupt,{now}));assert.deepEqual(objects.get('fixture/data/current.json'),pointer);
+// Only blocks written by this run are read back, so the corruption must land on a
+// changed month entry.
+const corrupt={...store,async read(k,o){if(k.startsWith('months/'))return new Response('{}');return store.read(k,o);}};await assert.rejects(publishMonths([{...row,title:'Corrupt'}],corrupt,{now}));assert.deepEqual(objects.get('fixture/data/current.json'),pointer);

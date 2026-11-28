@@ -27,6 +27,8 @@ current 仅在 404 时显式兼容旧 manifest.json；损坏/空 current、缺�
 
 命令：npm run data:publish -- --audio-dir YOUR-AUDIO-DIRECTORY-HERE --lrc-dir YOUR-LRC-DIRECTORY-HERE。输入只读；不探查主录像。真实发布另行明确授权。
 
+音频转码可调两个环境变量：`PUBLISH_CONCURRENCY` 是同时运行的 ffmpeg 数（默认 `os.availableParallelism()`，取值 1–64，越界或非整数直接报错）；`PUBLISH_CACHE_DIR` 是内容寻址的 opus 缓存目录（默认 `$XDG_CACHE_HOME/anyun-publish`，即 `~/.cache/anyun-publish`）。缓存键 = 源文件 sha256 + 编码器签名（`ffmpeg -version` 首行与编码参数），命中即整段跳过转码；条目以临时文件同目录 rename 原子落盘，命中校验非空与 `OggS` 头，不符则删除重转。缓存不自动清理、换编码参数会自然产生新键，空间可直接删目录回收。
+
 ## 本轮验证范围
 
 mock 覆盖增量复用、原子提交失败、全部引用验证、回滚、local rename / Blob 缓存配置；range 并发热更固定 release、revision 缓存隔离、坏目录保留上个有效版本；原有搜索取消/超时/并发测试。真实 Blob 可见性与生产配置未执行。浏览器回归使用本地隔离服务与合成 fixture（不是生产数据）；API HTTP 测试覆盖 304、显式旧 release 月拒绝与搜索过滤，浏览热更测试覆盖失败保留、成功重试与 range 固定版本。

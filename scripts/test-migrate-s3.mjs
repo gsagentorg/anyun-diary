@@ -212,6 +212,8 @@ test('a second run skips matching objects (resumable)',async()=>{
   assert.equal(second.summary.uploaded,0);
   assert.equal(second.summary.skipped,second.summary.objects);
   assert.equal(putKeys(second.calls).length,0);
+  // Content-addressed audio: the existing key is the proof, so the body is never read.
+  assert.equal(second.calls.filter(call=>call.name==='GetObjectCommand'&&call.input.Key.endsWith('.opus')).length,0);
 });
 
 test('hash mismatch in an existing target object triggers re-upload',async()=>{
@@ -229,13 +231,20 @@ test('hash mismatch in an existing target object triggers re-upload',async()=>{
   assert.deepEqual(second.targetObjects.get(monthKey),original);
 });
 
+test('uploads are not read back unless --verify-full is requested',async()=>{
+  const catalog=makeCatalog({monthsSpec:[{id:'2026-11',rows:[{title:'New'}]}]});
+  const result=await runWith({source:s3Source(catalog),argv:['--window-days','0','--months','0']});
+  assert.equal(result.summary.uploaded,result.summary.objects);
+  assert.equal(result.calls.filter(call=>call.name==='GetObjectCommand').length,0,'no object is read back after upload');
+});
+
 test('verification failure never writes current.json',async()=>{
   const catalog=makeCatalog();
   const before=snapshot(catalog.objects);
   const targetObjects=new Map();
   await assert.rejects(runWith({
     source:s3Source(catalog),
-    argv:['--window-days','0','--concurrency','1'],
+    argv:['--window-days','0','--concurrency','1','--verify-full'],
     targetObjects,
     targetClientOptions:{getBytes:(key,value)=>key.includes('/months/')?Buffer.from('{}'):value}
   }),/Target verification failed/);
@@ -367,7 +376,8 @@ test('429/5xx retries stop at the configured cap',async()=>{
   const targetObjects=new Map();
   const targetClient=fakeClient({objects:targetObjects,calls,fail:name=>name==='GetObjectCommand'?{$metadata:{httpStatusCode:503}}:null});
   const target=createS3Backend(targetOptions({...TARGET_ENV,TARGET_S3_PREFIX:'backup/'}),targetClient);
-  await assert.rejects(run(['--window-days','0','--concurrency','1'],{}, {source:s3Source(catalog),target,now:NOW,retries:2,sleep:async()=>{},log:()=>{},warn:()=>{}}),/HTTP 503/);
+  // Only --verify-full reads objects back, so that is the mode that retries GETs.
+  await assert.rejects(run(['--window-days','0','--concurrency','1','--verify-full'],{}, {source:s3Source(catalog),target,now:NOW,retries:2,sleep:async()=>{},log:()=>{},warn:()=>{}}),/HTTP 503/);
   assert.equal(calls.filter(call=>call.name==='GetObjectCommand').length,3);
 });
 
@@ -377,7 +387,7 @@ test('non-retryable 4xx fails immediately',async()=>{
   const targetObjects=new Map();
   const targetClient=fakeClient({objects:targetObjects,calls,fail:name=>name==='GetObjectCommand'?{$metadata:{httpStatusCode:400}}:null});
   const target=createS3Backend(targetOptions({...TARGET_ENV,TARGET_S3_PREFIX:'backup/'}),targetClient);
-  await assert.rejects(run(['--window-days','0','--concurrency','1'],{}, {source:s3Source(catalog),target,now:NOW,retries:5,sleep:async()=>{},log:()=>{},warn:()=>{}}),/HTTP 400/);
+  await assert.rejects(run(['--window-days','0','--concurrency','1','--verify-full'],{}, {source:s3Source(catalog),target,now:NOW,retries:5,sleep:async()=>{},log:()=>{},warn:()=>{}}),/HTTP 400/);
   assert.equal(calls.filter(call=>call.name==='GetObjectCommand').length,1);
 });
 
@@ -633,6 +643,8 @@ test('verify-full compares full digests and skips matching objects',async()=>{
   assert.equal(second.summary.skipped,second.summary.objects);
   assert.equal(putKeys(second.calls).length,0);
   assert(second.calls.filter(call=>call.name==='GetObjectCommand').length>=second.summary.objects-1);
+  // --verify-full is the one mode that still reads audio bodies back.
+  assert(second.calls.some(call=>call.name==='GetObjectCommand'&&call.input.Key.endsWith('.opus')));
 });
 
 test('verify-full rejects a differing existing object without re-uploading',async()=>{
